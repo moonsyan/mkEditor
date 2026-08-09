@@ -12,6 +12,20 @@ import { createWindow } from '../window/window-manager'
 const execFileAsync = promisify(execFile)
 
 /**
+ * 工作区搜索行缓存（基础索引）：path → { mtimeMs, size, lines }。
+ * mtime+size 均未变时直接复用已拆分的行，重复搜索免重读磁盘；
+ * 文件修改/删除/移动后缓存自动失效或不再被树命中，无需主动清理。
+ */
+const searchLineCache = new Map<
+  string,
+  { mtimeMs: number; size: number; lines: string[] }
+>()
+/** 缓存条目上限：超出时淘汰最早插入的条目（Map 保持插入顺序） */
+const SEARCH_CACHE_MAX = 1000
+/** 单文件超过该体积不入缓存，控制最坏内存占用（1000 × 512KB） */
+const SEARCH_CACHE_FILE_MAX = 512 * 1024
+
+/**
  * 自动探测编码读取文本（低优14）：先按 UTF-8 严格解码，
  * 失败则尝试 GBK（Electron 内置 full-icu，TextDecoder 支持）；
  * 均失败时按 UTF-8 宽松解码兜底。保存时统一写回 UTF-8。
@@ -647,9 +661,23 @@ export function registerIpcHandlers(): void {
         for (const p of paths.slice(0, 500)) {
           const st = await stat(p).catch(() => null)
           if (!st || st.size > 2 * 1024 * 1024) continue
-          const { content } = await readTextAutoEncoding(p)
-          // 兼容 CRLF：行尾残留 \r 会导致正则的行尾锚点（$）永不命中
-          const lines = content.split(/\r?\n/)
+          // 索引缓存：mtime 与 size 均未变时复用已拆分的行，避免重复读盘解码
+          let lines: string[]
+          const cached = searchLineCache.get(p)
+          if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+            lines = cached.lines
+          } else {
+            const { content } = await readTextAutoEncoding(p)
+            // 兼容 CRLF：行尾残留 \r 会导致正则的行尾锚点（$）永不命中
+            lines = content.split(/\r?\n/)
+            if (st.size <= SEARCH_CACHE_FILE_MAX) {
+              if (searchLineCache.size >= SEARCH_CACHE_MAX) {
+                const oldest = searchLineCache.keys().next().value
+                if (oldest !== undefined) searchLineCache.delete(oldest)
+              }
+              searchLineCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, lines })
+            }
+          }
           for (let i = 0; i < lines.length; i++) {
             const hit = re
               ? re.test(lines[i])

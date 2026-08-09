@@ -47,7 +47,7 @@ const MENU_DEFS: Record<string, MenuItemDef[]> = {
     { label: '斜体', shortcut: 'Ctrl+I', action: 'italic' },
     { label: '删除线', shortcut: 'Ctrl+Shift+X', action: 'strike' },
     { label: '插入链接', shortcut: 'Ctrl+K', action: 'insertLink' },
-    { label: '插入图片', shortcut: 'Ctrl+Shift+I', action: 'insertImage' },
+    { label: '插入图片', shortcut: 'Ctrl+Alt+I', action: 'insertImage' },
     { label: '', separator: true },
     { label: '查找替换', shortcut: 'Ctrl+H', action: 'find' },
   ],

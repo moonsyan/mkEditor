@@ -1913,7 +1913,9 @@ img{max-width:100%}
         case 'strike': ed?.runCommand(toggleStrikethroughCommand.key); break
         case 'find': setSearchMode('replace'); break
         case 'wsSearch':
-          if (workspace) setWsSearchOpen(true)
+          // 用 ref 镜像而非 workspace 状态：handleAction 依赖数组不含 workspace，
+          // 直接读状态会因陈旧闭包导致打开文件夹后菜单仍提示未打开
+          if (workspacePathRef.current) setWsSearchOpen(true)
           else setToast('请先打开文件夹（工作区）后再使用全文搜索')
           break
         case 'insertLink': ed?.insertMd('[链接文字](https://)'); break

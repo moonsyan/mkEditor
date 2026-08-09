@@ -48,7 +48,8 @@ export const DEFAULT_SHORTCUTS: ShortcutMap = {
   replace: 'Ctrl+H',
   strike: 'Ctrl+Shift+X',
   link: 'Ctrl+K',
-  image: 'Ctrl+Shift+I',
+  // 避免 Ctrl+Shift+I：开发模式下被主进程 before-input-event 拦截用于切换 DevTools
+  image: 'Ctrl+Alt+I',
   codeBlock: 'Ctrl+Alt+C',
   quote: 'Ctrl+Alt+Q',
   hr: 'Ctrl+Alt+R',
