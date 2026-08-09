@@ -1,0 +1,241 @@
+/* ====== Reset & Base ====== */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { font-size: 15px; }
+
+body {
+  font-family: var(--font-ui);
+  background: var(--bg-app);
+  color: var(--text-1);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ====== App Layout ====== */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ====== Top Bar ====== */
+/* 整条顶栏作为窗口拖拽区（无独立系统标题栏，与菜单栏合二为一） */
+.topbar {
+  height: 42px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 0;
+  user-select: none;
+  flex-shrink: 0;
+  transition: background var(--dur) var(--ease);
+  -webkit-app-region: drag;
+}
+/* Windows：右上角系统窗口按钮（titleBarOverlay）区域避让 */
+html[data-platform='win32'] .topbar {
+  padding-right: 148px;
+}
+/* macOS：左上角红绿灯区域避让 */
+html[data-platform='darwin'] .topbar {
+  padding-left: 80px;
+}
+/* 可交互元素不参与拖拽 */
+.menubar, .doc-title, .act-group, .act-btn,
+.theme-switcher, .theme-wrap, .settings-wrap,
+.dropdown, .theme-dd, .settings-panel {
+  -webkit-app-region: no-drag;
+}
+
+.win-dots { display: flex; gap: 7px; margin-right: 14px; }
+.win-dots span { width: 12px; height: 12px; border-radius: 50%; }
+.win-dots span:nth-child(1) { background: #ED6A5E; }
+.win-dots span:nth-child(2) { background: #F5BF4F; }
+.win-dots span:nth-child(3) { background: #62C554; }
+
+/* 品牌区：图标 + 产品名 */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: 14px;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+.brand-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  box-shadow: var(--shadow-s);
+}
+.brand-name {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+
+.topbar-spacer { flex: 1; }
+
+.doc-title {
+  font-size: .78rem;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: text;
+  transition: all var(--dur) var(--ease);
+}
+.doc-title:hover { color: var(--text-2); border-color: var(--border); }
+.doc-title:focus { outline: none; border-color: var(--accent); color: var(--text-1); background: var(--bg-surface); }
+
+.act-group { display: flex; align-items: center; gap: 2px; margin-left: 6px; }
+
+.act-btn {
+  width: 30px; height: 30px;
+  border: none; background: transparent;
+  border-radius: var(--radius);
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--dur) var(--ease);
+  outline: none;
+}
+.act-btn:hover { background: var(--bg-hover); color: var(--text-1); }
+.act-btn.active { color: var(--accent); background: var(--accent-bg); }
+.act-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ====== Workspace ====== */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  /* 侧栏实际宽度 = --sidebar-w × 缩放倍率，位置同步 */
+  left: calc(var(--sidebar-w) * var(--editor-zoom, 1));
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px; height: 40px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+  opacity: 0;
+  transition: left 250ms var(--ease), opacity 150ms;
+}
+.sidebar-toggle:hover { opacity: 1; }
+.sidebar-toggle svg { width: 10px; height: 10px; stroke: var(--text-3); fill: none; stroke-width: 2.5; transition: transform 200ms var(--ease); }
+.sidebar-toggle.flipped { left: 0; }
+.sidebar-toggle.flipped svg { transform: rotate(180deg); }
+
+/* 侧栏宽度拖拽条 */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-w) * var(--editor-zoom, 1) - 2px);
+  width: 4px;
+  cursor: col-resize;
+  z-index: 55;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+  background: var(--accent-bg);
+}
+
+/* ====== Toast 轻提示 ====== */
+.toast {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  font-size: .78rem;
+  color: var(--text-1);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  z-index: 500;
+  animation: ddIn 200ms var(--ease);
+  pointer-events: none;
+}
+
+/* ====== 拖入 .md 文件提示层 ====== */
+.file-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: ddIn 150ms var(--ease);
+}
+.file-drop-inner {
+  padding: 18px 30px;
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.file-drop-icon {
+  font-size: 1.2rem;
+}
+
+/* ====== Typewriter Mode（光标行保持居中） ====== */
+.typewriter-mode .editor-inner {
+  padding-bottom: 50vh;
+}
+
+/* ====== Focus Mode ====== */
+.focus-mode .topbar,
+.focus-mode .statusbar,
+.focus-mode .sidebar,
+.focus-mode .sidebar-toggle {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms var(--ease);
+}
+.focus-mode .topbar:hover,
+.focus-mode .statusbar:hover,
+.focus-mode .sidebar:hover {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ====== Animations ====== */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

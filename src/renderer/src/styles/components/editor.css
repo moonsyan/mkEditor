@@ -1,0 +1,419 @@
+/* ====== Editor Area ====== */
+.editor-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-surface);
+  transition: background var(--dur) var(--ease);
+}
+
+.editor-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+}
+.editor-scroll::-webkit-scrollbar { width: 6px; }
+.editor-scroll::-webkit-scrollbar-track { background: transparent; }
+.editor-scroll::-webkit-scrollbar-thumb { background: var(--text-4); border-radius: 3px; }
+.editor-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+.editor-inner {
+  /* 宽度随窗口自适应：小窗不溢出，全屏不大面积留白 */
+  max-width: clamp(640px, 78%, 1180px);
+  margin: 0 auto;
+  padding: 48px 56px 160px;
+  min-height: 100%;
+  font-size: calc(1rem * var(--editor-zoom, 1));
+  line-height: 1.85;
+  color: var(--text-1);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* 字号设置（data-fontsize 由设置面板写入 html 根元素） */
+[data-fontsize='sm'] .editor-inner { font-size: .88rem; }
+[data-fontsize='lg'] .editor-inner { font-size: 1.12rem; }
+
+/* 内容宽度档位（设置面板可调） */
+[data-contentwidth='narrow'] .editor-inner { max-width: clamp(520px, 60%, 720px); }
+[data-contentwidth='wide'] .editor-inner { max-width: clamp(760px, 92%, 1500px); }
+
+/* 行距档位（设置面板可调） */
+[data-lineheight='compact'] .editor-inner { line-height: 1.65; }
+[data-lineheight='loose'] .editor-inner { line-height: 2.1; }
+
+/* 内容字体档位：默认（无衬线）/ 衬线 / 等宽 */
+[data-contentfont='serif'] .editor-inner {
+  font-family: 'Georgia', 'Times New Roman', 'STSong', 'SimSun', serif;
+}
+[data-contentfont='mono'] .editor-inner {
+  font-family: var(--font-mono);
+}
+
+/* 空文档占位提示（唯一空段落时显示） */
+.milkdown .editor > p:only-child:empty::before,
+.milkdown .editor > p:only-child:has(> br:only-child)::before {
+  content: '开始书写…';
+  color: var(--text-4);
+  pointer-events: none;
+}
+
+/* ====== Milkdown 容器 ====== */
+.milkdown {
+  position: relative;
+}
+
+/* ProseMirror 编辑区：去除默认轮廓，光标使用主题色 */
+.milkdown .editor {
+  outline: none;
+  caret-color: var(--accent);
+  min-height: 40vh;
+}
+
+/* 空文档时的占位留白 */
+.milkdown .editor:empty::before {
+  content: '开始书写…';
+  color: var(--text-4);
+}
+
+/* 选区颜色 */
+.milkdown .editor ::selection {
+  background: var(--accent-bg);
+}
+
+/* ====== GFM 任务列表 ====== */
+.milkdown li.task-list-item,
+.milkdown li[data-item-type='task'] {
+  list-style: none;
+  margin-left: -1.2rem;
+}
+.milkdown li input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--text-3);
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  cursor: pointer;
+  background: transparent;
+  transition: all var(--dur) var(--ease);
+}
+.milkdown li input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.milkdown li input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 5px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+/* ====== GFM 表格增强 ====== */
+.milkdown table {
+  table-layout: fixed;
+}
+.milkdown .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-bg);
+  pointer-events: none;
+}
+.milkdown th, .milkdown td {
+  position: relative;
+}
+/* 列宽拖拽手柄 */
+.milkdown .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent);
+  opacity: .4;
+  pointer-events: none;
+}
+.milkdown.resize-cursor {
+  cursor: col-resize;
+}
+
+/* ====== 代码块（轻量 pre>code 渲染） ====== */
+.milkdown pre {
+  position: relative;
+  padding-top: 34px;
+}
+/* 语言标识（来自 code_block 节点的 data-language 属性，无语言时不显示） */
+.milkdown pre[data-language]:not([data-language=''])::before {
+  content: attr(data-language);
+  position: absolute;
+  top: 9px;
+  left: 14px;
+  font-family: var(--font-mono);
+  font-size: .64rem;
+  font-weight: 500;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--bg-hover);
+  padding: 2px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* ====== 代码块悬浮层（语言输入 + 复制，悬停才出现） ====== */
+.code-panel {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  box-shadow: var(--shadow-s);
+  animation: ddIn 120ms var(--ease);
+}
+.code-lang-input {
+  width: 150px;
+  padding: 4px 9px;
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  color: var(--text-1);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.code-lang-input:focus {
+  border-color: var(--accent);
+}
+.code-copy {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  flex-shrink: 0;
+}
+.code-copy:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+.code-copy.copied {
+  color: #62a86d;
+}
+.code-copy svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ====== 语法高亮（prism token，随主题适配） ====== */
+.milkdown pre code .token.comment,
+.milkdown pre code .token.prolog,
+.milkdown pre code .token.doctype,
+.milkdown pre code .token.cdata {
+  color: var(--text-3);
+  font-style: italic;
+}
+.milkdown pre code .token.keyword,
+.milkdown pre code .token.builtin,
+.milkdown pre code .token.important {
+  color: var(--accent-h);
+  font-weight: 500;
+}
+.milkdown pre code .token.operator,
+.milkdown pre code .token.entity,
+.milkdown pre code .token.url {
+  color: var(--text-2);
+}
+.milkdown pre code .token.string,
+.milkdown pre code .token.char,
+.milkdown pre code .token.attr-value,
+.milkdown pre code .token.inserted {
+  color: #6f9b76;
+}
+.milkdown pre code .token.number,
+.milkdown pre code .token.boolean,
+.milkdown pre code .token.constant {
+  color: #b3845e;
+}
+.milkdown pre code .token.function,
+.milkdown pre code .token.function-name {
+  color: #7286b5;
+}
+.milkdown pre code .token.class-name,
+.milkdown pre code .token.type,
+.milkdown pre code .token.tag,
+.milkdown pre code .token.property {
+  color: #ab7f5f;
+}
+.milkdown pre code .token.attr-name,
+.milkdown pre code .token.variable,
+.milkdown pre code .token.parameter {
+  color: #9b7fa8;
+}
+.milkdown pre code .token.punctuation,
+.milkdown pre code .token.bracket {
+  color: var(--text-3);
+}
+.milkdown pre code .token.deleted {
+  color: #b06060;
+}
+/* 深色主题提亮 */
+[data-theme='dark'] .milkdown pre code .token.string,
+[data-theme='dark'] .milkdown pre code .token.char,
+[data-theme='dark'] .milkdown pre code .token.attr-value,
+[data-theme='dark'] .milkdown pre code .token.inserted {
+  color: #92c496;
+}
+[data-theme='dark'] .milkdown pre code .token.number,
+[data-theme='dark'] .milkdown pre code .token.boolean,
+[data-theme='dark'] .milkdown pre code .token.constant {
+  color: #d3a575;
+}
+[data-theme='dark'] .milkdown pre code .token.function,
+[data-theme='dark'] .milkdown pre code .token.function-name {
+  color: #96a8d4;
+}
+[data-theme='dark'] .milkdown pre code .token.class-name,
+[data-theme='dark'] .milkdown pre code .token.type,
+[data-theme='dark'] .milkdown pre code .token.tag,
+[data-theme='dark'] .milkdown pre code .token.property {
+  color: #cda583;
+}
+[data-theme='dark'] .milkdown pre code .token.attr-name,
+[data-theme='dark'] .milkdown pre code .token.variable,
+[data-theme='dark'] .milkdown pre code .token.parameter {
+  color: #bd9fc9;
+}
+
+/* ====== 脚注 ====== */
+.milkdown .footnote-ref {
+  color: var(--accent);
+  font-size: .72em;
+  font-weight: 600;
+  padding: 0 1px;
+  cursor: pointer;
+}
+.milkdown .footnote-def {
+  margin: .8rem 0;
+  padding: .5rem .9rem;
+  border-left: 2px solid var(--accent);
+  background: var(--bg-quote);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--text-2);
+  font-size: .92em;
+}
+.milkdown .footnote-def::before {
+  content: '[^' attr(data-label) ']';
+  font-family: var(--font-mono);
+  font-size: .8em;
+  font-weight: 600;
+  color: var(--accent);
+  margin-right: 8px;
+}
+
+/* ====== KaTeX 数学公式 ====== */
+.milkdown .math-block {
+  display: block;
+  text-align: center;
+  padding: .8rem 1rem;
+  margin: 1.2rem 0;
+  background: var(--bg-quote);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.milkdown .math-inline {
+  padding: 0 2px;
+}
+.milkdown .math-empty::before {
+  content: '输入 LaTeX 公式';
+  color: var(--text-4);
+  font-size: .85em;
+}
+.milkdown .math-node .katex {
+  font-size: 1.05em;
+}
+
+/* ====== Mermaid 图表 ====== */
+.milkdown .diagram {
+  margin: 1.2rem 0;
+  padding: 1rem;
+  text-align: center;
+  background: var(--bg-quote);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+.milkdown .diagram svg {
+  max-width: 100%;
+}
+
+/* ====== 搜索匹配高亮 ====== */
+.milkdown .search-hit {
+  background: rgba(240, 190, 60, .35);
+  border-radius: 2px;
+}
+.milkdown .search-hit.current {
+  background: rgba(235, 150, 40, .65);
+  outline: 1px solid rgba(200, 120, 20, .5);
+}
+
+/* ====== 分栏预览 ====== */
+.preview-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.preview-pane::-webkit-scrollbar { width: 6px; }
+.preview-pane::-webkit-scrollbar-thumb { background: var(--text-4); border-radius: 3px; }
+.preview-pane .preview-content {
+  cursor: default;
+  user-select: text;
+}
+
+/* ====== GapCursor（ProseMirror 块间光标） ====== */
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: relative;
+}
+.ProseMirror-gapcursor::after {
+  content: '';
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--text-1);
+  animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
+}
+@keyframes ProseMirror-cursor-blink {
+  to { visibility: hidden; }
+}
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}

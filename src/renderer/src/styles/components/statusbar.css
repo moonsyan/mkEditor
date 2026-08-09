@@ -1,0 +1,42 @@
+/* ====== Status Bar ====== */
+.statusbar {
+  height: 26px;
+  background: var(--bg-sidebar);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: .66rem;
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: background var(--dur) var(--ease);
+}
+
+.st-item {
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* 当前所在标题（过长时省略） */
+.st-heading {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.st-spacer { flex: 1; }
+
+.st-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #62C554;
+  transition: background 200ms;
+}
+.st-dot.unsaved { background: #F5BF4F; }
+
+/* 选中字数提示 */
+.st-selected { color: var(--accent); }

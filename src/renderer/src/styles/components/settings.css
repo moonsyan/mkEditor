@@ -1,0 +1,309 @@
+/* ====== 弹窗通用框架 ====== */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  background: rgba(0, 0, 0, .35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlayIn 160ms var(--ease);
+}
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.dialog {
+  position: relative;
+  display: flex;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  overflow: hidden;
+  animation: ddIn 180ms var(--ease);
+}
+
+.dialog-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  z-index: 5;
+}
+.dialog-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.dialog-close svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* ====== 设置弹窗 ====== */
+.settings-dialog {
+  width: 640px;
+  height: 440px;
+}
+
+/* 左侧导航 */
+.dialog-nav {
+  width: 168px;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 14px 10px;
+}
+.dialog-nav-title {
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--text-1);
+  padding: 4px 10px 12px;
+}
+.dialog-nav-item {
+  padding: 7px 10px;
+  font-size: .78rem;
+  color: var(--text-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  margin-bottom: 2px;
+}
+.dialog-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.dialog-nav-item.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 右侧面板 */
+.dialog-body {
+  flex: 1;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+.dialog-body::-webkit-scrollbar { width: 4px; }
+.dialog-body::-webkit-scrollbar-thumb { background: var(--text-4); border-radius: 2px; }
+
+.settings-section-title {
+  font-size: .68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-4);
+  margin: 18px 0 8px;
+}
+.settings-section-title:first-child { margin-top: 6px; }
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-label {
+  font-size: .8rem;
+  color: var(--text-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-hint {
+  font-size: .68rem;
+  color: var(--text-3);
+}
+
+/* 主题卡片 */
+.theme-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.theme-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.theme-card:hover {
+  background: var(--bg-hover);
+}
+.theme-card.on {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.theme-card-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-m);
+  flex-shrink: 0;
+}
+.theme-card-name {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+.theme-card.on .theme-card-name { color: var(--accent); }
+.theme-card-desc {
+  font-size: .66rem;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+/* 开关 */
+.switch {
+  width: 30px;
+  height: 17px;
+  border-radius: 9px;
+  background: var(--text-4);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+  flex-shrink: 0;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px;
+  left: 2px;
+  transition: left var(--dur) var(--ease);
+}
+.switch.on { background: var(--accent); }
+.switch.on::after { left: 15px; }
+
+/* 开关行整行可点击（扩大命中区，避免小开关难点） */
+.settings-row-toggle { cursor: pointer; }
+.settings-row-toggle:hover .settings-label { color: var(--text-1); }
+
+/* 字号分段选择 */
+.seg {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.seg-item {
+  padding: 4px 12px;
+  font-size: .72rem;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.seg-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.seg-item.on {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 缩放控制 */
+.zoom-ctrl {
+  display: flex;
+  gap: 4px;
+}
+.zoom-btn {
+  padding: 4px 12px;
+  font-size: .72rem;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.zoom-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+/* ====== 快捷键配置 ====== */
+.sc-tip {
+  font-size: .68rem;
+  color: var(--text-3);
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+.sc-error {
+  font-size: .7rem;
+  color: #b06060;
+  background: rgba(176, 96, 96, .08);
+  border: 1px solid rgba(176, 96, 96, .25);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  margin-bottom: 8px;
+}
+.sc-row { align-items: center; }
+.sc-edit-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sc-combo {
+  min-width: 110px;
+  text-align: center;
+  font-size: .68rem;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+}
+.sc-combo.recording {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: scBlink 1s infinite;
+}
+@keyframes scBlink {
+  50% { opacity: .55; }
+}
+.sc-btn {
+  font-size: .66rem;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.sc-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sc-reset {
+  display: inline-block;
+  margin-top: 14px;
+  font-size: .7rem;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

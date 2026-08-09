@@ -1,0 +1,22 @@
+/** IPC 通道名称常量 — 主进程和渲染进程共享 */
+export const CHANNELS = {
+  FILE_OPEN: 'file:open',
+  FILE_OPEN_FOLDER: 'file:open-folder',
+  FILE_READ: 'file:read',
+  FILE_SAVE: 'file:save',
+  FILE_SAVE_AS: 'file:save-as',
+  FILE_SAVE_IMAGE: 'file:save-image',
+  FILE_EXPORT_PDF: 'file:export-pdf',
+  FILE_CREATE: 'file:create',
+  FILE_RENAME: 'file:rename',
+  FILE_DELETE: 'file:delete',
+  FILE_LIST_IMAGES: 'file:list-images',
+  FILE_DELETE_IMAGE: 'file:delete-image',
+  FILE_WATCH: 'file:watch',
+  SETTINGS_GET: 'settings:get',
+  SETTINGS_SET: 'settings:set',
+  WINDOW_SET_TITLEBAR: 'window:set-titlebar',
+  WINDOW_SET_SPELLCHECK: 'window:set-spellcheck',
+  WINDOW_NEW: 'window:new',
+  WINDOW_SET_UNSAVED: 'window:set-unsaved',
+} as const

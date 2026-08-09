@@ -1,0 +1,22 @@
+/* ====== Default Theme (暖白) ====== */
+:root, [data-theme="default"] {
+  --bg-app: #F7F5F2;
+  --bg-surface: #FFFFFF;
+  --bg-sidebar: #F0EDEA;
+  --bg-hover: rgba(0,0,0,.035);
+  --bg-active: rgba(0,0,0,.06);
+  --bg-menu: #FFFFFF;
+  --bg-code: #F5F2EE;
+  --bg-quote: #FAF8F5;
+  --text-1: #1D1B18;
+  --text-2: #5C5850;
+  --text-3: #9C978E;
+  --text-4: #C8C3BA;
+  --accent: #7C6F5B;
+  --accent-h: #635847;
+  --accent-bg: rgba(124,111,91,.08);
+  --border: rgba(0,0,0,.06);
+  --border-m: rgba(0,0,0,.08);
+  --shadow-m: 0 8px 32px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-s: 0 1px 3px rgba(0,0,0,.04);
+}
