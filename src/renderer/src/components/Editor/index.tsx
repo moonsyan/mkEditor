@@ -16,7 +16,13 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
-import { gfm } from '@milkdown/kit/preset/gfm'
+import {
+  gfm,
+  addRowAfterCommand,
+  addColAfterCommand,
+  setAlignCommand,
+} from '@milkdown/kit/preset/gfm'
+import { deleteRow, deleteColumn, deleteTable } from '@milkdown/kit/prose/tables'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { prism } from '@milkdown/plugin-prism'
@@ -58,17 +64,21 @@ let searchCurrent = -1
 let lastQuery = ''
 let lastUseRegex = false
 let lastCaseSensitive = false
+let lastWholeWord = false
 
 function buildSearchRegex(
   query: string,
   useRegex: boolean,
   caseSensitive: boolean,
+  wholeWord = false,
 ): RegExp | null {
   try {
-    const source = useRegex
+    let source = useRegex
       ? query
       : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     if (!source) return null
+    // 全字匹配：用 \b 包裹（正则模式下同样包裹整个表达式，与 VSCode 一致）
+    if (wholeWord) source = `\\b(?:${source})\\b`
     return new RegExp(source, caseSensitive ? 'g' : 'gi')
   } catch {
     return null
@@ -78,6 +88,8 @@ function buildSearchRegex(
 function collectHits(doc: ProseNode, re: RegExp): SearchHit[] {
   const hits: SearchHit[] = []
   doc.descendants((node, pos) => {
+    // B3：搜索跳过代码块（与 Typora 对齐，避免误匹配代码内容）
+    if (node.type.name === 'code_block') return false
     if (!node.isText) return
     const text = node.text ?? ''
     re.lastIndex = 0
@@ -143,6 +155,61 @@ const searchPlugin = new Plugin({
   props: {
     decorations(state) {
       return searchKey.getState(state) as DecorationSet
+    },
+  },
+})
+
+/* ==================== 代码块行号（装饰 widget，不修改文档） ==================== */
+
+const lineNumKey = new PluginKey('code-line-numbers')
+/** 行号开关（模块级：插件只在编辑器创建时实例化一次，开关变化通过 meta 触发重建） */
+let lineNumbersEnabled = false
+
+/** 为每个代码块生成行号 widget + 节点 class 装饰 */
+function buildLineNumDecos(doc: ProseNode): DecorationSet {
+  if (!lineNumbersEnabled) return DecorationSet.empty
+  const decos: Decoration[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'code_block') return
+    const lineCount = Math.max(1, node.textContent.split('\n').length)
+    // 节点 class：CSS 据此给 pre 留出 gutter 空间
+    decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'has-line-numbers' }))
+    // widget 插入 code 内部起始处，绝对定位到 pre 左侧
+    decos.push(
+      Decoration.widget(
+        pos + 1,
+        () => {
+          const el = document.createElement('span')
+          el.className = 'code-line-numbers'
+          el.setAttribute('aria-hidden', 'true')
+          let text = ''
+          for (let i = 1; i <= lineCount; i++) text += (i > 1 ? '\n' : '') + i
+          el.textContent = text
+          return el
+        },
+        { side: -1, ignoreSelection: true },
+      ),
+    )
+    return false
+  })
+  return DecorationSet.create(doc, decos)
+}
+
+const lineNumPlugin = new Plugin({
+  key: lineNumKey,
+  state: {
+    init: (_config, state) => buildLineNumDecos(state.doc),
+    apply(tr, prev) {
+      // 文档变化或开关切换（带 lineNumKey meta）时重建
+      if (tr.docChanged || tr.getMeta(lineNumKey) !== undefined) {
+        return buildLineNumDecos(tr.doc)
+      }
+      return (prev as DecorationSet).map(tr.mapping, tr.doc)
+    },
+  },
+  props: {
+    decorations(state) {
+      return lineNumKey.getState(state) as DecorationSet
     },
   },
 })
@@ -302,6 +369,8 @@ export interface EditorHandle {
   runCommand: <T>(key: CmdKey<T>, payload?: T) => boolean
   /** 获取当前内容的 HTML（导出用） */
   getHtml: () => string
+  /** 获取文档标题列表（PDF 目录页生成用） */
+  getHeadings: () => { level: number; text: string }[]
   /** 预览/导出用：编辑器真实 DOM 快照（含 Mermaid SVG、KaTeX 渲染结果，比 getHtml 更完整） */
   getPreviewHtml: () => string
   /** 编辑器聚焦 */
@@ -311,7 +380,12 @@ export interface EditorHandle {
   /** 编辑器是否已创建完成（会话/草稿恢复时判断时机） */
   isReady: () => boolean
   /** 搜索：返回匹配数与当前索引 */
-  startSearch: (query: string, useRegex: boolean, caseSensitive: boolean) => {
+  startSearch: (
+    query: string,
+    useRegex: boolean,
+    caseSensitive: boolean,
+    wholeWord?: boolean,
+  ) => {
     count: number
     current: number
   }
@@ -323,6 +397,11 @@ export interface EditorHandle {
   replaceAllMatches: (replacement: string) => number
   /** 结束搜索（清除高亮） */
   endSearch: () => void
+  /**
+   * 等待富内容就绪（B1）：若文档含公式/图表则确保懒加载插件已装载并重新渲染，
+   * 导出 HTML/PDF 前调用，避免快照中缺少 SVG/KaTeX 渲染结果。最多等待 4 秒。
+   */
+  ensureRichContent: () => Promise<void>
 }
 
 interface EditorProps {
@@ -330,8 +409,12 @@ interface EditorProps {
   initialContent: string
   /** 内容变化回调（返回最新 Markdown） */
   onChange: (markdown: string) => void
-  /** 图片保存位置提示（当前文档路径 / 工作区路径） */
-  imageHints?: { docPath?: string; workspacePath?: string }
+  /** 图片保存位置提示（当前文档路径 / 工作区路径 / 图床配置） */
+  imageHints?: {
+    docPath?: string
+    workspacePath?: string
+    imageHost?: { provider: 'local' | 'smms'; token: string }
+  }
   /** 光标位置变化回调（行/列 + 当前标题 + 标题索引 + 选中字数） */
   onCursorChange?: (
     line: number,
@@ -340,6 +423,14 @@ interface EditorProps {
     headingIndex: number,
     selectedChars: number,
   ) => void
+  /** 懒加载插件（KaTeX/Mermaid）完成渲染后的回调（分栏预览刷新用，B1/B2） */
+  onRichRender?: () => void
+  /** 点击正文下方空白区是否跳到文末（默认 true，可在设置关闭，U8） */
+  blankClickToEnd?: boolean
+  /** 代码块行号开关 */
+  codeLineNumbers?: boolean
+  /** 轻提示回调（图床上传失败降级等场景） */
+  onNotify?: (message: string) => void
 }
 
 /** 代码块悬浮层状态（语言输入 + 复制，悬停才出现） */
@@ -350,13 +441,38 @@ interface CodePanelState {
   language: string
 }
 
+/** 表格悬浮工具栏状态（行列增删，悬停才出现） */
+interface TablePanelState {
+  table: HTMLElement
+  top: number
+  left: number
+}
+
+/** 代码块全屏预览状态 */
+interface FullscreenCodeState {
+  language: string
+  text: string
+}
+
 /**
  * Milkdown 编辑器主体
  * useEditor 只在挂载时执行一次，initialContent/onChange 通过 ref 透传，
  * 避免重渲染时重建编辑器导致光标丢失。
  */
 const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
-  function MilkdownInner({ initialContent, onChange, imageHints, onCursorChange }, ref) {
+  function MilkdownInner(
+    {
+      initialContent,
+      onChange,
+      imageHints,
+      onCursorChange,
+      onRichRender,
+      blankClickToEnd = true,
+      codeLineNumbers = false,
+      onNotify,
+    },
+    ref,
+  ) {
     const editorRef = useRef<MilkdownCore | null>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const scrollRef = useRef<HTMLDivElement>(null)
@@ -367,17 +483,21 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     imageHintsRef.current = imageHints
     const cursorRef = useRef(onCursorChange)
     cursorRef.current = onCursorChange
+    const richRenderRef = useRef(onRichRender)
+    richRenderRef.current = onRichRender
+    const notifyRef = useRef(onNotify)
+    notifyRef.current = onNotify
     const [, bumpRender] = useState(0)
 
     // 拼写检查排除（代码块/行内代码 spellcheck=false）与图片 draggable：
     // 改用 nodeAttrsPlugin（ProseMirror 装饰）实现，不再外部修改 DOM
 
-    /** 大插件懒加载状态（KaTeX / Mermaid） */
+    /** 大插件懒加载状态（KaTeX / Mermaid）；Promise 供导出前等待就绪（B1） */
     const lazyRef = useRef({
       mathLoaded: false,
       diagramLoaded: false,
-      mathLoading: false,
-      diagramLoading: false,
+      mathPromise: null as Promise<void> | null,
+      diagramPromise: null as Promise<void> | null,
     })
 
     /** 检测到公式/图表内容时动态加载对应插件（避免启动内存峰值） */
@@ -385,47 +505,60 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       const ed = editorRef.current
       if (!ed || ed.status !== EditorStatus.Created) return
       const st = lazyRef.current
-      if (!st.mathLoaded && !st.mathLoading && markdown.includes('$')) {
-        st.mathLoading = true
-        import('@milkdown/plugin-math')
-          .then((m) => {
-            // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
-            setTimeout(() => {
-              ed.use(m.math)
-              st.mathLoaded = true
-              // 重新解析当前文档，让已存在的公式生效
-              setTimeout(() => {
-                const md = ed.action(getMarkdown())
-                ed.action(replaceAll(md))
-              }, 50)
-            }, 0)
-          })
+      if (!st.mathLoaded && !st.mathPromise && markdown.includes('$')) {
+        st.mathPromise = import('@milkdown/plugin-math')
+          .then(
+            (m) =>
+              new Promise<void>((resolve) => {
+                // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
+                setTimeout(() => {
+                  ed.use(m.math)
+                  st.mathLoaded = true
+                  // 重新解析当前文档，让已存在的公式生效
+                  setTimeout(() => {
+                    try {
+                      const md = ed.action(getMarkdown())
+                      ed.action(replaceAll(md))
+                    } catch {
+                      /* 编辑器销毁等异常不影响主流程 */
+                    }
+                    richRenderRef.current?.()
+                    resolve()
+                  }, 50)
+                }, 0)
+              }),
+          )
           .catch(() => {})
-          .finally(() => {
-            st.mathLoading = false
-          })
       }
       if (
         !st.diagramLoaded &&
-        !st.diagramLoading &&
+        !st.diagramPromise &&
         markdown.includes('```mermaid')
       ) {
-        st.diagramLoading = true
-        import('@milkdown/plugin-diagram')
-          .then((m) => {
-            setTimeout(() => {
-              ed.use(m.diagram)
-              st.diagramLoaded = true
-              setTimeout(() => {
-                const md = ed.action(getMarkdown())
-                ed.action(replaceAll(md))
-              }, 50)
-            }, 0)
-          })
+        st.diagramPromise = import('@milkdown/plugin-diagram')
+          .then(
+            (m) =>
+              new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  ed.use(m.diagram)
+                  st.diagramLoaded = true
+                  setTimeout(() => {
+                    try {
+                      const md = ed.action(getMarkdown())
+                      ed.action(replaceAll(md))
+                    } catch {
+                      /* 同上 */
+                    }
+                    // Mermaid SVG 为异步渲染，多等一拍再通知
+                    setTimeout(() => {
+                      richRenderRef.current?.()
+                      resolve()
+                    }, 120)
+                  }, 50)
+                }, 0)
+              }),
+          )
           .catch(() => {})
-          .finally(() => {
-            st.diagramLoading = false
-          })
       }
     }
 
@@ -435,6 +568,47 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     const [copied, setCopied] = useState(false)
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>()
     const lastPreRef = useRef<HTMLElement | null>(null)
+    // 表格悬浮工具栏（行列增删）
+    const [tablePanel, setTablePanel] = useState<TablePanelState | null>(null)
+    // 代码块全屏预览
+    const [fullscreenCode, setFullscreenCode] = useState<FullscreenCodeState | null>(null)
+
+    // 全屏预览下 Esc 关闭
+    useEffect(() => {
+      if (!fullscreenCode) return
+      const h = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setFullscreenCode(null)
+        }
+      }
+      window.addEventListener('keydown', h)
+      return () => window.removeEventListener('keydown', h)
+    }, [fullscreenCode])
+
+    // 行号开关同步：更新模块级标志并触发装饰重建（编辑器未创建时由 init 读标志）
+    useEffect(() => {
+      lineNumbersEnabled = codeLineNumbers
+      const ed = editorRef.current
+      if (ed?.status === EditorStatus.Created) {
+        const view = ed.ctx.get(editorViewCtx)
+        view.dispatch(view.state.tr.setMeta(lineNumKey, true))
+      }
+    }, [codeLineNumbers])
+
+    /** 元素相对滚动容器的内容坐标（不受整体缩放影响） */
+    const offsetInScroll = (el: HTMLElement): { top: number; left: number } => {
+      const scrollEl = scrollRef.current
+      let top = 0
+      let left = 0
+      let cur: HTMLElement | null = el
+      while (cur && cur !== scrollEl) {
+        top += cur.offsetTop
+        left += cur.offsetLeft
+        cur = cur.offsetParent as HTMLElement | null
+      }
+      return { top, left }
+    }
 
     useEditor((root) => {
       const editor = MilkdownCore.make()
@@ -480,6 +654,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use($prose(() => searchPlugin))
         // 代码块 spellcheck 排除 + 图片 draggable（装饰方式，避免 DOM 变异乒乓）
         .use($prose(() => nodeAttrsPlugin))
+        // 代码块行号（开关由 codeLineNumbers prop 控制，装饰 widget 实现）
+        .use($prose(() => lineNumPlugin))
         // 光标位置上报（供状态栏/大纲高亮；rAF 节流，连续输入每帧只算一次）
         .use(
           $prose(() => {
@@ -604,8 +780,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       else if (e.key === 'ArrowUp' && exitCodeBlock('up')) e.preventDefault()
     }
 
-    /** 点击正文下方空白区：光标定位到文末（Typora 同款） */
+    /** 点击正文下方空白区：光标定位到文末（Typora 同款，可在设置关闭，U8） */
     const handleBlankClick = (e: React.MouseEvent) => {
+      if (!blankClickToEnd) return
       if (e.target !== e.currentTarget) return
       const ed =
         editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
@@ -618,7 +795,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /* ==================== 图片粘贴 / 拖入 ==================== */
 
-    /** 保存本地图片并插入 Markdown 图片节点 */
+    /** 保存图片并插入 Markdown 图片节点（优先图床，未配置/失败时降级本地） */
     const insertImageFile = (file: File) => {
       if (!window.desktopAPI) return
       void (async () => {
@@ -630,6 +807,19 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           reader.readAsDataURL(file)
         })
         if (!dataUrl) return
+        // 图床路径：配置了 SM.MS 且 token 非空时先尝试上传
+        const host = imageHintsRef.current?.imageHost
+        if (host?.provider === 'smms' && host.token) {
+          const up = await window.desktopAPI.document.uploadImage(dataUrl)
+          if (up.ok && up.data?.url) {
+            const alt = file.name.replace(/\.[^.]+$/, '')
+            editorRef.current?.action(insert(`![${alt}](${up.data.url})`))
+            bumpRender((n) => n + 1)
+            return
+          }
+          // 上传失败：提示后降级本地附件
+          notifyRef.current?.('图床上传失败，已改为保存到本地')
+        }
         const res = await window.desktopAPI.document.saveImage(
           dataUrl,
           imageHintsRef.current,
@@ -671,31 +861,129 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /* ==================== 代码块悬浮层 ==================== */
 
-    /** 鼠标悬停代码块：显示轻量操作层（事件委托） */
+    /** 鼠标悬停代码块/表格：显示轻量操作层（事件委托） */
     const handleMouseOver = (e: React.MouseEvent) => {
       const target = e.target as HTMLElement
       // 悬停在操作层自身上时保持现状，避免闪烁
-      if (target.closest('.code-panel')) return
-      const pre = target.closest('pre')
+      if (target.closest('.code-panel') || target.closest('.table-panel')) return
       const scrollEl = scrollRef.current
-      if (!pre || !scrollEl || !scrollEl.contains(pre)) {
+      if (!scrollEl) return
+
+      // 悬停表格：显示表格工具栏
+      const table = target.closest('table')
+      if (table && scrollEl.contains(table)) {
         setCodePanel(null)
+        lastPreRef.current = null
+        const { top, left } = offsetInScroll(table)
+        setTablePanel({
+          table,
+          top: top + 4,
+          // 贴表格右上角；窄表格时避免负坐标（工具栏含对齐按钮，宽约 340px）
+          left: Math.max(8, left + table.offsetWidth - 340),
+        })
+        return
+      }
+
+      const pre = target.closest('pre')
+      if (!pre || !scrollEl.contains(pre)) {
+        setCodePanel(null)
+        setTablePanel(null)
         lastPreRef.current = null
         return
       }
+      setTablePanel(null)
       // 切换到新代码块时同步输入框内容（同一块内不打断输入）
       if (lastPreRef.current !== pre) {
         lastPreRef.current = pre
         setLangInput(pre.getAttribute('data-language') || '')
       }
-      const preRect = pre.getBoundingClientRect()
-      const scrollRect = scrollEl.getBoundingClientRect()
+      // U2：内容坐标定位而非 getBoundingClientRect，不受缩放/侧栏宽度影响
+      const { top, left } = offsetInScroll(pre)
       setCodePanel({
         pre,
-        top: preRect.top - scrollRect.top + scrollEl.scrollTop + 8,
-        left: preRect.right - scrollRect.left - 216,
+        top: top + 8,
+        left: left + pre.offsetWidth - 216,
         language: pre.getAttribute('data-language') || '',
       })
+    }
+
+    /** 把光标定位到悬停表格内（表格命令要求选区在单元格中） */
+    const ensureSelectionInTable = (table: HTMLElement): boolean => {
+      const ed =
+        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+      if (!ed) return false
+      const view = ed.ctx.get(editorViewCtx)
+      try {
+        const pos = view.posAtDOM(table, 0)
+        const $pos = view.state.doc.resolve(pos)
+        let tablePos = -1
+        let tableNode: ProseNode | null = null
+        for (let d = $pos.depth; d >= 0; d--) {
+          if ($pos.node(d).type.name === 'table') {
+            tablePos = $pos.before(d)
+            tableNode = $pos.node(d)
+            break
+          }
+        }
+        if (!tableNode) return false
+        const sel = view.state.selection
+        const inside = sel.from > tablePos && sel.from < tablePos + tableNode.nodeSize
+        if (!inside) {
+          const target = Selection.findFrom(view.state.doc.resolve(tablePos + 1), 1)
+          if (!target) return false
+          view.dispatch(view.state.tr.setSelection(target))
+        }
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    /** 表格工具栏动作：作用于光标所在单元格（光标不在表内时先移入） */
+    const runTableAction = (
+      action:
+        | 'addRow'
+        | 'addCol'
+        | 'delRow'
+        | 'delCol'
+        | 'delTable'
+        | 'alignLeft'
+        | 'alignCenter'
+        | 'alignRight',
+    ) => {
+      if (!tablePanel) return
+      if (!ensureSelectionInTable(tablePanel.table)) return
+      const ed =
+        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+      if (!ed) return
+      const view = ed.ctx.get(editorViewCtx)
+      switch (action) {
+        case 'addRow':
+          ed.action(callCommand(addRowAfterCommand.key))
+          break
+        case 'addCol':
+          ed.action(callCommand(addColAfterCommand.key))
+          break
+        case 'delRow':
+          deleteRow(view.state, view.dispatch)
+          break
+        case 'delCol':
+          deleteColumn(view.state, view.dispatch)
+          break
+        case 'delTable':
+          deleteTable(view.state, view.dispatch)
+          setTablePanel(null)
+          break
+        case 'alignLeft':
+          ed.action(callCommand(setAlignCommand.key, 'left'))
+          break
+        case 'alignCenter':
+          ed.action(callCommand(setAlignCommand.key, 'center'))
+          break
+        case 'alignRight':
+          ed.action(callCommand(setAlignCommand.key, 'right'))
+          break
+      }
     }
 
     /** 修改代码块语言：定位 ProseMirror 节点并更新 language 属性 */
@@ -729,7 +1017,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     const handleCopy = () => {
       if (!codePanel) return
-      const text = codePanel.pre.textContent ?? ''
+      const text = getCodeText(codePanel.pre)
       navigator.clipboard
         .writeText(text)
         .then(() => {
@@ -738,6 +1026,13 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           copiedTimer.current = setTimeout(() => setCopied(false), 1500)
         })
         .catch(() => {})
+    }
+
+    /** 取代码块纯文本：先剔除行号 widget，避免开启行号后复制/预览混入行号 */
+    function getCodeText(pre: HTMLElement): string {
+      const clone = pre.cloneNode(true) as HTMLElement
+      clone.querySelectorAll('.code-line-numbers').forEach((el) => el.remove())
+      return clone.textContent ?? ''
     }
 
     useImperativeHandle(ref, () => {
@@ -759,6 +1054,17 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         },
         getHtml: () => {
           return ready()?.action(getHTML()) ?? ''
+        },
+        getHeadings: () => {
+          const ed = ready()
+          if (!ed) return []
+          const out: { level: number; text: string }[] = []
+          ed.ctx.get(editorViewCtx).state.doc.descendants((node) => {
+            if (node.type.name === 'heading') {
+              out.push({ level: node.attrs.level as number, text: node.textContent })
+            }
+          })
+          return out
         },
         getPreviewHtml: () => {
           // 直接取 ProseMirror 视图 DOM，保留 nodeView 渲染的图表/公式
@@ -785,16 +1091,45 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         },
         isReady: () => ready() !== null,
 
+        /* ---------- 富内容就绪（B1：导出/预览前强制等待插件加载） ---------- */
+
+        ensureRichContent: async () => {
+          const ed = ready()
+          if (!ed) return
+          let md = ''
+          try {
+            md = ed.action(getMarkdown())
+          } catch {
+            return
+          }
+          ensureLazyPlugins(md)
+          const st = lazyRef.current
+          const waits: Promise<void>[] = []
+          if (md.includes('$') && st.mathPromise) waits.push(st.mathPromise)
+          if (md.includes('```mermaid') && st.diagramPromise) {
+            waits.push(st.diagramPromise)
+          }
+          if (waits.length === 0) return
+          // 最多等 4 秒，避免插件加载异常时永久阻塞导出
+          await Promise.race([
+            Promise.all(waits),
+            new Promise<void>((r) => setTimeout(r, 4000)),
+          ])
+          // 再等一帧，确保 DOM 已完成重排
+          await new Promise<void>((r) => requestAnimationFrame(() => r()))
+        },
+
         /* ---------- 搜索 ---------- */
 
-        startSearch: (query, useRegex, caseSensitive) => {
+        startSearch: (query, useRegex, caseSensitive, wholeWord = false) => {
           const ed = ready()
           if (!ed) return { count: 0, current: -1 }
           const view = ed.ctx.get(editorViewCtx)
           lastQuery = query
           lastUseRegex = useRegex
           lastCaseSensitive = caseSensitive
-          const re = buildSearchRegex(query, useRegex, caseSensitive)
+          lastWholeWord = wholeWord
+          const re = buildSearchRegex(query, useRegex, caseSensitive, wholeWord)
           if (!re) {
             searchHits = []
             searchCurrent = -1
@@ -850,7 +1185,12 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             view.state.tr.insertText(replacement, hit.from, hit.to).scrollIntoView(),
           )
           // 替换后重新搜索（复用 startSearch 逻辑）
-          const re = buildSearchRegex(lastQuery, lastUseRegex, lastCaseSensitive)
+          const re = buildSearchRegex(
+            lastQuery,
+            lastUseRegex,
+            lastCaseSensitive,
+            lastWholeWord,
+          )
           if (!re) return { count: 0, current: -1 }
           searchHits = collectHits(view.state.doc, re)
           const selPos = view.state.selection.from
@@ -902,7 +1242,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           className="editor-scroll"
           ref={scrollRef}
           onMouseOver={handleMouseOver}
-          onMouseLeave={() => setCodePanel(null)}
+          onMouseLeave={() => {
+            setCodePanel(null)
+            setTablePanel(null)
+          }}
         >
           <div
             className="editor-inner"
@@ -945,6 +1288,21 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
                 title="输入语言后回车生效（如 python）"
               />
               <div
+                className={`code-copy`}
+                onClick={() => {
+                  if (!codePanel) return
+                  setFullscreenCode({
+                    language: codePanel.language,
+                    text: getCodeText(codePanel.pre),
+                  })
+                }}
+                title="全屏预览代码"
+              >
+                <svg viewBox="0 0 24 24">
+                  <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
+                </svg>
+              </div>
+              <div
                 className={`code-copy ${copied ? 'copied' : ''}`}
                 onClick={handleCopy}
                 title={copied ? '已复制' : '复制代码'}
@@ -962,7 +1320,74 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
               </div>
             </div>
           )}
+          {/* 表格悬浮工具栏：行列增删（悬停才出现） */}
+          {tablePanel && (
+            <div
+              className="table-panel"
+              style={{ top: tablePanel.top, left: tablePanel.left }}
+              onMouseOver={(e) => e.stopPropagation()}
+              contentEditable={false}
+            >
+              <div className="table-act" onClick={() => runTableAction('addRow')} title="在光标所在行下方加行">
+                +行
+              </div>
+              <div className="table-act" onClick={() => runTableAction('addCol')} title="在光标所在列右侧加列">
+                +列
+              </div>
+              <div className="table-act" onClick={() => runTableAction('delRow')} title="删除光标所在行">
+                −行
+              </div>
+              <div className="table-act" onClick={() => runTableAction('delCol')} title="删除光标所在列">
+                −列
+              </div>
+              <div className="table-act danger" onClick={() => runTableAction('delTable')} title="删除整个表格">
+                删表
+              </div>
+              <span className="table-act-sep" />
+              <div className="table-act" onClick={() => runTableAction('alignLeft')} title="当前列左对齐">
+                左
+              </div>
+              <div className="table-act" onClick={() => runTableAction('alignCenter')} title="当前列居中">
+                中
+              </div>
+              <div className="table-act" onClick={() => runTableAction('alignRight')} title="当前列右对齐">
+                右
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* 代码块全屏预览（只读 + 复制，Esc 关闭） */}
+        {fullscreenCode && (
+          <div
+            className="code-fullscreen-overlay"
+            onClick={() => setFullscreenCode(null)}
+          >
+            <div className="code-fullscreen" onClick={(e) => e.stopPropagation()}>
+              <div className="code-fullscreen-head">
+                <span className="code-fullscreen-lang">
+                  {fullscreenCode.language || 'text'}
+                </span>
+                <div className="code-fullscreen-actions">
+                  <div
+                    className="sc-btn"
+                    onClick={() => {
+                      navigator.clipboard.writeText(fullscreenCode.text).catch(() => {})
+                    }}
+                  >
+                    复制
+                  </div>
+                  <div className="sc-btn" onClick={() => setFullscreenCode(null)}>
+                    关闭（Esc）
+                  </div>
+                </div>
+              </div>
+              <pre className="code-fullscreen-pre">
+                <code>{fullscreenCode.text}</code>
+              </pre>
+            </div>
+          </div>
+        )}
       </div>
     )
   },

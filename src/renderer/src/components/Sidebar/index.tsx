@@ -44,6 +44,10 @@ interface SidebarProps {
   onCreateFile?: (dirPath: string) => void
   onRenameFile?: (path: string, newName: string) => void
   onDeleteFile?: (path: string) => void
+  /** 拖拽移动文件/文件夹到目标目录（U5） */
+  onMoveFile?: (path: string, targetDir: string) => void
+  /** 右键在新窗口打开文件（U7） */
+  onOpenInNewWindow?: (path: string) => void
 }
 
 /** 统一的树节点模型（演示树与工作区树归一化后渲染） */
@@ -121,6 +125,8 @@ export function Sidebar({
   onCreateFile,
   onRenameFile,
   onDeleteFile,
+  onMoveFile,
+  onOpenInNewWindow,
 }: SidebarProps): JSX.Element {
   const [activeTab, setActiveTab] = useState<'files' | 'outline'>('files')
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
@@ -129,6 +135,21 @@ export function Sidebar({
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: UiNode } | null>(null)
   const [renamingKey, setRenamingKey] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  // 文件树拖拽移动（U5）：正在拖动的节点与当前悬停的投放目标
+  const [dragNode, setDragNode] = useState<{ path: string; kind: 'file' | 'folder' } | null>(null)
+  const [dropKey, setDropKey] = useState<string | null>(null)
+
+  /** 判断当前拖动的节点能否放入目标文件夹 */
+  const canDropInto = (target: UiNode): boolean => {
+    if (!dragNode || !target.path || target.kind !== 'folder') return false
+    const src = dragNode.path
+    // 不能移入自身或自身的子目录
+    if (target.path === src) return false
+    if (target.path.startsWith(src + '/') || target.path.startsWith(src + '\\')) return false
+    // 已在目标目录下，无需移动
+    if (src.replace(/[\\/][^\\/]+$/, '') === target.path) return false
+    return true
+  }
 
   // 点击其他区域关闭右键菜单
   useEffect(() => {
@@ -267,13 +288,43 @@ export function Sidebar({
     }
     if (node.kind === 'folder') {
       const open = !collapsedKeys.has(node.key)
+      // 工作区文件夹支持拖入移动（U5）
+      const droppable = !!workspace && !!node.path
       return (
         <div key={node.key}>
           <div
-            className="tree-row tree-folder-row"
+            className={`tree-row tree-folder-row ${dropKey === node.key ? 'drop-target' : ''}`}
             style={{ paddingLeft: indent }}
             onClick={() => toggleCollapse(node.key)}
             onContextMenu={(e) => openCtxMenu(e, node)}
+            draggable={droppable}
+            onDragStart={(e) => {
+              if (!node.path) return
+              setDragNode({ path: node.path, kind: node.kind })
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', node.name)
+            }}
+            onDragEnd={() => {
+              setDragNode(null)
+              setDropKey(null)
+            }}
+            onDragOver={(e) => {
+              if (canDropInto(node)) {
+                e.preventDefault()
+                e.stopPropagation()
+                setDropKey(node.key)
+              }
+            }}
+            onDragLeave={() => setDropKey((k) => (k === node.key ? null : k))}
+            onDrop={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (dragNode && canDropInto(node) && node.path) {
+                onMoveFile?.(dragNode.path, node.path)
+              }
+              setDragNode(null)
+              setDropKey(null)
+            }}
           >
             {guides}
             <ChevronIcon open={open} />
@@ -336,6 +387,17 @@ export function Sidebar({
           else if (node.path) onSelectWorkspaceFile(node.path)
         }}
         onContextMenu={(e) => openCtxMenu(e, node)}
+        draggable={!!workspace && !!node.path}
+        onDragStart={(e) => {
+          if (!node.path) return
+          setDragNode({ path: node.path, kind: node.kind })
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/plain', node.name)
+        }}
+        onDragEnd={() => {
+          setDragNode(null)
+          setDropKey(null)
+        }}
       >
         {guides}
         <span className="tree-chevron-slot" />
@@ -513,6 +575,15 @@ export function Sidebar({
                 }}
               >
                 复制路径
+              </div>
+              <div
+                className="tree-ctx-item"
+                onClick={() => {
+                  if (ctxMenu.node.path) onOpenInNewWindow?.(ctxMenu.node.path)
+                  setCtxMenu(null)
+                }}
+              >
+                在新窗口打开
               </div>
               <div className="tree-ctx-sep" />
               <div

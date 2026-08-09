@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 
+/** 持久化的搜索状态（U4） */
+export interface SearchState {
+  query: string
+  useRegex: boolean
+  caseSensitive: boolean
+  wholeWord: boolean
+  replacement: string
+}
+
 interface SearchBarProps {
   /** 是否显示替换输入框 */
   withReplace: boolean
@@ -9,14 +18,23 @@ interface SearchBarProps {
   count: number
   /** 当前匹配索引（0 起，-1 无） */
   current: number
+  /** 上次搜索状态（重新打开时恢复查询词/选项/替换文本，U4） */
+  initial?: SearchState
   /** 查询变化（返回匹配信息） */
-  onQueryChange: (query: string, useRegex: boolean, caseSensitive: boolean) => void
+  onQueryChange: (
+    query: string,
+    useRegex: boolean,
+    caseSensitive: boolean,
+    wholeWord: boolean,
+  ) => void
   /** 上一个 / 下一个 */
   onNext: (backwards: boolean) => void
   /** 替换当前匹配 */
   onReplace: (replacement: string) => void
   /** 全部替换 */
   onReplaceAll: (replacement: string) => void
+  /** 替换文本变化（同步到持久化状态，U4） */
+  onReplacementChange?: (replacement: string) => void
 }
 
 /**
@@ -28,15 +46,18 @@ export function SearchBar({
   onClose,
   count,
   current,
+  initial,
   onQueryChange,
   onNext,
   onReplace,
   onReplaceAll,
+  onReplacementChange,
 }: SearchBarProps): JSX.Element {
-  const [query, setQuery] = useState('')
-  const [useRegex, setUseRegex] = useState(false)
-  const [caseSensitive, setCaseSensitive] = useState(false)
-  const [replacement, setReplacement] = useState('')
+  const [query, setQuery] = useState(initial?.query ?? '')
+  const [useRegex, setUseRegex] = useState(initial?.useRegex ?? false)
+  const [caseSensitive, setCaseSensitive] = useState(initial?.caseSensitive ?? false)
+  const [wholeWord, setWholeWord] = useState(initial?.wholeWord ?? false)
+  const [replacement, setReplacement] = useState(initial?.replacement ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
 
   // 打开时自动聚焦
@@ -44,21 +65,40 @@ export function SearchBar({
     inputRef.current?.focus()
   }, [withReplace])
 
+  // U4：携带上次查询词打开时，立即重新执行搜索恢复高亮
+  useEffect(() => {
+    if (initial?.query) {
+      onQueryChange(
+        initial.query,
+        initial.useRegex ?? false,
+        initial.caseSensitive ?? false,
+        initial.wholeWord ?? false,
+      )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const handleQueryChange = (value: string) => {
     setQuery(value)
-    onQueryChange(value, useRegex, caseSensitive)
+    onQueryChange(value, useRegex, caseSensitive, wholeWord)
   }
 
   const toggleRegex = () => {
     const next = !useRegex
     setUseRegex(next)
-    onQueryChange(query, next, caseSensitive)
+    onQueryChange(query, next, caseSensitive, wholeWord)
   }
 
   const toggleCase = () => {
     const next = !caseSensitive
     setCaseSensitive(next)
-    onQueryChange(query, useRegex, next)
+    onQueryChange(query, useRegex, next, wholeWord)
+  }
+
+  const toggleWholeWord = () => {
+    const next = !wholeWord
+    setWholeWord(next)
+    onQueryChange(query, useRegex, caseSensitive, next)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -97,6 +137,14 @@ export function SearchBar({
         >
           Aa
         </div>
+        {/* 全字匹配开关 */}
+        <div
+          className={`search-regex ${wholeWord ? 'on' : ''}`}
+          onClick={toggleWholeWord}
+          title={wholeWord ? '全字匹配：开' : '全字匹配：关'}
+        >
+          ab
+        </div>
         <input
           ref={inputRef}
           className="search-input"
@@ -120,12 +168,17 @@ export function SearchBar({
       {withReplace && (
         <div className="search-row">
           <span className="search-regex-placeholder" />
+          <span className="search-regex-placeholder" />
+          <span className="search-regex-placeholder" />
           <input
             className="search-input"
             placeholder="替换为"
             value={replacement}
             spellCheck={false}
-            onChange={(e) => setReplacement(e.target.value)}
+            onChange={(e) => {
+              setReplacement(e.target.value)
+              onReplacementChange?.(e.target.value)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.preventDefault()

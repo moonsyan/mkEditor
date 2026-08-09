@@ -6,8 +6,9 @@ import { is } from '@electron-toolkit/utils'
  * 创建窗口
  * @param fresh 新窗口模式：URL 带 #fresh，渲染端跳过会话恢复/写入，
  *              避免多窗口间会话互相覆盖
+ * @param openFile 可选：新窗口启动后直接打开的磁盘文件路径（#fresh?file=...）
  */
-export function createWindow(fresh = false): BrowserWindow {
+export function createWindow(fresh = false, openFile?: string): BrowserWindow {
   const isMac = process.platform === 'darwin'
 
   const mainWindow = new BrowserWindow({
@@ -97,11 +98,16 @@ export function createWindow(fresh = false): BrowserWindow {
     }
   })
 
+  // fresh 窗口的 hash：可携带待打开文件路径（渲染端启动后自动打开）
+  const freshHash = fresh
+    ? `fresh${openFile ? `?file=${encodeURIComponent(openFile)}` : ''}`
+    : undefined
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + (fresh ? '#fresh' : ''))
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + (freshHash ? `#${freshHash}` : ''))
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'), {
-      hash: fresh ? 'fresh' : undefined,
+      hash: freshHash,
     })
   }
 

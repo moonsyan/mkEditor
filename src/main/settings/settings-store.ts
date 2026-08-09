@@ -101,7 +101,22 @@ export async function getSetting(key: string): Promise<unknown> {
   return all[key]
 }
 
-export async function setSetting(key: string, value: unknown): Promise<void> {
+/**
+ * 写入串行队列（B7）：多窗口同时写 settings 时，读-改-写必须串行执行，
+ * 避免并发写入互相覆盖或临时文件替换交错导致 JSON 损坏。
+ * 设置读写统一经由主进程，此处即为全局单点串行化。
+ */
+let writeQueue: Promise<void> = Promise.resolve()
+
+export function setSetting(key: string, value: unknown): Promise<void> {
+  const task = writeQueue.then(() => applySetSetting(key, value))
+  // 队列保活：单次写入失败不阻断后续写入；
+  // 但返回给调用方的是未吞错的 task，IPC 层仍能感知磁盘写失败
+  writeQueue = task.catch(() => undefined)
+  return task
+}
+
+async function applySetSetting(key: string, value: unknown): Promise<void> {
   const all = await load()
   const clean = sanitize(key, value)
   // 写入体积守卫：单个值超限则拒绝，防止任何键再次膨胀

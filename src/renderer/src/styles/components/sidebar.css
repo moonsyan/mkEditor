@@ -60,6 +60,15 @@
 .tree-row:hover { background: var(--bg-hover); color: var(--text-1); }
 .tree-row.active { background: var(--accent-bg); color: var(--accent); font-weight: 500; }
 
+/* 拖拽移动（U5）：拖动经过合法目标文件夹时的高亮 */
+.tree-row.drop-target {
+  background: var(--accent-bg);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+/* 拖动中的源节点降低存在感 */
+.tree-row:active { opacity: .85; }
+
 .tree-name {
   overflow: hidden;
   text-overflow: ellipsis;

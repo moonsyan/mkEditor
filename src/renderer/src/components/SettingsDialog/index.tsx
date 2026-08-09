@@ -37,8 +37,24 @@ interface SettingsDialogProps {
   onTypewriterChange: (value: boolean) => void
   spellcheck: boolean
   onSpellcheckChange: (value: boolean) => void
+  /** 拼写检查语言（B4 部分改善：Electron 内置词典） */
+  spellcheckLang: string
+  onSpellcheckLangChange: (value: string) => void
   multiWindow: boolean
   onMultiWindowChange: (value: boolean) => void
+  /** 点击正文下方空白区跳到文末（U8） */
+  blankClickToEnd: boolean
+  onBlankClickToEndChange: (value: boolean) => void
+  /** 代码块行号开关 */
+  codeLineNumbers: boolean
+  onCodeLineNumbersChange: (value: boolean) => void
+  /** 自定义主题 CSS（已导入的文件名，null 未导入） */
+  customCssName?: string | null
+  onImportCss: () => void
+  onRemoveCss: () => void
+  /** 图床配置 */
+  imageHost: { provider: 'local' | 'smms'; token: string }
+  onImageHostChange: (value: { provider: 'local' | 'smms'; token: string }) => void
   /** 快捷键 */
   shortcuts: ShortcutMap
   onShortcutsChange: (map: ShortcutMap) => void
@@ -75,6 +91,19 @@ const CONTENT_FONT_OPTIONS: { id: ContentFont; label: string }[] = [
   { id: 'mono', label: '等宽' },
 ]
 
+/** 拼写检查可选语言（Electron/Chromium 内置词典，不含中文） */
+const SPELL_LANG_OPTIONS: { id: string; label: string }[] = [
+  { id: 'en-US', label: '英语（美）' },
+  { id: 'en-GB', label: '英语（英）' },
+  { id: 'fr-FR', label: '法语' },
+  { id: 'de-DE', label: '德语' },
+  { id: 'es-ES', label: '西班牙语' },
+  { id: 'it-IT', label: '意大利语' },
+  { id: 'pt-BR', label: '葡萄牙语' },
+  { id: 'nl-NL', label: '荷兰语' },
+  { id: 'ru-RU', label: '俄语' },
+]
+
 const NAV_ITEMS = [
   { id: 'appearance', label: '外观' },
   { id: 'editor', label: '编辑器' },
@@ -106,8 +135,19 @@ export function SettingsDialog({
   onTypewriterChange,
   spellcheck,
   onSpellcheckChange,
+  spellcheckLang,
+  onSpellcheckLangChange,
   multiWindow,
   onMultiWindowChange,
+  blankClickToEnd,
+  onBlankClickToEndChange,
+  codeLineNumbers,
+  onCodeLineNumbersChange,
+  customCssName,
+  onImportCss,
+  onRemoveCss,
+  imageHost,
+  onImageHostChange,
   shortcuts,
   onShortcutsChange,
 }: SettingsDialogProps): JSX.Element | null {
@@ -282,6 +322,26 @@ export function SettingsDialog({
                   </div>
                 </div>
               </div>
+
+              <div className="settings-section-title">自定义主题</div>
+              <div className="settings-row">
+                <span className="settings-label">
+                  主题 CSS
+                  <span className="settings-hint">
+                    {customCssName ? `已导入：${customCssName}` : '导入自己的 CSS 文件覆盖内置主题样式'}
+                  </span>
+                </span>
+                <div className="sc-edit-group">
+                  <div className="sc-btn" onClick={onImportCss}>
+                    {customCssName ? '重新导入' : '导入'}
+                  </div>
+                  {customCssName && (
+                    <div className="sc-btn" onClick={onRemoveCss}>
+                      移除
+                    </div>
+                  )}
+                </div>
+              </div>
             </>
           )}
 
@@ -304,11 +364,28 @@ export function SettingsDialog({
               </div>
               <div className="settings-row settings-row-toggle" onClick={() => onSpellcheckChange(!spellcheck)}>
                 <span className="settings-label">
-                  拼写检查（英文）
-                  <span className="settings-hint">仅检查正文，代码块与行内代码自动排除</span>
+                  拼写检查（多语言词典）
+                  <span className="settings-hint">仅检查正文，代码块与行内代码自动排除；中文不在词典范围</span>
                 </span>
                 <div className={`switch ${spellcheck ? 'on' : ''}`} />
               </div>
+              {spellcheck && (
+                <div className="settings-row">
+                  <span className="settings-label">拼写检查语言</span>
+                  <select
+                    className="settings-text-input"
+                    value={spellcheckLang}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => onSpellcheckLangChange(e.target.value)}
+                  >
+                    {SPELL_LANG_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="settings-row settings-row-toggle" onClick={() => onMultiWindowChange(!multiWindow)}>
                 <span className="settings-label">
                   多窗口模式
@@ -316,6 +393,56 @@ export function SettingsDialog({
                 </span>
                 <div className={`switch ${multiWindow ? 'on' : ''}`} />
               </div>
+              <div className="settings-row settings-row-toggle" onClick={() => onBlankClickToEndChange(!blankClickToEnd)}>
+                <span className="settings-label">
+                  点击空白区跳到文末
+                  <span className="settings-hint">点击正文下方空白区域时光标定位到文档末尾（Typora 同款行为）</span>
+                </span>
+                <div className={`switch ${blankClickToEnd ? 'on' : ''}`} />
+              </div>
+              <div className="settings-row settings-row-toggle" onClick={() => onCodeLineNumbersChange(!codeLineNumbers)}>
+                <span className="settings-label">
+                  代码块行号
+                  <span className="settings-hint">在代码块左侧显示行号（导出 HTML/PDF 时一并包含）</span>
+                </span>
+                <div className={`switch ${codeLineNumbers ? 'on' : ''}`} />
+              </div>
+
+              <div className="settings-section-title">图床（粘贴/拖入图片）</div>
+              <div className="settings-row">
+                <span className="settings-label">图片存储位置</span>
+                <div className="seg">
+                  <div
+                    className={`seg-item ${imageHost.provider === 'local' ? 'on' : ''}`}
+                    onClick={() => onImageHostChange({ ...imageHost, provider: 'local' })}
+                  >
+                    本地附件
+                  </div>
+                  <div
+                    className={`seg-item ${imageHost.provider === 'smms' ? 'on' : ''}`}
+                    onClick={() => onImageHostChange({ ...imageHost, provider: 'smms' })}
+                  >
+                    SM.MS 图床
+                  </div>
+                </div>
+              </div>
+              {imageHost.provider === 'smms' && (
+                <div className="settings-row">
+                  <span className="settings-label">
+                    SM.MS Token
+                    <span className="settings-hint">在 sm.ms 账号设置中获取；未填写时自动降级为本地附件</span>
+                  </span>
+                  <input
+                    className="settings-text-input"
+                    type="password"
+                    placeholder="粘贴 Token"
+                    value={imageHost.token}
+                    spellCheck={false}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => onImageHostChange({ ...imageHost, token: e.target.value })}
+                  />
+                </div>
+              )}
             </>
           )}
 

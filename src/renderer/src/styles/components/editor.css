@@ -230,6 +230,112 @@
   stroke-linejoin: round;
 }
 
+/* ====== 代码块行号（设置开关打开时，装饰 widget 渲染） ====== */
+.milkdown pre.has-line-numbers { padding-left: 58px; }
+.milkdown pre.has-line-numbers .code-line-numbers {
+  position: absolute;
+  top: 34px; /* 与 pre 的 padding-top 对齐，确保行号与代码行一一对应 */
+  left: 0;
+  width: 46px;
+  padding-right: 8px;
+  text-align: right;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: .85rem;
+  line-height: 1.75;
+  color: var(--text-4);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ====== 表格悬浮工具栏（行列增删，悬停才出现） ====== */
+.table-panel {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius);
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  box-shadow: var(--shadow-s);
+  animation: ddIn 120ms var(--ease);
+}
+.table-act {
+  padding: 4px 8px;
+  font-size: .7rem;
+  color: var(--text-2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+  white-space: nowrap;
+}
+.table-act:hover { background: var(--bg-hover); color: var(--text-1); }
+.table-act.danger { color: #b06060; }
+.table-act.danger:hover { background: rgba(176, 96, 96, .1); color: #a04c4c; }
+.table-act-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border-m);
+  margin: 0 2px;
+}
+
+/* ====== 代码块全屏预览 ====== */
+.code-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(20, 18, 15, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: ddIn 140ms var(--ease);
+}
+.code-fullscreen {
+  width: min(920px, 92vw);
+  height: min(640px, 84vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  overflow: hidden;
+}
+.code-fullscreen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.code-fullscreen-lang {
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--bg-hover);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.code-fullscreen-actions { display: flex; gap: 8px; }
+.code-fullscreen-pre {
+  flex: 1;
+  margin: 0;
+  padding: 16px 20px;
+  overflow: auto;
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: .85rem;
+  line-height: 1.75;
+  color: var(--text-1);
+  white-space: pre;
+}
+
 /* ====== 语法高亮（prism token，随主题适配） ====== */
 .milkdown pre code .token.comment,
 .milkdown pre code .token.prolog,

@@ -13,12 +13,15 @@ interface StatusBarProps {
   modifiedTime?: number
   /** 选中字数（>0 时显示） */
   selectedChars?: number
+  /** 当前文件源编码（自动探测，保存统一写回 UTF-8） */
+  encoding?: string
 }
 
 function formatTime(ts: number): string {
   const d = new Date(ts)
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  // U3：包含秒数，便于确认刚保存文件的精确时间
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 export function StatusBar({
@@ -31,6 +34,7 @@ export function StatusBar({
   currentHeading,
   modifiedTime,
   selectedChars,
+  encoding = 'UTF-8',
 }: StatusBarProps): JSX.Element {
   return (
     <div className="statusbar">
@@ -58,7 +62,7 @@ export function StatusBar({
       <div className="st-item">{wordCount} 字</div>
       <div className="st-item">{lineCount} 行</div>
       <div className="st-item">约 {readTime} 分钟</div>
-      <div className="st-item">UTF-8</div>
+      <div className="st-item">{encoding}</div>
       <div className="st-item">Markdown</div>
     </div>
   )

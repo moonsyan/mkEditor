@@ -1,0 +1,2327 @@
+diff --git a/src/main/ipc/handlers.ts b/src/main/ipc/handlers.ts
+index 7c46f29..e2a27c9 100644
+--- a/src/main/ipc/handlers.ts
++++ b/src/main/ipc/handlers.ts
+@@ -1,11 +1,15 @@
+ import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
+-import { readFile, writeFile, stat, readdir, mkdir, rename } from 'fs/promises'
++import { readFile, writeFile, stat, readdir, mkdir, rename, unlink } from 'fs/promises'
+ import type { Dirent } from 'fs'
+-import { join, dirname, basename } from 'path'
++import { join, dirname, basename, sep, extname } from 'path'
++import { execFile } from 'child_process'
++import { promisify } from 'util'
+ import { CHANNELS } from '../../shared/ipc/channels'
+ import { getSetting, setSetting } from '../settings/settings-store'
+ import { createWindow } from '../window/window-manager'
+ 
++const execFileAsync = promisify(execFile)
++
+ /** 目录树节点（只含 .md 文件与含 .md 的文件夹） */
+ interface FolderTreeNode {
+   name: string
+@@ -48,6 +52,10 @@ async function walkMarkdownTree(dir: string, depth: number): Promise<FolderTreeN
+ }
+ 
+ export function registerIpcHandlers(): void {
++  // pandoc 可用性探测结果缓存（首次导出时检测）
++  let pandocChecked = false
++  let pandocAvailable = false
++
+   // 打开文件
+   ipcMain.handle(CHANNELS.FILE_OPEN, async (event) => {
+     const window = BrowserWindow.fromWebContents(event.sender)
+@@ -145,10 +153,10 @@ export function registerIpcHandlers(): void {
+         if (!pre) {
+           return { ok: false, error: { code: 'NOT_FOUND' } }
+         }
+-        // 容差 1 秒，避开文件系统时间精度差异
++        // 容差 3 秒，避开低精度文件系统（FAT32 为 2 秒）的时间戳误差，减少误报
+         if (
+           typeof args.expectedMtime === 'number' &&
+-          pre.mtimeMs > args.expectedMtime + 1000
++          pre.mtimeMs > args.expectedMtime + 3000
+         ) {
+           return {
+             ok: false,
+@@ -281,15 +289,39 @@ export function registerIpcHandlers(): void {
+     }
+   })
+ 
++  // 新建窗口并打开指定文件（fresh 模式 + URL 携带文件路径）
++  ipcMain.handle(CHANNELS.WINDOW_NEW_WITH_FILE, (_event, filePath: string) => {
++    try {
++      if (!filePath || typeof filePath !== 'string') {
++        return { ok: false, error: { code: 'INVALID_PATH' } }
++      }
++      createWindow(true, filePath)
++      return { ok: true }
++    } catch {
++      return { ok: false }
++    }
++  })
++
+   // 渲染端同步未保存状态到主进程（关闭时弹原生确认框用，避免静默阻止关闭）
+   ipcMain.on(CHANNELS.WINDOW_SET_UNSAVED, (event, unsaved: boolean) => {
+     ;(event.sender as unknown as { __unsaved?: boolean }).__unsaved = !!unsaved
+   })
+ 
+-  // 导出 PDF：隐藏窗口渲染 HTML 后 printToPDF
++  // 导出 PDF：隐藏窗口渲染 HTML 后 printToPDF（支持纸张/页边距/页眉页脚选项）
+   ipcMain.handle(
+     CHANNELS.FILE_EXPORT_PDF,
+-    async (event, args: { html: string; defaultName: string }) => {
++    async (
++      event,
++      args: {
++        html: string
++        defaultName: string
++        options?: {
++          pageSize?: 'A4' | 'Letter' | 'A5' | 'Legal'
++          margins?: 'narrow' | 'standard' | 'wide'
++          headerFooter?: boolean
++        }
++      },
++    ) => {
+       const parent = BrowserWindow.fromWebContents(event.sender)
+       if (!parent) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
+ 
+@@ -320,10 +352,27 @@ export function registerIpcHandlers(): void {
+             }))).then(() => r(true))
+           })`,
+         )
++        // 页边距档位 → 英寸（Chromium printToPDF 单位）
++        const marginsByLevel = {
++          narrow: { top: 0.3, bottom: 0.3, left: 0.35, right: 0.35 },
++          standard: { top: 0.6, bottom: 0.6, left: 0.7, right: 0.7 },
++          wide: { top: 1.0, bottom: 1.0, left: 1.0, right: 1.0 },
++        } as const
++        const margins = marginsByLevel[args.options?.margins ?? 'standard']
++        const headerFooter = args.options?.headerFooter ?? false
++        const title = args.defaultName.replace(/\.pdf$/i, '')
++        const hfStyle = 'font-size:8px;color:#888;width:100%;padding:0 24px;'
+         const pdf = await printWin.webContents.printToPDF({
+           printBackground: true,
+-          pageSize: 'A4',
+-          margins: { top: 0.6, bottom: 0.6, left: 0.7, right: 0.7 },
++          pageSize: args.options?.pageSize ?? 'A4',
++          margins,
++          displayHeaderFooter: headerFooter,
++          headerTemplate: headerFooter
++            ? `<div style="${hfStyle}text-align:center;">${title}</div>`
++            : '',
++          footerTemplate: headerFooter
++            ? `<div style="${hfStyle}text-align:center;"><span class="pageNumber"></span> / <span class="totalPages"></span></div>`
++            : '',
+         })
+         await writeFile(save.filePath, pdf)
+         return { ok: true, data: { path: save.filePath } }
+@@ -403,6 +452,48 @@ export function registerIpcHandlers(): void {
+     },
+   )
+ 
++  // 移动文件/文件夹到目标目录（文件树拖拽用）
++  ipcMain.handle(
++    CHANNELS.FILE_MOVE,
++    async (_event, args: { path: string; targetDir: string }) => {
++      try {
++        const src = args.path
++        const dir = args.targetDir
++        // 目标目录必须存在且不能是源自身/源的子目录（防止移入自身内部）
++        const dirStat = await stat(dir).catch(() => null)
++        if (!dirStat?.isDirectory()) {
++          return { ok: false, error: { code: 'INVALID_TARGET' } }
++        }
++        if (dir === src || dir.startsWith(src + sep) || dir.startsWith(src + '/')) {
++          return { ok: false, error: { code: 'INVALID_TARGET' } }
++        }
++        const target = join(dir, basename(src))
++        if (target !== src) {
++          const exists = await stat(target).catch(() => null)
++          if (exists) return { ok: false, error: { code: 'EXISTS' } }
++        }
++        await rename(src, target)
++        const modifiedTime = (await stat(target).catch(() => null))?.mtimeMs ?? 0
++        return {
++          ok: true,
++          data: { path: target, name: basename(target), modifiedTime },
++        }
++      } catch (err) {
++        return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
++      }
++    },
++  )
++
++  // 仅读取文件 mtime（草稿恢复前校验基线新鲜度用，避免整文件重读）
++  ipcMain.handle(CHANNELS.FILE_STAT, async (_event, filePath: string) => {
++    try {
++      const st = await stat(filePath)
++      return { ok: true, data: { modifiedTime: st.mtimeMs } }
++    } catch {
++      return { ok: false, error: { code: 'NOT_FOUND' } }
++    }
++  })
++
+   // 删除（移入回收站）
+   ipcMain.handle(CHANNELS.FILE_DELETE, async (_event, filePath: string) => {
+     try {
+@@ -464,4 +555,153 @@ export function registerIpcHandlers(): void {
+       }
+     },
+   )
++
++  /* ==================== 多格式导出（pandoc 基础框架） ==================== */
++
++  // 通过 pandoc 导出 Word/LaTeX/纯文本/EPUB；未安装 pandoc 时返回 PANDOC_NOT_FOUND
++  ipcMain.handle(
++    CHANNELS.FILE_EXPORT_PANDOC,
++    async (
++      event,
++      args: { markdown: string; defaultTitle: string },
++    ) => {
++      const parent = BrowserWindow.fromWebContents(event.sender)
++      if (!parent) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
++
++      // 检测 pandoc 是否可用（首次调用时探测，结果缓存）
++      if (!pandocChecked) {
++        pandocChecked = true
++        pandocAvailable = await execFileAsync('pandoc', ['--version'])
++          .then(() => true)
++          .catch(() => false)
++      }
++      if (!pandocAvailable) {
++        return { ok: false, error: { code: 'PANDOC_NOT_FOUND' } }
++      }
++
++      const save = await dialog.showSaveDialog(parent, {
++        filters: [
++          { name: 'Word', extensions: ['docx'] },
++          { name: 'EPUB', extensions: ['epub'] },
++          { name: 'LaTeX', extensions: ['tex'] },
++          { name: '纯文本', extensions: ['txt'] },
++        ],
++        defaultPath: `${args.defaultTitle}.docx`,
++      })
++      if (save.canceled || !save.filePath) {
++        return { ok: false, error: { code: 'CANCELLED' } }
++      }
++
++      // 扩展名 → pandoc 输出格式
++      const fmtMap: Record<string, string> = {
++        docx: 'docx',
++        epub: 'epub',
++        tex: 'latex',
++        txt: 'plain',
++      }
++      const fmt = fmtMap[extname(save.filePath).slice(1).toLowerCase()]
++      if (!fmt) return { ok: false, error: { code: 'UNSUPPORTED' } }
++
++      // 写入临时 .md 后调用 pandoc（避免超长命令行参数）
++      const tmpIn = join(app.getPath('temp'), `mdsoft-${Date.now()}.md`)
++      try {
++        await writeFile(tmpIn, args.markdown, 'utf-8')
++        await execFileAsync('pandoc', [
++          '-f',
++          'markdown',
++          '-t',
++          fmt,
++          tmpIn,
++          '-o',
++          save.filePath,
++        ])
++        return { ok: true, data: { path: save.filePath } }
++      } catch (err) {
++        return { ok: false, error: { code: 'PANDOC_ERROR', message: String(err) } }
++      } finally {
++        await unlink(tmpIn).catch(() => {})
++      }
++    },
++  )
++
++  // 选择本地 CSS 文件并读取内容（自定义主题导入）
++  ipcMain.handle(CHANNELS.FILE_PICK_CSS, async (event) => {
++    const window = BrowserWindow.fromWebContents(event.sender)
++    if (!window) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
++    const result = await dialog.showOpenDialog(window, {
++      filters: [{ name: 'CSS', extensions: ['css'] }],
++      properties: ['openFile'],
++    })
++    if (result.canceled || result.filePaths.length === 0) {
++      return { ok: false, error: { code: 'CANCELLED' } }
++    }
++    try {
++      const content = await readFile(result.filePaths[0], 'utf-8')
++      // 体积守卫：避免误选超大文件
++      if (content.length > 1024 * 1024) {
++        return { ok: false, error: { code: 'TOO_LARGE', message: 'CSS 文件过大（>1MB）' } }
++      }
++      return {
++        ok: true,
++        data: { name: basename(result.filePaths[0]), content },
++      }
++    } catch (err) {
++      return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
++    }
++  })
++
++  // 图床上传（基础框架：支持 SM.MS，未配置时返回 NOT_CONFIGURED 由渲染端降级本地）
++  ipcMain.handle(
++    CHANNELS.IMAGE_UPLOAD,
++    async (_event, args: { dataUrl: string }) => {
++      try {
++        const match = args.dataUrl.match(
++          /^data:(image\/(png|jpe?g|gif|webp|bmp));base64,(.+)$/i,
++        )
++        if (!match) return { ok: false, error: { code: 'UNSUPPORTED' } }
++        // 配置存于主进程 settings，避免 token 在渲染进程暴露
++        const cfg = (await getSetting('imageHost')) as
++          | { provider?: string; token?: string }
++          | undefined
++        if (cfg?.provider !== 'smms' || !cfg.token) {
++          return { ok: false, error: { code: 'NOT_CONFIGURED' } }
++        }
++        const ext = match[2].toLowerCase().replace('jpeg', 'jpg')
++        const buffer = Buffer.from(match[3], 'base64')
++        // 体积守卫：超大图片拒绝上传，避免内存峰值与图床拒绝
++        if (buffer.length > 20 * 1024 * 1024) {
++          return { ok: false, error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法上传图床' } }
++        }
++        const form = new FormData()
++        form.append(
++          'smfile',
++          new Blob([buffer], { type: match[1] }),
++          `image-${Date.now()}.${ext}`,
++        )
++        const resp = await fetch('https://sm.ms/api/v2/upload', {
++          method: 'POST',
++          headers: { Authorization: cfg.token },
++          body: form,
++        })
++        const json = (await resp.json()) as {
++          success?: boolean
++          data?: { url?: string }
++          message?: string
++          images?: string
++        }
++        if (json.success && json.data?.url) {
++          return { ok: true, data: { url: json.data.url } }
++        }
++        // 重复图片：SM.MS 会在 message 中返回已有链接
++        const dup = json.message?.match(/https?:\/\/\S+\.(png|jpe?g|gif|webp|bmp)/i)
++        if (dup) return { ok: true, data: { url: dup[0] } }
++        return {
++          ok: false,
++          error: { code: 'UPLOAD_FAILED', message: json.message ?? '上传失败' },
++        }
++      } catch (err) {
++        return { ok: false, error: { code: 'UPLOAD_FAILED', message: String(err) } }
++      }
++    },
++  )
+ }
+diff --git a/src/main/settings/settings-store.ts b/src/main/settings/settings-store.ts
+index d701f10..ae9445a 100644
+--- a/src/main/settings/settings-store.ts
++++ b/src/main/settings/settings-store.ts
+@@ -101,7 +101,23 @@ export async function getSetting(key: string): Promise<unknown> {
+   return all[key]
+ }
+ 
+-export async function setSetting(key: string, value: unknown): Promise<void> {
++/**
++ * 写入串行队列（B7）：多窗口同时写 settings 时，读-改-写必须串行执行，
++ * 避免并发写入互相覆盖或临时文件替换交错导致 JSON 损坏。
++ * 设置读写统一经由主进程，此处即为全局单点串行化。
++ */
++let writeQueue: Promise<void> = Promise.resolve()
++
++export function setSetting(key: string, value: unknown): Promise<void> {
++  writeQueue = writeQueue
++    .then(() => applySetSetting(key, value))
++    .catch(() => {
++      /* 单次写入失败不阻断后续写入 */
++    })
++  return writeQueue
++}
++
++async function applySetSetting(key: string, value: unknown): Promise<void> {
+   const all = await load()
+   const clean = sanitize(key, value)
+   // 写入体积守卫：单个值超限则拒绝，防止任何键再次膨胀
+diff --git a/src/main/window/window-manager.ts b/src/main/window/window-manager.ts
+index 89ebeba..ec99375 100644
+--- a/src/main/window/window-manager.ts
++++ b/src/main/window/window-manager.ts
+@@ -6,8 +6,9 @@ import { is } from '@electron-toolkit/utils'
+  * 创建窗口
+  * @param fresh 新窗口模式：URL 带 #fresh，渲染端跳过会话恢复/写入，
+  *              避免多窗口间会话互相覆盖
++ * @param openFile 可选：新窗口启动后直接打开的磁盘文件路径（#fresh?file=...）
+  */
+-export function createWindow(fresh = false): BrowserWindow {
++export function createWindow(fresh = false, openFile?: string): BrowserWindow {
+   const isMac = process.platform === 'darwin'
+ 
+   const mainWindow = new BrowserWindow({
+@@ -97,11 +98,16 @@ export function createWindow(fresh = false): BrowserWindow {
+     }
+   })
+ 
++  // fresh 窗口的 hash：可携带待打开文件路径（渲染端启动后自动打开）
++  const freshHash = fresh
++    ? `fresh${openFile ? `?file=${encodeURIComponent(openFile)}` : ''}`
++    : undefined
++
+   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + (fresh ? '#fresh' : ''))
++    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'] + (freshHash ? `#${freshHash}` : ''))
+   } else {
+     mainWindow.loadFile(join(__dirname, '../renderer/index.html'), {
+-      hash: fresh ? 'fresh' : undefined,
++      hash: freshHash,
+     })
+   }
+ 
+diff --git a/src/preload/api.d.ts b/src/preload/api.d.ts
+index 0cd4662..2fa842f 100644
+--- a/src/preload/api.d.ts
++++ b/src/preload/api.d.ts
+@@ -6,12 +6,14 @@ export interface DesktopAPI {
+     setTitlebarColor(color: string, symbolColor?: string): Promise<{ ok: boolean }>
+     setSpellcheck(enabled: boolean): Promise<{ ok: boolean }>
+     newWindow(): Promise<{ ok: boolean }>
++    newWindowWithFile(path: string): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
+     setUnsaved(unsaved: boolean): void
+   }
+   document: {
+     open(): Promise<FileResult>
+     openFolder(path?: string): Promise<FolderResult>
+     read(path: string): Promise<FileResult>
++    stat(path: string): Promise<{ ok: boolean; data?: { modifiedTime: number }; error?: { code: string; message?: string } }>
+     save(path: string, content: string, expectedMtime?: number): Promise<SaveResult>
+     saveAs(
+       content: string,
+@@ -24,11 +26,23 @@ export interface DesktopAPI {
+       dataUrl: string,
+       hints?: { docPath?: string; workspacePath?: string },
+     ): Promise<ImageResult>
+-    exportPdf(html: string, defaultName: string): Promise<{ ok: boolean; data?: { path: string }; error?: { code: string; message?: string } }>
++    exportPdf(
++      html: string,
++      defaultName: string,
++      options?: {
++        pageSize?: 'A4' | 'Letter' | 'A5' | 'Legal'
++        margins?: 'narrow' | 'standard' | 'wide'
++        headerFooter?: boolean
++      },
++    ): Promise<{ ok: boolean; data?: { path: string }; error?: { code: string; message?: string } }>
++    exportPandoc(markdown: string, defaultTitle: string): Promise<{ ok: boolean; data?: { path: string }; error?: { code: string; message?: string } }>
++    pickCss(): Promise<{ ok: boolean; data?: { name: string; content: string }; error?: { code: string; message?: string } }>
++    uploadImage(dataUrl: string): Promise<{ ok: boolean; data?: { url: string }; error?: { code: string; message?: string } }>
+   }
+   workspace: {
+     createFile(dir: string, name: string): Promise<{ ok: boolean; data?: { path: string; name: string }; error?: { code: string; message?: string } }>
+     renameFile(path: string, newName: string): Promise<{ ok: boolean; data?: { path: string; name: string; modifiedTime: number }; error?: { code: string; message?: string } }>
++    moveFile(path: string, targetDir: string): Promise<{ ok: boolean; data?: { path: string; name: string; modifiedTime: number }; error?: { code: string; message?: string } }>
+     deleteFile(path: string): Promise<{ ok: boolean; data?: { name: string }; error?: { code: string; message?: string } }>
+     listImages(dirs: string[]): Promise<{ ok: boolean; data?: { images: { path: string; name: string; size: number }[] }; error?: { code: string; message?: string } }>
+     deleteImage(path: string): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
+diff --git a/src/preload/index.ts b/src/preload/index.ts
+index b7c915c..ef3fdd2 100644
+--- a/src/preload/index.ts
++++ b/src/preload/index.ts
+@@ -18,6 +18,9 @@ const desktopAPI = {
+       ipcRenderer.invoke(CHANNELS.WINDOW_SET_SPELLCHECK, enabled),
+     /** 新建窗口（fresh 模式，不恢复会话） */
+     newWindow: () => ipcRenderer.invoke(CHANNELS.WINDOW_NEW),
++    /** 新建窗口并打开指定文件（fresh 模式） */
++    newWindowWithFile: (path: string) =>
++      ipcRenderer.invoke(CHANNELS.WINDOW_NEW_WITH_FILE, path),
+     /** 同步未保存状态到主进程（关闭时弹原生确认框用） */
+     setUnsaved: (unsaved: boolean) => ipcRenderer.send(CHANNELS.WINDOW_SET_UNSAVED, unsaved),
+   },
+@@ -33,6 +36,9 @@ const desktopAPI = {
+     /** 按路径直接读取文件（会话恢复用，不弹对话框） */
+     read: (path: string) => ipcRenderer.invoke(CHANNELS.FILE_READ, path),
+ 
++    /** 仅读取文件 mtime（草稿恢复前校验基线新鲜度用） */
++    stat: (path: string) => ipcRenderer.invoke(CHANNELS.FILE_STAT, path),
++
+     /** 保存到指定路径（expectedMtime 用于外部冲突检测） */
+     save: (path: string, content: string, expectedMtime?: number) =>
+       ipcRenderer.invoke(CHANNELS.FILE_SAVE, { path, content, expectedMtime }),
+@@ -52,9 +58,27 @@ const desktopAPI = {
+       hints?: { docPath?: string; workspacePath?: string },
+     ) => ipcRenderer.invoke(CHANNELS.FILE_SAVE_IMAGE, { dataUrl, ...hints }),
+ 
+-    /** 导出 PDF（主进程隐藏窗口渲染后打印） */
+-    exportPdf: (html: string, defaultName: string) =>
+-      ipcRenderer.invoke(CHANNELS.FILE_EXPORT_PDF, { html, defaultName }),
++    /** 导出 PDF（主进程隐藏窗口渲染后打印，支持纸张/页边距/页眉页脚选项） */
++    exportPdf: (
++      html: string,
++      defaultName: string,
++      options?: {
++        pageSize?: 'A4' | 'Letter' | 'A5' | 'Legal'
++        margins?: 'narrow' | 'standard' | 'wide'
++        headerFooter?: boolean
++      },
++    ) => ipcRenderer.invoke(CHANNELS.FILE_EXPORT_PDF, { html, defaultName, options }),
++
++    /** 通过 pandoc 导出 Word/LaTeX/纯文本/EPUB（未安装 pandoc 时返回 PANDOC_NOT_FOUND） */
++    exportPandoc: (markdown: string, defaultTitle: string) =>
++      ipcRenderer.invoke(CHANNELS.FILE_EXPORT_PANDOC, { markdown, defaultTitle }),
++
++    /** 选择本地 CSS 文件并读取内容（自定义主题导入） */
++    pickCss: () => ipcRenderer.invoke(CHANNELS.FILE_PICK_CSS),
++
++    /** 上传图片到已配置的图床（未配置返回 NOT_CONFIGURED） */
++    uploadImage: (dataUrl: string) =>
++      ipcRenderer.invoke(CHANNELS.IMAGE_UPLOAD, { dataUrl }),
+   },
+ 
+   workspace: {
+@@ -66,6 +90,10 @@ const desktopAPI = {
+     renameFile: (path: string, newName: string) =>
+       ipcRenderer.invoke(CHANNELS.FILE_RENAME, { path, newName }),
+ 
++    /** 移动文件/文件夹到目标目录（文件树拖拽用） */
++    moveFile: (path: string, targetDir: string) =>
++      ipcRenderer.invoke(CHANNELS.FILE_MOVE, { path, targetDir }),
++
+     /** 删除文件（移入回收站） */
+     deleteFile: (path: string) =>
+       ipcRenderer.invoke(CHANNELS.FILE_DELETE, path),
+diff --git a/src/renderer/App.tsx b/src/renderer/App.tsx
+index b54cd63..53e5d62 100644
+--- a/src/renderer/App.tsx
++++ b/src/renderer/App.tsx
+@@ -15,6 +15,8 @@ import type { FontSize, ContentWidth, LineHeight, ContentFont } from './src/comp
+ import { HelpDialog } from './src/components/HelpDialog'
+ import type { HelpView, WritingStats } from './src/components/HelpDialog'
+ import { ImagesDialog } from './src/components/ImagesDialog'
++import { ExportPdfDialog } from './src/components/ExportPdfDialog'
++import type { PdfOptions } from './src/components/ExportPdfDialog'
+ import { DEFAULT_SHORTCUTS, mergeShortcuts, comboFromEvent } from './src/data/shortcuts'
+ import type { ShortcutMap } from './src/data/shortcuts'
+ import { DEMO_FILES, DEMO_TREE, DEFAULT_FILE_ID } from './src/data/demo-files'
+@@ -134,6 +136,16 @@ const INITIAL_FILES: OpenFile[] = DEMO_TREE.flatMap((folder) =>
+ const FRESH_MODE =
+   typeof window !== 'undefined' && window.location.hash.includes('fresh')
+ 
++/** fresh 窗口携带的文件路径（#fresh?file=...）：启动后自动打开（右键"在新窗口打开"，U7） */
++const FRESH_FILE_PATH = ((): string | null => {
++  if (typeof window === 'undefined') return null
++  const hash = window.location.hash
++  if (!hash.includes('fresh')) return null
++  const qs = hash.split('?')[1]
++  if (!qs) return null
++  return new URLSearchParams(qs).get('file')
++})()
++
+ const INITIAL_CONTENTS: Record<string, string> = Object.fromEntries(
+   Object.values(DEMO_FILES).map((f) => [f.id, f.content]),
+ )
+@@ -213,6 +225,27 @@ export default function App(): JSX.Element {
+   const [dragFileOver, setDragFileOver] = useState(false)
+   /** 自定义快捷键 */
+   const [shortcuts, setShortcuts] = useState<ShortcutMap>({ ...DEFAULT_SHORTCUTS })
++  /** 持久化搜索状态（U4：重新打开搜索栏时保留查询词/选项/替换文本） */
++  const [searchPref, setSearchPref] = useState<{
++    query: string
++    useRegex: boolean
++    caseSensitive: boolean
++    wholeWord: boolean
++    replacement: string
++  }>({ query: '', useRegex: false, caseSensitive: false, wholeWord: false, replacement: '' })
++  /** 点击正文下方空白区跳到文末（U8，默认开启，可在设置关闭） */
++  const [blankClickToEnd, setBlankClickToEnd] = useState(true)
++  /** 代码块行号开关（装饰 widget 实现，默认关） */
++  const [codeLineNumbers, setCodeLineNumbers] = useState(false)
++  /** PDF 导出选项弹窗 */
++  const [pdfOptsOpen, setPdfOptsOpen] = useState(false)
++  /** 自定义主题 CSS（用户导入，注入 <style> 生效） */
++  const [customCss, setCustomCss] = useState<{ name: string; content: string } | null>(null)
++  /** 图床配置（local=本地附件，smms=SM.MS 需 token） */
++  const [imageHost, setImageHost] = useState<{ provider: 'local' | 'smms'; token: string }>({
++    provider: 'local',
++    token: '',
++  })
+   /** 组合键 → 动作 反查表（keydown 中读 ref，避免频繁重建监听） */
+   const shortcutLookupRef = useRef<Record<string, string>>({})
+ 
+@@ -274,8 +307,13 @@ export default function App(): JSX.Element {
+       api.get('shortcuts'),
+       api.get('session'),
+       api.get('drafts'),
++      api.get('searchState'),
++      api.get('blankClickToEnd'),
++      api.get('codeLineNumbers'),
++      api.get('customCss'),
++      api.get('imageHost'),
+     ])
+-      .then(async ([t, a, sp, mw, f, z, sw, cw, lh, cf, ws, rf, sc, s, dr]) => {
++      .then(async ([t, a, sp, mw, f, z, sw, cw, lh, cf, ws, rf, sc, s, dr, srch, bce, cln, ccs, ih]) => {
+         if (t?.ok && typeof t.data === 'string') setTheme(t.data)
+         if (a?.ok && typeof a.data === 'boolean') setAutosave(a.data)
+         if (sp?.ok && typeof sp.data === 'boolean') setSpellcheck(sp.data)
+@@ -322,6 +360,42 @@ export default function App(): JSX.Element {
+         if (sc?.ok) {
+           setShortcuts(mergeShortcuts(sc.data))
+         }
++        // U4：恢复上次的搜索状态
++        if (srch?.ok && srch.data && typeof srch.data === 'object') {
++          const v = srch.data as {
++            query?: unknown
++            useRegex?: unknown
++            caseSensitive?: unknown
++            wholeWord?: unknown
++            replacement?: unknown
++          }
++          setSearchPref({
++            query: typeof v.query === 'string' ? v.query : '',
++            useRegex: v.useRegex === true,
++            caseSensitive: v.caseSensitive === true,
++            wholeWord: v.wholeWord === true,
++            replacement: typeof v.replacement === 'string' ? v.replacement : '',
++          })
++        }
++        // U8：空白区点击行为开关
++        if (bce?.ok && typeof bce.data === 'boolean') setBlankClickToEnd(bce.data)
++        // 代码块行号开关
++        if (cln?.ok && typeof cln.data === 'boolean') setCodeLineNumbers(cln.data)
++        // 自定义主题 CSS
++        if (ccs?.ok && ccs.data && typeof ccs.data === 'object') {
++          const v = ccs.data as { name?: unknown; content?: unknown }
++          if (typeof v.content === 'string' && v.content) {
++            setCustomCss({ name: typeof v.name === 'string' ? v.name : 'custom.css', content: v.content })
++          }
++        }
++        // 图床配置
++        if (ih?.ok && ih.data && typeof ih.data === 'object') {
++          const v = ih.data as { provider?: unknown; token?: unknown }
++          setImageHost({
++            provider: v.provider === 'smms' ? 'smms' : 'local',
++            token: typeof v.token === 'string' ? v.token : '',
++          })
++        }
+ 
+         // fresh 窗口（多窗口模式新建）不恢复会话，避免多窗口互相覆盖
+         const session = FRESH_MODE
+@@ -362,6 +436,19 @@ export default function App(): JSX.Element {
+           const baseline =
+             id in restoredContents ? restoredContents[id] : INITIAL_CONTENTS[id]
+           if (baseline === undefined || d.content === baseline) continue
++          // B6：恢复草稿前重新 stat 磁盘文件；若读取后又被外部修改，
++          // 则丢弃草稿以磁盘最新内容为准，避免旧草稿覆盖新修改
++          const fl = restoredFiles.find((x) => x.id === id)
++          if (fl?.path) {
++            const st = await window.desktopAPI.document.stat(fl.path)
++            if (
++              st.ok &&
++              st.data &&
++              Math.abs(st.data.modifiedTime - (restoredMtimes[id] ?? 0)) > 3000
++            ) {
++              continue
++            }
++          }
+           baselineById[id] = baseline
+           restoredContents[id] = d.content
+           dirtyIds.push(id)
+@@ -431,6 +518,19 @@ export default function App(): JSX.Element {
+           }
+         }
+         tryApply()
++
++        /* ---- fresh 窗口携带的文件：直接打开（右键"在新窗口打开"，U7） ---- */
++        if (FRESH_FILE_PATH) {
++          // 等编辑器创建完成再打开，避免 replaceContent 被静默跳过
++          const openWhenReady = () => {
++            if (editorRef.current?.isReady()) {
++              void handleSelectWorkspaceFile(FRESH_FILE_PATH)
++            } else {
++              setTimeout(openWhenReady, 100)
++            }
++          }
++          openWhenReady()
++        }
+       })
+       .catch(() => {})
+       .finally(() => {
+@@ -742,6 +842,59 @@ export default function App(): JSX.Element {
+     return () => clearTimeout(timer)
+   }, [recentFiles])
+ 
++  // 搜索状态持久化（U4：查询词/选项/替换文本，防抖 1 秒）
++  useEffect(() => {
++    if (!settingsReadyRef.current) return
++    const timer = setTimeout(() => {
++      window.desktopAPI?.settings.set('searchState', searchPref).catch(() => {})
++    }, 1_000)
++    return () => clearTimeout(timer)
++  }, [searchPref])
++
++  // 空白区点击行为开关持久化（U8）
++  useEffect(() => {
++    if (settingsReadyRef.current) {
++      window.desktopAPI?.settings.set('blankClickToEnd', blankClickToEnd).catch(() => {})
++    }
++  }, [blankClickToEnd])
++
++  // 代码块行号开关持久化
++  useEffect(() => {
++    if (settingsReadyRef.current) {
++      window.desktopAPI?.settings.set('codeLineNumbers', codeLineNumbers).catch(() => {})
++    }
++  }, [codeLineNumbers])
++
++  // 自定义主题：注入/移除 <style> 标签
++  useEffect(() => {
++    const STYLE_ID = 'custom-theme-css'
++    let el = document.getElementById(STYLE_ID) as HTMLStyleElement | null
++    if (customCss?.content) {
++      if (!el) {
++        el = document.createElement('style')
++        el.id = STYLE_ID
++        document.head.appendChild(el)
++      }
++      el.textContent = customCss.content
++    } else if (el) {
++      el.remove()
++    }
++  }, [customCss])
++
++  // 自定义主题持久化
++  useEffect(() => {
++    if (settingsReadyRef.current) {
++      window.desktopAPI?.settings.set('customCss', customCss).catch(() => {})
++    }
++  }, [customCss])
++
++  // 图床配置持久化（token 仅存于主进程 settings 文件）
++  useEffect(() => {
++    if (settingsReadyRef.current) {
++      window.desktopAPI?.settings.set('imageHost', imageHost).catch(() => {})
++    }
++  }, [imageHost])
++
+   /** 记录最近打开的磁盘文件（置顶 + 去重 + 上限 10） */
+   const recordRecent = useCallback((path: string, name: string) => {
+     setRecentFiles((prev) => {
+@@ -793,6 +946,16 @@ export default function App(): JSX.Element {
+ 
+   /* ==================== 文件操作 ==================== */
+ 
++  /**
++   * 延迟聚焦编辑器（U6）：新建/打开文件后等内容替换与渲染完成再聚焦，
++   * 确保用户可直接开始输入，无需手动点击编辑区
++   */
++  const focusEditorSoon = useCallback(() => {
++    requestAnimationFrame(() => {
++      setTimeout(() => editorRef.current?.focus(), 60)
++    })
++  }, [])
++
+   const switchFile = useCallback(
+     (id: string) => {
+       if (id === activeFileId) return
+@@ -824,7 +987,8 @@ export default function App(): JSX.Element {
+     setDocTitle(name)
+     editorRef.current?.replaceContent('')
+     editorRef.current?.focus()
+-  }, [])
++    focusEditorSoon()
++  }, [focusEditorSoon])
+ 
+   const handleOpen = useCallback(async () => {
+     if (!window.desktopAPI) return
+@@ -903,8 +1067,9 @@ export default function App(): JSX.Element {
+         toEditorImages(content, path.replace(/[\\/][^\\/]+$/, '')),
+       )
+       editorRef.current?.focus()
++      focusEditorSoon()
+     },
+-    [openFiles, switchFile, recordRecent],
++    [openFiles, switchFile, recordRecent, focusEditorSoon],
+   )
+ 
+   /* ==================== 拖入 .md 文件直接打开 ==================== */
+@@ -1083,6 +1248,9 @@ img{max-width:100%}
+   const handleExportHtml = useCallback(async () => {
+     if (!window.desktopAPI) return
+     const title = docTitle.replace(/\.md$/, '')
++    // B1：导出前强制等待 KaTeX/Mermaid 懒加载插件就绪，确保快照含渲染结果
++    setToast('导出中：等待公式/图表渲染…')
++    await editorRef.current?.ensureRichContent()
+     const html = await inlineImagesInHtml(buildDocHtml())
+     await window.desktopAPI.document.saveAs(html, {
+       filters: [{ name: 'HTML', extensions: ['html'] }],
+@@ -1090,18 +1258,31 @@ img{max-width:100%}
+     })
+   }, [docTitle, buildDocHtml, inlineImagesInHtml])
+ 
+-  /** 导出 PDF：主进程隐藏窗口渲染后 printToPDF */
+-  const handleExportPdf = useCallback(async () => {
+-    if (!window.desktopAPI) return
+-    const title = docTitle.replace(/\.md$/, '')
+-    const html = await inlineImagesInHtml(buildDocHtml())
+-    const res = await window.desktopAPI.document.exportPdf(
+-      html,
+-      `${title}.pdf`,
+-    )
+-    if (res.ok) setToast('PDF 导出成功')
+-    else if (res.error?.code !== 'CANCELLED') setToast('PDF 导出失败')
+-  }, [docTitle, buildDocHtml, inlineImagesInHtml])
++  /** 导出 PDF：先弹选项窗（纸张/页边距/页眉页脚） */
++  const handleExportPdf = useCallback(() => {
++    setPdfOptsOpen(true)
++  }, [])
++
++  /** 确认选项后执行 PDF 导出 */
++  const handleDoExportPdf = useCallback(
++    async (options: PdfOptions) => {
++      setPdfOptsOpen(false)
++      if (!window.desktopAPI) return
++      const title = docTitle.replace(/\.md$/, '')
++      // B1：先等富内容渲染完成
++      setToast('导出中：等待公式/图表渲染…')
++      await editorRef.current?.ensureRichContent()
++      const html = await inlineImagesInHtml(buildDocHtml())
++      const res = await window.desktopAPI.document.exportPdf(
++        html,
++        `${title}.pdf`,
++        options,
++      )
++      if (res.ok) setToast('PDF 导出成功')
++      else if (res.error?.code !== 'CANCELLED') setToast('PDF 导出失败')
++    },
++    [docTitle, buildDocHtml, inlineImagesInHtml],
++  )
+ 
+   /** 导出 Markdown：把当前文档另存为新的 .md 文件 */
+   const handleExportMarkdown = useCallback(async () => {
+@@ -1116,6 +1297,42 @@ img{max-width:100%}
+     if (res.ok) setToast('Markdown 已导出')
+   }, [docTitle, contents, activeFileId])
+ 
++  /** pandoc 多格式导出（Word/EPUB/LaTeX/纯文本）；未安装 pandoc 时提示安装 */
++  const handleExportPandoc = useCallback(async () => {
++    if (!window.desktopAPI) return
++    const title = docTitle.replace(/\.md$/, '')
++    const content = contents[activeFileId] ?? ''
++    const res = await window.desktopAPI.document.exportPandoc(content, title)
++    if (res.ok) setToast('导出成功')
++    else if (res.error?.code === 'PANDOC_NOT_FOUND') {
++      setToast('未检测到 pandoc：请先安装（pandoc.org）后重启应用')
++    } else if (res.error?.code !== 'CANCELLED') {
++      setToast(`导出失败：${res.error?.message ?? ''}`)
++    }
++  }, [docTitle, contents, activeFileId])
++
++  /* ==================== 自定义主题 ==================== */
++
++  /** 导入自定义主题 CSS（选择文件 → 注入生效 → 持久化） */
++  const handleImportCss = useCallback(async () => {
++    if (!window.desktopAPI) return
++    const res = await window.desktopAPI.document.pickCss()
++    if (res.ok && res.data) {
++      setCustomCss({ name: res.data.name, content: res.data.content })
++      setToast(`已应用自定义主题：${res.data.name}`)
++    } else if (res.error?.code === 'TOO_LARGE') {
++      setToast(res.error.message ?? 'CSS 文件过大')
++    } else if (res.error?.code === 'IO_ERROR') {
++      setToast('CSS 读取失败')
++    }
++  }, [])
++
++  /** 移除自定义主题 */
++  const handleRemoveCss = useCallback(() => {
++    setCustomCss(null)
++    setToast('已移除自定义主题')
++  }, [])
++
+   /* ==================== 工作区文件操作 ==================== */
+ 
+   /** 重新扫描工作区目录（增删改后刷新文件树） */
+@@ -1214,12 +1431,112 @@ img{max-width:100%}
+     [activeFileId, refreshWorkspace, switchFile, clearDraft],
+   )
+ 
++  /** 拖拽移动文件/文件夹到目标目录（U5） */
++  const handleMoveFile = useCallback(
++    async (path: string, targetDir: string) => {
++      if (!window.desktopAPI) return
++      const isUnder = (p: string) =>
++        p === path || p.startsWith(path + '/') || p.startsWith(path + '\\')
++      // 先写回受影响文件的未保存内容，避免移动后编辑丢失
++      const dirty = openFiles.filter(
++        (f) => f.path && isUnder(f.path) && savedMap[f.id] === false,
++      )
++      for (const f of dirty) {
++        await window.desktopAPI.document.save(f.path!, contents[f.id] ?? '')
++      }
++      const res = await window.desktopAPI.workspace.moveFile(path, targetDir)
++      if (!res.ok || !res.data) {
++        setToast(res.error?.code === 'EXISTS' ? '目标目录已存在同名文件' : '移动失败')
++        return
++      }
++      const newPath = res.data.path
++      const mapPath = (p: string) =>
++        p === path ? newPath : newPath + p.slice(path.length)
++      // 迁移已打开文件的 id（file-旧路径 → file-新路径），文件夹移动时子文件一并迁移
++      setOpenFiles((prev) =>
++        prev.map((f) => {
++          if (!f.path || !isUnder(f.path)) return f
++          const np = mapPath(f.path)
++          return { id: `file-${np}`, name: np.split(/[\\/]/).pop() ?? f.name, path: np }
++        }),
++      )
++      setContents((prev) => {
++        let changed = false
++        const next: Record<string, string> = {}
++        for (const [id, val] of Object.entries(prev)) {
++          if (id.startsWith('file-') && isUnder(id.slice(5))) {
++            next[`file-${mapPath(id.slice(5))}`] = val
++            changed = true
++          } else {
++            next[id] = val
++          }
++        }
++        return changed ? next : prev
++      })
++      // 脏检查基线与 mtime 同步迁移
++      for (const [id, val] of Object.entries({ ...INITIAL_OR_SAVED.current })) {
++        if (id.startsWith('file-') && isUnder(id.slice(5))) {
++          INITIAL_OR_SAVED.current[`file-${mapPath(id.slice(5))}`] = val
++          delete INITIAL_OR_SAVED.current[id]
++        }
++      }
++      setFileMtime((prev) => {
++        const next: Record<string, number> = {}
++        for (const [id, val] of Object.entries(prev)) {
++          if (id.startsWith('file-') && isUnder(id.slice(5))) {
++            next[`file-${mapPath(id.slice(5))}`] = val
++          } else {
++            next[id] = val
++          }
++        }
++        // 移动项自身用主进程返回的最新 mtime
++        next[`file-${newPath}`] = res.data!.modifiedTime || next[`file-${newPath}`] || 0
++        return next
++      })
++      // 激活文件若在被移动范围内，同步切换 id
++      if (activeFileId.startsWith('file-') && isUnder(activeFileId.slice(5))) {
++        const nid = `file-${mapPath(activeFileId.slice(5))}`
++        activeFileIdRef.current = nid
++        setActiveFileId(nid)
++      }
++      setToast('已移动')
++      await refreshWorkspace()
++    },
++    [openFiles, savedMap, contents, activeFileId, refreshWorkspace],
++  )
++
++  /** 右键在新窗口打开文件（U7） */
++  const handleOpenInNewWindow = useCallback((path: string) => {
++    void window.desktopAPI?.window.newWindowWithFile(path)
++  }, [])
++
+   /* ==================== 搜索回调 ==================== */
+ 
+-  const handleSearchQuery = useCallback((q: string, regex: boolean, caseSensitive: boolean) => {
+-    const info = editorRef.current?.startSearch(q, regex, caseSensitive) ?? { count: 0, current: -1 }
+-    setSearchCount(info.count)
+-    setSearchCurrent(info.current)
++  const handleSearchQuery = useCallback(
++    (q: string, regex: boolean, caseSensitive: boolean, wholeWord: boolean) => {
++      const info =
++        editorRef.current?.startSearch(q, regex, caseSensitive, wholeWord) ?? {
++          count: 0,
++          current: -1,
++        }
++      setSearchCount(info.count)
++      setSearchCurrent(info.current)
++      // U4：同步持久化搜索选项
++      setSearchPref((prev) =>
++        prev.query === q &&
++        prev.useRegex === regex &&
++        prev.caseSensitive === caseSensitive &&
++        prev.wholeWord === wholeWord
++          ? prev
++          : { ...prev, query: q, useRegex: regex, caseSensitive, wholeWord },
++      )
++    },
++    [],
++  )
++
++  /** U4：替换文本变化时同步到持久化状态 */
++  const handleSearchReplacementChange = useCallback((r: string) => {
++    setSearchPref((prev) => (prev.replacement === r ? prev : { ...prev, replacement: r }))
+   }, [])
+ 
+   const handleSearchNext = useCallback((backwards: boolean) => {
+@@ -1252,13 +1569,18 @@ img{max-width:100%}
+ 
+   useEffect(() => {
+     if (!previewMode) return
+-    const timer = setTimeout(() => {
+-      // DOM 快照：预览中完整呈现图表/公式渲染结果
++    // B2：内容变化后下一帧立即取 DOM 快照（取消 200ms 延迟）
++    const raf = requestAnimationFrame(() => {
+       setPreviewHtml(editorRef.current?.getPreviewHtml() ?? '')
+-    }, 200)
+-    return () => clearTimeout(timer)
++    })
++    return () => cancelAnimationFrame(raf)
+   }, [previewMode, activeContent])
+ 
++  /** B1/B2：懒加载插件（KaTeX/Mermaid）渲染完成后立即刷新预览 */
++  const handleRichRender = useCallback(() => {
++    setPreviewHtml(editorRef.current?.getPreviewHtml() ?? '')
++  }, [])
++
+   /** 预览栏滚动容器 */
+   const previewPaneRef = useRef<HTMLDivElement>(null)
+ 
+@@ -1324,7 +1646,7 @@ img{max-width:100%}
+ 
+   /* ==================== 打字机模式 ==================== */
+ 
+-  /** 把光标所在块滚动到可视区中央 */
++  /** 把光标所在行滚动到可视区中央 */
+   const centerCaret = useCallback(() => {
+     const sel = window.getSelection()
+     if (!sel || sel.rangeCount === 0 || !sel.anchorNode) return
+@@ -1333,7 +1655,30 @@ img{max-width:100%}
+     const editorEl = root.querySelector('.milkdown .editor')
+     const scrollEl = root.querySelector('.editor-scroll') as HTMLElement | null
+     if (!editorEl || !scrollEl) return
+-    // 向上找到编辑器顶层块元素
++    const scrollRect = scrollEl.getBoundingClientRect()
++
++    // U1：优先用光标所在行的矩形居中（比块级居中精度更高）
++    const range = sel.getRangeAt(0)
++    let lineRect: DOMRect | null = null
++    const rects = range.getClientRects()
++    if (rects.length > 0) lineRect = rects[0] as DOMRect
++    if (!lineRect || lineRect.height === 0) {
++      const r = range.getBoundingClientRect()
++      if (r.height > 0 || r.width > 0) lineRect = r
++    }
++    if (lineRect && lineRect.height > 0) {
++      const target =
++        scrollEl.scrollTop +
++        (lineRect.top + lineRect.height / 2 - scrollRect.top) -
++        scrollRect.height / 2
++      // 偏移很小时不滚动，避免连续输入时抖动
++      if (Math.abs(scrollEl.scrollTop - target) > 2) {
++        scrollEl.scrollTo({ top: target, behavior: 'smooth' })
++      }
++      return
++    }
++
++    // 兜底：无法取到光标矩形时，将光标所在顶层块居中
+     let block: HTMLElement | null =
+       sel.anchorNode.nodeType === 1
+         ? (sel.anchorNode as HTMLElement)
+@@ -1341,13 +1686,14 @@ img{max-width:100%}
+     while (block && block.parentElement !== editorEl) block = block.parentElement
+     if (!block || block.parentElement !== editorEl) return
+     const blockRect = block.getBoundingClientRect()
+-    const scrollRect = scrollEl.getBoundingClientRect()
+     const target =
+       scrollEl.scrollTop +
+       (blockRect.top - scrollRect.top) -
+       scrollRect.height / 2 +
+       blockRect.height / 2
+-    scrollEl.scrollTo({ top: target, behavior: 'smooth' })
++    if (Math.abs(scrollEl.scrollTop - target) > 2) {
++      scrollEl.scrollTo({ top: target, behavior: 'smooth' })
++    }
+   }, [])
+ 
+   useEffect(() => {
+@@ -1382,6 +1728,7 @@ img{max-width:100%}
+         case 'exportHtml': void handleExportHtml(); break
+         case 'exportPdf': void handleExportPdf(); break
+         case 'exportMarkdown': void handleExportMarkdown(); break
++        case 'exportPandoc': void handleExportPandoc(); break
+         // 编辑
+         case 'undo': ed?.runCommand(undoCommand.key); break
+         case 'redo': ed?.runCommand(redoCommand.key); break
+@@ -1436,7 +1783,7 @@ img{max-width:100%}
+       }
+       ed?.focus()
+     },
+-    [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleExportHtml, handleExportPdf, handleExportMarkdown, openOutlinePanel, centerCaret],
++    [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleExportHtml, handleExportPdf, handleExportMarkdown, handleExportPandoc, openOutlinePanel, centerCaret],
+   )
+ 
+   /* ==================== 全局快捷键（可自定义，查表分发） ==================== */
+@@ -1552,6 +1899,8 @@ img{max-width:100%}
+             onCreateFile={(dir) => void handleCreateFile(dir)}
+             onRenameFile={(path, name) => void handleRenameFile(path, name)}
+             onDeleteFile={(path) => void handleDeleteFile(path)}
++            onMoveFile={(path, targetDir) => void handleMoveFile(path, targetDir)}
++            onOpenInNewWindow={handleOpenInNewWindow}
+           />
+         )}
+         <div
+@@ -1571,10 +1920,12 @@ img{max-width:100%}
+             onClose={closeSearch}
+             count={searchCount}
+             current={searchCurrent}
++            initial={searchPref}
+             onQueryChange={handleSearchQuery}
+             onNext={handleSearchNext}
+             onReplace={handleSearchReplace}
+             onReplaceAll={handleSearchReplaceAll}
++            onReplacementChange={handleSearchReplacementChange}
+           />
+         )}
+         <Editor
+@@ -1582,9 +1933,14 @@ img{max-width:100%}
+           initialContent={DEMO_FILES[DEFAULT_FILE_ID].content}
+           onChange={handleEditorChange}
+           onCursorChange={handleCursorChange}
++          onRichRender={handleRichRender}
++          blankClickToEnd={blankClickToEnd}
++          codeLineNumbers={codeLineNumbers}
++          onNotify={setToast}
+           imageHints={{
+             docPath: activeFile?.path,
+             workspacePath: workspace?.path,
++            imageHost,
+           }}
+         />
+         {/* 分栏预览 */}
+@@ -1635,6 +1991,15 @@ img{max-width:100%}
+         onSpellcheckChange={setSpellcheck}
+         multiWindow={multiWindow}
+         onMultiWindowChange={setMultiWindow}
++        blankClickToEnd={blankClickToEnd}
++        onBlankClickToEndChange={setBlankClickToEnd}
++        codeLineNumbers={codeLineNumbers}
++        onCodeLineNumbersChange={setCodeLineNumbers}
++        customCssName={customCss?.name ?? null}
++        onImportCss={() => void handleImportCss()}
++        onRemoveCss={handleRemoveCss}
++        imageHost={imageHost}
++        onImageHostChange={setImageHost}
+         shortcuts={shortcuts}
+         onShortcutsChange={setShortcuts}
+       />
+@@ -1645,6 +2010,11 @@ img{max-width:100%}
+         dirs={imageDirs}
+         onNotify={setToast}
+       />
++      <ExportPdfDialog
++        open={pdfOptsOpen}
++        onClose={() => setPdfOptsOpen(false)}
++        onExport={(opts) => void handleDoExportPdf(opts)}
++      />
+ 
+       {/* 轻提示 */}
+       {toast && <div className="toast">{toast}</div>}
+diff --git a/src/renderer/src/components/Editor/index.tsx b/src/renderer/src/components/Editor/index.tsx
+index 45745ea..91e3386 100644
+--- a/src/renderer/src/components/Editor/index.tsx
++++ b/src/renderer/src/components/Editor/index.tsx
+@@ -16,7 +16,12 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+ import type { EditorView } from '@milkdown/kit/prose/view'
+ import { InputRule } from '@milkdown/kit/prose/inputrules'
+ import { commonmark } from '@milkdown/kit/preset/commonmark'
+-import { gfm } from '@milkdown/kit/preset/gfm'
++import {
++  gfm,
++  addRowAfterCommand,
++  addColAfterCommand,
++} from '@milkdown/kit/preset/gfm'
++import { deleteRow, deleteColumn, deleteTable } from '@milkdown/kit/prose/tables'
+ import { history } from '@milkdown/kit/plugin/history'
+ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
+ import { prism } from '@milkdown/plugin-prism'
+@@ -58,17 +63,21 @@ let searchCurrent = -1
+ let lastQuery = ''
+ let lastUseRegex = false
+ let lastCaseSensitive = false
++let lastWholeWord = false
+ 
+ function buildSearchRegex(
+   query: string,
+   useRegex: boolean,
+   caseSensitive: boolean,
++  wholeWord = false,
+ ): RegExp | null {
+   try {
+-    const source = useRegex
++    let source = useRegex
+       ? query
+       : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+     if (!source) return null
++    // 全字匹配：用 \b 包裹（正则模式下同样包裹整个表达式，与 VSCode 一致）
++    if (wholeWord) source = `\\b(?:${source})\\b`
+     return new RegExp(source, caseSensitive ? 'g' : 'gi')
+   } catch {
+     return null
+@@ -78,6 +87,8 @@ function buildSearchRegex(
+ function collectHits(doc: ProseNode, re: RegExp): SearchHit[] {
+   const hits: SearchHit[] = []
+   doc.descendants((node, pos) => {
++    // B3：搜索跳过代码块（与 Typora 对齐，避免误匹配代码内容）
++    if (node.type.name === 'code_block') return false
+     if (!node.isText) return
+     const text = node.text ?? ''
+     re.lastIndex = 0
+@@ -147,6 +158,61 @@ const searchPlugin = new Plugin({
+   },
+ })
+ 
++/* ==================== 代码块行号（装饰 widget，不修改文档） ==================== */
++
++const lineNumKey = new PluginKey('code-line-numbers')
++/** 行号开关（模块级：插件只在编辑器创建时实例化一次，开关变化通过 meta 触发重建） */
++let lineNumbersEnabled = false
++
++/** 为每个代码块生成行号 widget + 节点 class 装饰 */
++function buildLineNumDecos(doc: ProseNode): DecorationSet {
++  if (!lineNumbersEnabled) return DecorationSet.empty
++  const decos: Decoration[] = []
++  doc.descendants((node, pos) => {
++    if (node.type.name !== 'code_block') return
++    const lineCount = Math.max(1, node.textContent.split('\n').length)
++    // 节点 class：CSS 据此给 pre 留出 gutter 空间
++    decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'has-line-numbers' }))
++    // widget 插入 code 内部起始处，绝对定位到 pre 左侧
++    decos.push(
++      Decoration.widget(
++        pos + 1,
++        () => {
++          const el = document.createElement('span')
++          el.className = 'code-line-numbers'
++          el.setAttribute('aria-hidden', 'true')
++          let text = ''
++          for (let i = 1; i <= lineCount; i++) text += (i > 1 ? '\n' : '') + i
++          el.textContent = text
++          return el
++        },
++        { side: -1, ignoreSelection: true },
++      ),
++    )
++    return false
++  })
++  return DecorationSet.create(doc, decos)
++}
++
++const lineNumPlugin = new Plugin({
++  key: lineNumKey,
++  state: {
++    init: (_config, state) => buildLineNumDecos(state.doc),
++    apply(tr, prev) {
++      // 文档变化或开关切换（带 lineNumKey meta）时重建
++      if (tr.docChanged || tr.getMeta(lineNumKey) !== undefined) {
++        return buildLineNumDecos(tr.doc)
++      }
++      return (prev as DecorationSet).map(tr.mapping, tr.doc)
++    },
++  },
++  props: {
++    decorations(state) {
++      return lineNumKey.getState(state) as DecorationSet
++    },
++  },
++})
++
+ /* ==================== 自定义语法扩展 ==================== */
+ 
+ /**
+@@ -311,7 +377,12 @@ export interface EditorHandle {
+   /** 编辑器是否已创建完成（会话/草稿恢复时判断时机） */
+   isReady: () => boolean
+   /** 搜索：返回匹配数与当前索引 */
+-  startSearch: (query: string, useRegex: boolean, caseSensitive: boolean) => {
++  startSearch: (
++    query: string,
++    useRegex: boolean,
++    caseSensitive: boolean,
++    wholeWord?: boolean,
++  ) => {
+     count: number
+     current: number
+   }
+@@ -323,6 +394,11 @@ export interface EditorHandle {
+   replaceAllMatches: (replacement: string) => number
+   /** 结束搜索（清除高亮） */
+   endSearch: () => void
++  /**
++   * 等待富内容就绪（B1）：若文档含公式/图表则确保懒加载插件已装载并重新渲染，
++   * 导出 HTML/PDF 前调用，避免快照中缺少 SVG/KaTeX 渲染结果。最多等待 4 秒。
++   */
++  ensureRichContent: () => Promise<void>
+ }
+ 
+ interface EditorProps {
+@@ -330,8 +406,12 @@ interface EditorProps {
+   initialContent: string
+   /** 内容变化回调（返回最新 Markdown） */
+   onChange: (markdown: string) => void
+-  /** 图片保存位置提示（当前文档路径 / 工作区路径） */
+-  imageHints?: { docPath?: string; workspacePath?: string }
++  /** 图片保存位置提示（当前文档路径 / 工作区路径 / 图床配置） */
++  imageHints?: {
++    docPath?: string
++    workspacePath?: string
++    imageHost?: { provider: 'local' | 'smms'; token: string }
++  }
+   /** 光标位置变化回调（行/列 + 当前标题 + 标题索引 + 选中字数） */
+   onCursorChange?: (
+     line: number,
+@@ -340,6 +420,14 @@ interface EditorProps {
+     headingIndex: number,
+     selectedChars: number,
+   ) => void
++  /** 懒加载插件（KaTeX/Mermaid）完成渲染后的回调（分栏预览刷新用，B1/B2） */
++  onRichRender?: () => void
++  /** 点击正文下方空白区是否跳到文末（默认 true，可在设置关闭，U8） */
++  blankClickToEnd?: boolean
++  /** 代码块行号开关 */
++  codeLineNumbers?: boolean
++  /** 轻提示回调（图床上传失败降级等场景） */
++  onNotify?: (message: string) => void
+ }
+ 
+ /** 代码块悬浮层状态（语言输入 + 复制，悬停才出现） */
+@@ -350,13 +438,32 @@ interface CodePanelState {
+   language: string
+ }
+ 
++/** 表格悬浮工具栏状态（行列增删，悬停才出现） */
++interface TablePanelState {
++  table: HTMLElement
++  top: number
++  left: number
++}
++
+ /**
+  * Milkdown 编辑器主体
+  * useEditor 只在挂载时执行一次，initialContent/onChange 通过 ref 透传，
+  * 避免重渲染时重建编辑器导致光标丢失。
+  */
+ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+-  function MilkdownInner({ initialContent, onChange, imageHints, onCursorChange }, ref) {
++  function MilkdownInner(
++    {
++      initialContent,
++      onChange,
++      imageHints,
++      onCursorChange,
++      onRichRender,
++      blankClickToEnd = true,
++      codeLineNumbers = false,
++      onNotify,
++    },
++    ref,
++  ) {
+     const editorRef = useRef<MilkdownCore | null>(null)
+     const containerRef = useRef<HTMLDivElement>(null)
+     const scrollRef = useRef<HTMLDivElement>(null)
+@@ -367,17 +474,21 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+     imageHintsRef.current = imageHints
+     const cursorRef = useRef(onCursorChange)
+     cursorRef.current = onCursorChange
++    const richRenderRef = useRef(onRichRender)
++    richRenderRef.current = onRichRender
++    const notifyRef = useRef(onNotify)
++    notifyRef.current = onNotify
+     const [, bumpRender] = useState(0)
+ 
+     // 拼写检查排除（代码块/行内代码 spellcheck=false）与图片 draggable：
+     // 改用 nodeAttrsPlugin（ProseMirror 装饰）实现，不再外部修改 DOM
+ 
+-    /** 大插件懒加载状态（KaTeX / Mermaid） */
++    /** 大插件懒加载状态（KaTeX / Mermaid）；Promise 供导出前等待就绪（B1） */
+     const lazyRef = useRef({
+       mathLoaded: false,
+       diagramLoaded: false,
+-      mathLoading: false,
+-      diagramLoading: false,
++      mathPromise: null as Promise<void> | null,
++      diagramPromise: null as Promise<void> | null,
+     })
+ 
+     /** 检测到公式/图表内容时动态加载对应插件（避免启动内存峰值） */
+@@ -385,47 +496,60 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+       const ed = editorRef.current
+       if (!ed || ed.status !== EditorStatus.Created) return
+       const st = lazyRef.current
+-      if (!st.mathLoaded && !st.mathLoading && markdown.includes('$')) {
+-        st.mathLoading = true
+-        import('@milkdown/plugin-math')
+-          .then((m) => {
+-            // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
+-            setTimeout(() => {
+-              ed.use(m.math)
+-              st.mathLoaded = true
+-              // 重新解析当前文档，让已存在的公式生效
+-              setTimeout(() => {
+-                const md = ed.action(getMarkdown())
+-                ed.action(replaceAll(md))
+-              }, 50)
+-            }, 0)
+-          })
++      if (!st.mathLoaded && !st.mathPromise && markdown.includes('$')) {
++        st.mathPromise = import('@milkdown/plugin-math')
++          .then(
++            (m) =>
++              new Promise<void>((resolve) => {
++                // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
++                setTimeout(() => {
++                  ed.use(m.math)
++                  st.mathLoaded = true
++                  // 重新解析当前文档，让已存在的公式生效
++                  setTimeout(() => {
++                    try {
++                      const md = ed.action(getMarkdown())
++                      ed.action(replaceAll(md))
++                    } catch {
++                      /* 编辑器销毁等异常不影响主流程 */
++                    }
++                    richRenderRef.current?.()
++                    resolve()
++                  }, 50)
++                }, 0)
++              }),
++          )
+           .catch(() => {})
+-          .finally(() => {
+-            st.mathLoading = false
+-          })
+       }
+       if (
+         !st.diagramLoaded &&
+-        !st.diagramLoading &&
++        !st.diagramPromise &&
+         markdown.includes('```mermaid')
+       ) {
+-        st.diagramLoading = true
+-        import('@milkdown/plugin-diagram')
+-          .then((m) => {
+-            setTimeout(() => {
+-              ed.use(m.diagram)
+-              st.diagramLoaded = true
+-              setTimeout(() => {
+-                const md = ed.action(getMarkdown())
+-                ed.action(replaceAll(md))
+-              }, 50)
+-            }, 0)
+-          })
++        st.diagramPromise = import('@milkdown/plugin-diagram')
++          .then(
++            (m) =>
++              new Promise<void>((resolve) => {
++                setTimeout(() => {
++                  ed.use(m.diagram)
++                  st.diagramLoaded = true
++                  setTimeout(() => {
++                    try {
++                      const md = ed.action(getMarkdown())
++                      ed.action(replaceAll(md))
++                    } catch {
++                      /* 同上 */
++                    }
++                    // Mermaid SVG 为异步渲染，多等一拍再通知
++                    setTimeout(() => {
++                      richRenderRef.current?.()
++                      resolve()
++                    }, 120)
++                  }, 50)
++                }, 0)
++              }),
++          )
+           .catch(() => {})
+-          .finally(() => {
+-            st.diagramLoading = false
+-          })
+       }
+     }
+ 
+@@ -435,6 +559,32 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+     const [copied, setCopied] = useState(false)
+     const copiedTimer = useRef<ReturnType<typeof setTimeout>>()
+     const lastPreRef = useRef<HTMLElement | null>(null)
++    // 表格悬浮工具栏（行列增删）
++    const [tablePanel, setTablePanel] = useState<TablePanelState | null>(null)
++
++    // 行号开关同步：更新模块级标志并触发装饰重建（编辑器未创建时由 init 读标志）
++    useEffect(() => {
++      lineNumbersEnabled = codeLineNumbers
++      const ed = editorRef.current
++      if (ed?.status === EditorStatus.Created) {
++        const view = ed.ctx.get(editorViewCtx)
++        view.dispatch(view.state.tr.setMeta(lineNumKey, true))
++      }
++    }, [codeLineNumbers])
++
++    /** 元素相对滚动容器的内容坐标（不受整体缩放影响） */
++    const offsetInScroll = (el: HTMLElement): { top: number; left: number } => {
++      const scrollEl = scrollRef.current
++      let top = 0
++      let left = 0
++      let cur: HTMLElement | null = el
++      while (cur && cur !== scrollEl) {
++        top += cur.offsetTop
++        left += cur.offsetLeft
++        cur = cur.offsetParent as HTMLElement | null
++      }
++      return { top, left }
++    }
+ 
+     useEditor((root) => {
+       const editor = MilkdownCore.make()
+@@ -480,6 +630,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+         .use($prose(() => searchPlugin))
+         // 代码块 spellcheck 排除 + 图片 draggable（装饰方式，避免 DOM 变异乒乓）
+         .use($prose(() => nodeAttrsPlugin))
++        // 代码块行号（开关由 codeLineNumbers prop 控制，装饰 widget 实现）
++        .use($prose(() => lineNumPlugin))
+         // 光标位置上报（供状态栏/大纲高亮；rAF 节流，连续输入每帧只算一次）
+         .use(
+           $prose(() => {
+@@ -604,8 +756,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+       else if (e.key === 'ArrowUp' && exitCodeBlock('up')) e.preventDefault()
+     }
+ 
+-    /** 点击正文下方空白区：光标定位到文末（Typora 同款） */
++    /** 点击正文下方空白区：光标定位到文末（Typora 同款，可在设置关闭，U8） */
+     const handleBlankClick = (e: React.MouseEvent) => {
++      if (!blankClickToEnd) return
+       if (e.target !== e.currentTarget) return
+       const ed =
+         editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+@@ -618,7 +771,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+ 
+     /* ==================== 图片粘贴 / 拖入 ==================== */
+ 
+-    /** 保存本地图片并插入 Markdown 图片节点 */
++    /** 保存图片并插入 Markdown 图片节点（优先图床，未配置/失败时降级本地） */
+     const insertImageFile = (file: File) => {
+       if (!window.desktopAPI) return
+       void (async () => {
+@@ -630,6 +783,19 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+           reader.readAsDataURL(file)
+         })
+         if (!dataUrl) return
++        // 图床路径：配置了 SM.MS 且 token 非空时先尝试上传
++        const host = imageHintsRef.current?.imageHost
++        if (host?.provider === 'smms' && host.token) {
++          const up = await window.desktopAPI.document.uploadImage(dataUrl)
++          if (up.ok && up.data?.url) {
++            const alt = file.name.replace(/\.[^.]+$/, '')
++            editorRef.current?.action(insert(`![${alt}](${up.data.url})`))
++            bumpRender((n) => n + 1)
++            return
++          }
++          // 上传失败：提示后降级本地附件
++          notifyRef.current?.('图床上传失败，已改为保存到本地')
++        }
+         const res = await window.desktopAPI.document.saveImage(
+           dataUrl,
+           imageHintsRef.current,
+@@ -671,33 +837,114 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+ 
+     /* ==================== 代码块悬浮层 ==================== */
+ 
+-    /** 鼠标悬停代码块：显示轻量操作层（事件委托） */
++    /** 鼠标悬停代码块/表格：显示轻量操作层（事件委托） */
+     const handleMouseOver = (e: React.MouseEvent) => {
+       const target = e.target as HTMLElement
+       // 悬停在操作层自身上时保持现状，避免闪烁
+-      if (target.closest('.code-panel')) return
+-      const pre = target.closest('pre')
++      if (target.closest('.code-panel') || target.closest('.table-panel')) return
+       const scrollEl = scrollRef.current
+-      if (!pre || !scrollEl || !scrollEl.contains(pre)) {
++      if (!scrollEl) return
++
++      // 悬停表格：显示表格工具栏
++      const table = target.closest('table')
++      if (table && scrollEl.contains(table)) {
++        setCodePanel(null)
++        lastPreRef.current = null
++        const { top, left } = offsetInScroll(table)
++        setTablePanel({
++          table,
++          top: top + 4,
++          // 贴表格右上角；窄表格时避免负坐标
++          left: Math.max(8, left + table.offsetWidth - 252),
++        })
++        return
++      }
++
++      const pre = target.closest('pre')
++      if (!pre || !scrollEl.contains(pre)) {
+         setCodePanel(null)
++        setTablePanel(null)
+         lastPreRef.current = null
+         return
+       }
++      setTablePanel(null)
+       // 切换到新代码块时同步输入框内容（同一块内不打断输入）
+       if (lastPreRef.current !== pre) {
+         lastPreRef.current = pre
+         setLangInput(pre.getAttribute('data-language') || '')
+       }
+-      const preRect = pre.getBoundingClientRect()
+-      const scrollRect = scrollEl.getBoundingClientRect()
++      // U2：内容坐标定位而非 getBoundingClientRect，不受缩放/侧栏宽度影响
++      const { top, left } = offsetInScroll(pre)
+       setCodePanel({
+         pre,
+-        top: preRect.top - scrollRect.top + scrollEl.scrollTop + 8,
+-        left: preRect.right - scrollRect.left - 216,
++        top: top + 8,
++        left: left + pre.offsetWidth - 216,
+         language: pre.getAttribute('data-language') || '',
+       })
+     }
+ 
++    /** 把光标定位到悬停表格内（表格命令要求选区在单元格中） */
++    const ensureSelectionInTable = (table: HTMLElement): boolean => {
++      const ed =
++        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
++      if (!ed) return false
++      const view = ed.ctx.get(editorViewCtx)
++      try {
++        const pos = view.posAtDOM(table, 0)
++        const $pos = view.state.doc.resolve(pos)
++        let tablePos = -1
++        let tableNode: ProseNode | null = null
++        for (let d = $pos.depth; d >= 0; d--) {
++          if ($pos.node(d).type.name === 'table') {
++            tablePos = $pos.before(d)
++            tableNode = $pos.node(d)
++            break
++          }
++        }
++        if (!tableNode) return false
++        const sel = view.state.selection
++        const inside = sel.from > tablePos && sel.from < tablePos + tableNode.nodeSize
++        if (!inside) {
++          const target = Selection.findFrom(view.state.doc.resolve(tablePos + 1), 1)
++          if (!target) return false
++          view.dispatch(view.state.tr.setSelection(target))
++        }
++        return true
++      } catch {
++        return false
++      }
++    }
++
++    /** 表格工具栏动作：作用于光标所在单元格（光标不在表内时先移入） */
++    const runTableAction = (
++      action: 'addRow' | 'addCol' | 'delRow' | 'delCol' | 'delTable',
++    ) => {
++      if (!tablePanel) return
++      if (!ensureSelectionInTable(tablePanel.table)) return
++      const ed =
++        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
++      if (!ed) return
++      const view = ed.ctx.get(editorViewCtx)
++      switch (action) {
++        case 'addRow':
++          ed.action(callCommand(addRowAfterCommand.key))
++          break
++        case 'addCol':
++          ed.action(callCommand(addColAfterCommand.key))
++          break
++        case 'delRow':
++          deleteRow(view.state, view.dispatch)
++          break
++        case 'delCol':
++          deleteColumn(view.state, view.dispatch)
++          break
++        case 'delTable':
++          deleteTable(view.state, view.dispatch)
++          setTablePanel(null)
++          break
++      }
++    }
++
+     /** 修改代码块语言：定位 ProseMirror 节点并更新 language 属性 */
+     const applyLanguage = (lang: string) => {
+       if (!codePanel) return
+@@ -785,16 +1032,45 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+         },
+         isReady: () => ready() !== null,
+ 
++        /* ---------- 富内容就绪（B1：导出/预览前强制等待插件加载） ---------- */
++
++        ensureRichContent: async () => {
++          const ed = ready()
++          if (!ed) return
++          let md = ''
++          try {
++            md = ed.action(getMarkdown())
++          } catch {
++            return
++          }
++          ensureLazyPlugins(md)
++          const st = lazyRef.current
++          const waits: Promise<void>[] = []
++          if (md.includes('$') && st.mathPromise) waits.push(st.mathPromise)
++          if (md.includes('```mermaid') && st.diagramPromise) {
++            waits.push(st.diagramPromise)
++          }
++          if (waits.length === 0) return
++          // 最多等 4 秒，避免插件加载异常时永久阻塞导出
++          await Promise.race([
++            Promise.all(waits),
++            new Promise<void>((r) => setTimeout(r, 4000)),
++          ])
++          // 再等一帧，确保 DOM 已完成重排
++          await new Promise<void>((r) => requestAnimationFrame(() => r()))
++        },
++
+         /* ---------- 搜索 ---------- */
+ 
+-        startSearch: (query, useRegex, caseSensitive) => {
++        startSearch: (query, useRegex, caseSensitive, wholeWord = false) => {
+           const ed = ready()
+           if (!ed) return { count: 0, current: -1 }
+           const view = ed.ctx.get(editorViewCtx)
+           lastQuery = query
+           lastUseRegex = useRegex
+           lastCaseSensitive = caseSensitive
+-          const re = buildSearchRegex(query, useRegex, caseSensitive)
++          lastWholeWord = wholeWord
++          const re = buildSearchRegex(query, useRegex, caseSensitive, wholeWord)
+           if (!re) {
+             searchHits = []
+             searchCurrent = -1
+@@ -850,7 +1126,12 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+             view.state.tr.insertText(replacement, hit.from, hit.to).scrollIntoView(),
+           )
+           // 替换后重新搜索（复用 startSearch 逻辑）
+-          const re = buildSearchRegex(lastQuery, lastUseRegex, lastCaseSensitive)
++          const re = buildSearchRegex(
++            lastQuery,
++            lastUseRegex,
++            lastCaseSensitive,
++            lastWholeWord,
++          )
+           if (!re) return { count: 0, current: -1 }
+           searchHits = collectHits(view.state.doc, re)
+           const selPos = view.state.selection.from
+@@ -902,7 +1183,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+           className="editor-scroll"
+           ref={scrollRef}
+           onMouseOver={handleMouseOver}
+-          onMouseLeave={() => setCodePanel(null)}
++          onMouseLeave={() => {
++            setCodePanel(null)
++            setTablePanel(null)
++          }}
+         >
+           <div
+             className="editor-inner"
+@@ -962,6 +1246,31 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
+               </div>
+             </div>
+           )}
++          {/* 表格悬浮工具栏：行列增删（悬停才出现） */}
++          {tablePanel && (
++            <div
++              className="table-panel"
++              style={{ top: tablePanel.top, left: tablePanel.left }}
++              onMouseOver={(e) => e.stopPropagation()}
++              contentEditable={false}
++            >
++              <div className="table-act" onClick={() => runTableAction('addRow')} title="在光标所在行下方加行">
++                +行
++              </div>
++              <div className="table-act" onClick={() => runTableAction('addCol')} title="在光标所在列右侧加列">
++                +列
++              </div>
++              <div className="table-act" onClick={() => runTableAction('delRow')} title="删除光标所在行">
++                −行
++              </div>
++              <div className="table-act" onClick={() => runTableAction('delCol')} title="删除光标所在列">
++                −列
++              </div>
++              <div className="table-act danger" onClick={() => runTableAction('delTable')} title="删除整个表格">
++                删表
++              </div>
++            </div>
++          )}
+         </div>
+       </div>
+     )
+diff --git a/src/renderer/src/components/MenuBar/index.tsx b/src/renderer/src/components/MenuBar/index.tsx
+index dc51d3e..45bc4a9 100644
+--- a/src/renderer/src/components/MenuBar/index.tsx
++++ b/src/renderer/src/components/MenuBar/index.tsx
+@@ -34,6 +34,7 @@ const MENU_DEFS: Record<string, MenuItemDef[]> = {
+     { label: '导出 PDF', action: 'exportPdf' },
+     { label: '导出 HTML', action: 'exportHtml' },
+     { label: '导出 Markdown', action: 'exportMarkdown' },
++    { label: '导出 Word / EPUB…（pandoc）', action: 'exportPandoc' },
+     { label: '', separator: true },
+     { label: '图片管理…', action: 'images' },
+   ],
+diff --git a/src/renderer/src/components/SearchBar/index.tsx b/src/renderer/src/components/SearchBar/index.tsx
+index f4de828..e287676 100644
+--- a/src/renderer/src/components/SearchBar/index.tsx
++++ b/src/renderer/src/components/SearchBar/index.tsx
+@@ -1,5 +1,14 @@
+ import { useState, useRef, useEffect } from 'react'
+ 
++/** 持久化的搜索状态（U4） */
++export interface SearchState {
++  query: string
++  useRegex: boolean
++  caseSensitive: boolean
++  wholeWord: boolean
++  replacement: string
++}
++
+ interface SearchBarProps {
+   /** 是否显示替换输入框 */
+   withReplace: boolean
+@@ -9,14 +18,23 @@ interface SearchBarProps {
+   count: number
+   /** 当前匹配索引（0 起，-1 无） */
+   current: number
++  /** 上次搜索状态（重新打开时恢复查询词/选项/替换文本，U4） */
++  initial?: SearchState
+   /** 查询变化（返回匹配信息） */
+-  onQueryChange: (query: string, useRegex: boolean, caseSensitive: boolean) => void
++  onQueryChange: (
++    query: string,
++    useRegex: boolean,
++    caseSensitive: boolean,
++    wholeWord: boolean,
++  ) => void
+   /** 上一个 / 下一个 */
+   onNext: (backwards: boolean) => void
+   /** 替换当前匹配 */
+   onReplace: (replacement: string) => void
+   /** 全部替换 */
+   onReplaceAll: (replacement: string) => void
++  /** 替换文本变化（同步到持久化状态，U4） */
++  onReplacementChange?: (replacement: string) => void
+ }
+ 
+ /**
+@@ -28,15 +46,18 @@ export function SearchBar({
+   onClose,
+   count,
+   current,
++  initial,
+   onQueryChange,
+   onNext,
+   onReplace,
+   onReplaceAll,
++  onReplacementChange,
+ }: SearchBarProps): JSX.Element {
+-  const [query, setQuery] = useState('')
+-  const [useRegex, setUseRegex] = useState(false)
+-  const [caseSensitive, setCaseSensitive] = useState(false)
+-  const [replacement, setReplacement] = useState('')
++  const [query, setQuery] = useState(initial?.query ?? '')
++  const [useRegex, setUseRegex] = useState(initial?.useRegex ?? false)
++  const [caseSensitive, setCaseSensitive] = useState(initial?.caseSensitive ?? false)
++  const [wholeWord, setWholeWord] = useState(initial?.wholeWord ?? false)
++  const [replacement, setReplacement] = useState(initial?.replacement ?? '')
+   const inputRef = useRef<HTMLInputElement>(null)
+ 
+   // 打开时自动聚焦
+@@ -44,21 +65,40 @@ export function SearchBar({
+     inputRef.current?.focus()
+   }, [withReplace])
+ 
++  // U4：携带上次查询词打开时，立即重新执行搜索恢复高亮
++  useEffect(() => {
++    if (initial?.query) {
++      onQueryChange(
++        initial.query,
++        initial.useRegex ?? false,
++        initial.caseSensitive ?? false,
++        initial.wholeWord ?? false,
++      )
++    }
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [])
++
+   const handleQueryChange = (value: string) => {
+     setQuery(value)
+-    onQueryChange(value, useRegex, caseSensitive)
++    onQueryChange(value, useRegex, caseSensitive, wholeWord)
+   }
+ 
+   const toggleRegex = () => {
+     const next = !useRegex
+     setUseRegex(next)
+-    onQueryChange(query, next, caseSensitive)
++    onQueryChange(query, next, caseSensitive, wholeWord)
+   }
+ 
+   const toggleCase = () => {
+     const next = !caseSensitive
+     setCaseSensitive(next)
+-    onQueryChange(query, useRegex, next)
++    onQueryChange(query, useRegex, next, wholeWord)
++  }
++
++  const toggleWholeWord = () => {
++    const next = !wholeWord
++    setWholeWord(next)
++    onQueryChange(query, useRegex, caseSensitive, next)
+   }
+ 
+   const handleKeyDown = (e: React.KeyboardEvent) => {
+@@ -97,6 +137,14 @@ export function SearchBar({
+         >
+           Aa
+         </div>
++        {/* 全字匹配开关 */}
++        <div
++          className={`search-regex ${wholeWord ? 'on' : ''}`}
++          onClick={toggleWholeWord}
++          title={wholeWord ? '全字匹配：开' : '全字匹配：关'}
++        >
++          ab
++        </div>
+         <input
+           ref={inputRef}
+           className="search-input"
+@@ -119,13 +167,18 @@ export function SearchBar({
+       </div>
+       {withReplace && (
+         <div className="search-row">
++          <span className="search-regex-placeholder" />
++          <span className="search-regex-placeholder" />
+           <span className="search-regex-placeholder" />
+           <input
+             className="search-input"
+             placeholder="替换为"
+             value={replacement}
+             spellCheck={false}
+-            onChange={(e) => setReplacement(e.target.value)}
++            onChange={(e) => {
++              setReplacement(e.target.value)
++              onReplacementChange?.(e.target.value)
++            }}
+             onKeyDown={(e) => {
+               if (e.key === 'Escape') {
+                 e.preventDefault()
+diff --git a/src/renderer/src/components/SettingsDialog/index.tsx b/src/renderer/src/components/SettingsDialog/index.tsx
+index 87b17d5..ceec9fb 100644
+--- a/src/renderer/src/components/SettingsDialog/index.tsx
++++ b/src/renderer/src/components/SettingsDialog/index.tsx
+@@ -39,6 +39,19 @@ interface SettingsDialogProps {
+   onSpellcheckChange: (value: boolean) => void
+   multiWindow: boolean
+   onMultiWindowChange: (value: boolean) => void
++  /** 点击正文下方空白区跳到文末（U8） */
++  blankClickToEnd: boolean
++  onBlankClickToEndChange: (value: boolean) => void
++  /** 代码块行号开关 */
++  codeLineNumbers: boolean
++  onCodeLineNumbersChange: (value: boolean) => void
++  /** 自定义主题 CSS（已导入的文件名，null 未导入） */
++  customCssName?: string | null
++  onImportCss: () => void
++  onRemoveCss: () => void
++  /** 图床配置 */
++  imageHost: { provider: 'local' | 'smms'; token: string }
++  onImageHostChange: (value: { provider: 'local' | 'smms'; token: string }) => void
+   /** 快捷键 */
+   shortcuts: ShortcutMap
+   onShortcutsChange: (map: ShortcutMap) => void
+@@ -108,6 +121,15 @@ export function SettingsDialog({
+   onSpellcheckChange,
+   multiWindow,
+   onMultiWindowChange,
++  blankClickToEnd,
++  onBlankClickToEndChange,
++  codeLineNumbers,
++  onCodeLineNumbersChange,
++  customCssName,
++  onImportCss,
++  onRemoveCss,
++  imageHost,
++  onImageHostChange,
+   shortcuts,
+   onShortcutsChange,
+ }: SettingsDialogProps): JSX.Element | null {
+@@ -282,6 +304,26 @@ export function SettingsDialog({
+                   </div>
+                 </div>
+               </div>
++
++              <div className="settings-section-title">自定义主题</div>
++              <div className="settings-row">
++                <span className="settings-label">
++                  主题 CSS
++                  <span className="settings-hint">
++                    {customCssName ? `已导入：${customCssName}` : '导入自己的 CSS 文件覆盖内置主题样式'}
++                  </span>
++                </span>
++                <div className="sc-edit-group">
++                  <div className="sc-btn" onClick={onImportCss}>
++                    {customCssName ? '重新导入' : '导入'}
++                  </div>
++                  {customCssName && (
++                    <div className="sc-btn" onClick={onRemoveCss}>
++                      移除
++                    </div>
++                  )}
++                </div>
++              </div>
+             </>
+           )}
+ 
+@@ -316,6 +358,56 @@ export function SettingsDialog({
+                 </span>
+                 <div className={`switch ${multiWindow ? 'on' : ''}`} />
+               </div>
++              <div className="settings-row settings-row-toggle" onClick={() => onBlankClickToEndChange(!blankClickToEnd)}>
++                <span className="settings-label">
++                  点击空白区跳到文末
++                  <span className="settings-hint">点击正文下方空白区域时光标定位到文档末尾（Typora 同款行为）</span>
++                </span>
++                <div className={`switch ${blankClickToEnd ? 'on' : ''}`} />
++              </div>
++              <div className="settings-row settings-row-toggle" onClick={() => onCodeLineNumbersChange(!codeLineNumbers)}>
++                <span className="settings-label">
++                  代码块行号
++                  <span className="settings-hint">在代码块左侧显示行号（导出 HTML/PDF 时一并包含）</span>
++                </span>
++                <div className={`switch ${codeLineNumbers ? 'on' : ''}`} />
++              </div>
++
++              <div className="settings-section-title">图床（粘贴/拖入图片）</div>
++              <div className="settings-row">
++                <span className="settings-label">图片存储位置</span>
++                <div className="seg">
++                  <div
++                    className={`seg-item ${imageHost.provider === 'local' ? 'on' : ''}`}
++                    onClick={() => onImageHostChange({ ...imageHost, provider: 'local' })}
++                  >
++                    本地附件
++                  </div>
++                  <div
++                    className={`seg-item ${imageHost.provider === 'smms' ? 'on' : ''}`}
++                    onClick={() => onImageHostChange({ ...imageHost, provider: 'smms' })}
++                  >
++                    SM.MS 图床
++                  </div>
++                </div>
++              </div>
++              {imageHost.provider === 'smms' && (
++                <div className="settings-row">
++                  <span className="settings-label">
++                    SM.MS Token
++                    <span className="settings-hint">在 sm.ms 账号设置中获取；未填写时自动降级为本地附件</span>
++                  </span>
++                  <input
++                    className="settings-text-input"
++                    type="password"
++                    placeholder="粘贴 Token"
++                    value={imageHost.token}
++                    spellCheck={false}
++                    onClick={(e) => e.stopPropagation()}
++                    onChange={(e) => onImageHostChange({ ...imageHost, token: e.target.value })}
++                  />
++                </div>
++              )}
+             </>
+           )}
+ 
+diff --git a/src/renderer/src/components/Sidebar/index.tsx b/src/renderer/src/components/Sidebar/index.tsx
+index d41322c..694c9d8 100644
+--- a/src/renderer/src/components/Sidebar/index.tsx
++++ b/src/renderer/src/components/Sidebar/index.tsx
+@@ -44,6 +44,10 @@ interface SidebarProps {
+   onCreateFile?: (dirPath: string) => void
+   onRenameFile?: (path: string, newName: string) => void
+   onDeleteFile?: (path: string) => void
++  /** 拖拽移动文件/文件夹到目标目录（U5） */
++  onMoveFile?: (path: string, targetDir: string) => void
++  /** 右键在新窗口打开文件（U7） */
++  onOpenInNewWindow?: (path: string) => void
+ }
+ 
+ /** 统一的树节点模型（演示树与工作区树归一化后渲染） */
+@@ -121,6 +125,8 @@ export function Sidebar({
+   onCreateFile,
+   onRenameFile,
+   onDeleteFile,
++  onMoveFile,
++  onOpenInNewWindow,
+ }: SidebarProps): JSX.Element {
+   const [activeTab, setActiveTab] = useState<'files' | 'outline'>('files')
+   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
+@@ -129,6 +135,21 @@ export function Sidebar({
+   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: UiNode } | null>(null)
+   const [renamingKey, setRenamingKey] = useState<string | null>(null)
+   const [renameValue, setRenameValue] = useState('')
++  // 文件树拖拽移动（U5）：正在拖动的节点与当前悬停的投放目标
++  const [dragNode, setDragNode] = useState<{ path: string; kind: 'file' | 'folder' } | null>(null)
++  const [dropKey, setDropKey] = useState<string | null>(null)
++
++  /** 判断当前拖动的节点能否放入目标文件夹 */
++  const canDropInto = (target: UiNode): boolean => {
++    if (!dragNode || !target.path || target.kind !== 'folder') return false
++    const src = dragNode.path
++    // 不能移入自身或自身的子目录
++    if (target.path === src) return false
++    if (target.path.startsWith(src + '/') || target.path.startsWith(src + '\\')) return false
++    // 已在目标目录下，无需移动
++    if (src.replace(/[\\/][^\\/]+$/, '') === target.path) return false
++    return true
++  }
+ 
+   // 点击其他区域关闭右键菜单
+   useEffect(() => {
+@@ -267,13 +288,43 @@ export function Sidebar({
+     }
+     if (node.kind === 'folder') {
+       const open = !collapsedKeys.has(node.key)
++      // 工作区文件夹支持拖入移动（U5）
++      const droppable = !!workspace && !!node.path
+       return (
+         <div key={node.key}>
+           <div
+-            className="tree-row tree-folder-row"
++            className={`tree-row tree-folder-row ${dropKey === node.key ? 'drop-target' : ''}`}
+             style={{ paddingLeft: indent }}
+             onClick={() => toggleCollapse(node.key)}
+             onContextMenu={(e) => openCtxMenu(e, node)}
++            draggable={droppable}
++            onDragStart={(e) => {
++              if (!node.path) return
++              setDragNode({ path: node.path, kind: node.kind })
++              e.dataTransfer.effectAllowed = 'move'
++              e.dataTransfer.setData('text/plain', node.name)
++            }}
++            onDragEnd={() => {
++              setDragNode(null)
++              setDropKey(null)
++            }}
++            onDragOver={(e) => {
++              if (canDropInto(node)) {
++                e.preventDefault()
++                e.stopPropagation()
++                setDropKey(node.key)
++              }
++            }}
++            onDragLeave={() => setDropKey((k) => (k === node.key ? null : k))}
++            onDrop={(e) => {
++              e.preventDefault()
++              e.stopPropagation()
++              if (dragNode && canDropInto(node) && node.path) {
++                onMoveFile?.(dragNode.path, node.path)
++              }
++              setDragNode(null)
++              setDropKey(null)
++            }}
+           >
+             {guides}
+             <ChevronIcon open={open} />
+@@ -336,6 +387,17 @@ export function Sidebar({
+           else if (node.path) onSelectWorkspaceFile(node.path)
+         }}
+         onContextMenu={(e) => openCtxMenu(e, node)}
++        draggable={!!workspace && !!node.path}
++        onDragStart={(e) => {
++          if (!node.path) return
++          setDragNode({ path: node.path, kind: node.kind })
++          e.dataTransfer.effectAllowed = 'move'
++          e.dataTransfer.setData('text/plain', node.name)
++        }}
++        onDragEnd={() => {
++          setDragNode(null)
++          setDropKey(null)
++        }}
+       >
+         {guides}
+         <span className="tree-chevron-slot" />
+@@ -514,6 +576,15 @@ export function Sidebar({
+               >
+                 复制路径
+               </div>
++              <div
++                className="tree-ctx-item"
++                onClick={() => {
++                  if (ctxMenu.node.path) onOpenInNewWindow?.(ctxMenu.node.path)
++                  setCtxMenu(null)
++                }}
++              >
++                在新窗口打开
++              </div>
+               <div className="tree-ctx-sep" />
+               <div
+                 className="tree-ctx-item danger"
+diff --git a/src/renderer/src/components/StatusBar/index.tsx b/src/renderer/src/components/StatusBar/index.tsx
+index 2529767..d8e4b5b 100644
+--- a/src/renderer/src/components/StatusBar/index.tsx
++++ b/src/renderer/src/components/StatusBar/index.tsx
+@@ -18,7 +18,8 @@ interface StatusBarProps {
+ function formatTime(ts: number): string {
+   const d = new Date(ts)
+   const pad = (n: number) => String(n).padStart(2, '0')
+-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
++  // U3：包含秒数，便于确认刚保存文件的精确时间
++  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+ }
+ 
+ export function StatusBar({
+diff --git a/src/renderer/src/styles/components/editor.css b/src/renderer/src/styles/components/editor.css
+index 817b84b..c8b3c03 100644
+--- a/src/renderer/src/styles/components/editor.css
++++ b/src/renderer/src/styles/components/editor.css
+@@ -230,6 +230,51 @@
+   stroke-linejoin: round;
+ }
+ 
++/* ====== 代码块行号（设置开关打开时，装饰 widget 渲染） ====== */
++.milkdown pre.has-line-numbers { padding-left: 58px; }
++.milkdown pre.has-line-numbers .code-line-numbers {
++  position: absolute;
++  top: 34px; /* 与 pre 的 padding-top 对齐，确保行号与代码行一一对应 */
++  left: 0;
++  width: 46px;
++  padding-right: 8px;
++  text-align: right;
++  white-space: pre;
++  font-family: var(--font-mono);
++  font-size: .85rem;
++  line-height: 1.75;
++  color: var(--text-4);
++  user-select: none;
++  pointer-events: none;
++}
++
++/* ====== 表格悬浮工具栏（行列增删，悬停才出现） ====== */
++.table-panel {
++  position: absolute;
++  z-index: 20;
++  display: flex;
++  align-items: center;
++  gap: 2px;
++  padding: 3px;
++  border-radius: var(--radius);
++  background: var(--bg-menu);
++  border: 1px solid var(--border-m);
++  box-shadow: var(--shadow-s);
++  animation: ddIn 120ms var(--ease);
++}
++.table-act {
++  padding: 4px 8px;
++  font-size: .7rem;
++  color: var(--text-2);
++  border-radius: 4px;
++  cursor: pointer;
++  transition: background 80ms, color 80ms;
++  white-space: nowrap;
++}
++.table-act:hover { background: var(--bg-hover); color: var(--text-1); }
++.table-act.danger { color: #b06060; }
++.table-act.danger:hover { background: rgba(176, 96, 96, .1); color: #a04c4c; }
++
+ /* ====== 语法高亮（prism token，随主题适配） ====== */
+ .milkdown pre code .token.comment,
+ .milkdown pre code .token.prolog,
+diff --git a/src/renderer/src/styles/components/settings.css b/src/renderer/src/styles/components/settings.css
+index 079ca35..e00f6ac 100644
+--- a/src/renderer/src/styles/components/settings.css
++++ b/src/renderer/src/styles/components/settings.css
+@@ -111,6 +111,42 @@
+ }
+ .settings-section-title:first-child { margin-top: 6px; }
+ 
++/* ====== PDF 导出选项弹窗 ====== */
++.pdf-dialog {
++  width: 420px;
++  max-width: 92vw;
++}
++.pdf-dialog-body {
++  padding: 14px 18px 18px;
++}
++.pdf-dialog-actions {
++  display: flex;
++  justify-content: flex-end;
++  gap: 8px;
++  margin-top: 16px;
++}
++.pdf-export-btn {
++  background: var(--accent);
++  color: #fff;
++  border-color: var(--accent);
++}
++.pdf-export-btn:hover { opacity: .9; }
++
++/* 设置面板文本输入框（图床 Token 等） */
++.settings-text-input {
++  width: 220px;
++  padding: 5px 10px;
++  font-size: .74rem;
++  font-family: var(--font-ui);
++  color: var(--text-1);
++  background: var(--bg-surface);
++  border: 1px solid var(--border);
++  border-radius: 4px;
++  outline: none;
++  transition: border-color var(--dur) var(--ease);
++}
++.settings-text-input:focus { border-color: var(--accent); }
++
+ .settings-row {
+   display: flex;
+   align-items: center;
+diff --git a/src/renderer/src/styles/components/sidebar.css b/src/renderer/src/styles/components/sidebar.css
+index 5b5a95f..7226231 100644
+--- a/src/renderer/src/styles/components/sidebar.css
++++ b/src/renderer/src/styles/components/sidebar.css
+@@ -60,6 +60,15 @@
+ .tree-row:hover { background: var(--bg-hover); color: var(--text-1); }
+ .tree-row.active { background: var(--accent-bg); color: var(--accent); font-weight: 500; }
+ 
++/* 拖拽移动（U5）：拖动经过合法目标文件夹时的高亮 */
++.tree-row.drop-target {
++  background: var(--accent-bg);
++  outline: 1px dashed var(--accent);
++  outline-offset: -1px;
++}
++/* 拖动中的源节点降低存在感 */
++.tree-row:active { opacity: .85; }
++
+ .tree-name {
+   overflow: hidden;
+   text-overflow: ellipsis;
+diff --git a/src/shared/ipc/channels.ts b/src/shared/ipc/channels.ts
+index a893350..46820fe 100644
+--- a/src/shared/ipc/channels.ts
++++ b/src/shared/ipc/channels.ts
+@@ -7,8 +7,13 @@ export const CHANNELS = {
+   FILE_SAVE_AS: 'file:save-as',
+   FILE_SAVE_IMAGE: 'file:save-image',
+   FILE_EXPORT_PDF: 'file:export-pdf',
++  FILE_EXPORT_PANDOC: 'file:export-pandoc',
++  FILE_PICK_CSS: 'file:pick-css',
++  IMAGE_UPLOAD: 'image:upload',
+   FILE_CREATE: 'file:create',
+   FILE_RENAME: 'file:rename',
++  FILE_MOVE: 'file:move',
++  FILE_STAT: 'file:stat',
+   FILE_DELETE: 'file:delete',
+   FILE_LIST_IMAGES: 'file:list-images',
+   FILE_DELETE_IMAGE: 'file:delete-image',
+@@ -18,5 +23,6 @@ export const CHANNELS = {
+   WINDOW_SET_TITLEBAR: 'window:set-titlebar',
+   WINDOW_SET_SPELLCHECK: 'window:set-spellcheck',
+   WINDOW_NEW: 'window:new',
++  WINDOW_NEW_WITH_FILE: 'window:new-with-file',
+   WINDOW_SET_UNSAVED: 'window:set-unsaved',
+ } as const

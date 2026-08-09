@@ -111,6 +111,110 @@
 }
 .settings-section-title:first-child { margin-top: 6px; }
 
+/* ====== PDF 导出选项弹窗 ====== */
+.pdf-dialog {
+  width: 420px;
+  max-width: 92vw;
+}
+.pdf-dialog-body {
+  padding: 14px 18px 18px;
+}
+.pdf-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.pdf-export-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.pdf-export-btn:hover { opacity: .9; }
+
+/* 设置面板文本输入框（图床 Token 等） */
+.settings-text-input {
+  width: 220px;
+  padding: 5px 10px;
+  font-size: .74rem;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.settings-text-input:focus { border-color: var(--accent); }
+
+/* ====== 工作区全文搜索弹窗 ====== */
+.ws-dialog {
+  width: 560px;
+  max-width: 94vw;
+}
+.ws-dialog-body {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ws-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-input { flex: 1; }
+.ws-results {
+  max-height: 380px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ws-results::-webkit-scrollbar { width: 4px; }
+.ws-results::-webkit-scrollbar-thumb { background: var(--text-4); border-radius: 2px; }
+.ws-result-item {
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 80ms;
+}
+.ws-result-item:hover { background: var(--bg-hover); }
+.ws-result-loc {
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.ws-result-line { color: var(--text-3); font-weight: 400; }
+.ws-result-preview {
+  font-size: .72rem;
+  color: var(--text-2);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 命中片段高亮（与文档内搜索高亮同色系） */
+.ws-match {
+  background: rgba(240, 190, 60, .35);
+  color: inherit;
+  border-radius: 2px;
+}
+.ws-empty {
+  padding: 18px 0;
+  text-align: center;
+  font-size: .74rem;
+  color: var(--text-4);
+}
+.ws-error {
+  font-size: .7rem;
+  color: #b06060;
+  background: rgba(176, 96, 96, .08);
+  border: 1px solid rgba(176, 96, 96, .25);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+}
+
 .settings-row {
   display: flex;
   align-items: center;
