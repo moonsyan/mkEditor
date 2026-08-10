@@ -20,29 +20,21 @@
 .editor-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
 .editor-inner {
-  /* 宽度随窗口自适应：小窗不溢出，全屏不大面积留白 */
-  max-width: clamp(640px, 78%, 1180px);
+  /* 字号/宽度/行距由设置面板经 CSS 变量精确控制（--efs/--ecw/--elh） */
+  --efs: 16px;
+  --ecw: 900px;
+  --elh: 1.85;
+  width: var(--ecw);
+  max-width: 100%;
   margin: 0 auto;
   padding: 48px 56px 160px;
   min-height: 100%;
-  font-size: calc(1rem * var(--editor-zoom, 1));
-  line-height: 1.85;
+  font-size: calc(var(--efs) * var(--editor-zoom, 1));
+  line-height: var(--elh);
   color: var(--text-1);
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
-
-/* 字号设置（data-fontsize 由设置面板写入 html 根元素） */
-[data-fontsize='sm'] .editor-inner { font-size: .88rem; }
-[data-fontsize='lg'] .editor-inner { font-size: 1.12rem; }
-
-/* 内容宽度档位（设置面板可调） */
-[data-contentwidth='narrow'] .editor-inner { max-width: clamp(520px, 60%, 720px); }
-[data-contentwidth='wide'] .editor-inner { max-width: clamp(760px, 92%, 1500px); }
-
-/* 行距档位（设置面板可调） */
-[data-lineheight='compact'] .editor-inner { line-height: 1.65; }
-[data-lineheight='loose'] .editor-inner { line-height: 2.1; }
 
 /* 内容字体档位：默认（无衬线）/ 衬线 / 等宽 */
 [data-contentfont='serif'] .editor-inner {
@@ -50,6 +42,55 @@
 }
 [data-contentfont='mono'] .editor-inner {
   font-family: var(--font-mono);
+}
+
+/* 块级上下文标记：光标所在块轻微高亮（对标 Typora「当前块」） */
+.block-active {
+  background: rgba(128, 128, 128, 0.10);
+  border-radius: 4px;
+}
+
+/* 前后缀匹配高亮：括号/引号配对时高亮对应字符 */
+.bracket-match {
+  background: rgba(120, 170, 255, 0.38);
+  border-radius: 2px;
+}
+
+/* 标题段落折叠：标题相对定位以容纳左侧折叠标记 */
+.milkdown .editor h1,
+.milkdown .editor h2,
+.milkdown .editor h3,
+.milkdown .editor h4,
+.milkdown .editor h5,
+.milkdown .editor h6 {
+  position: relative;
+}
+.fold-toggle {
+  position: absolute;
+  left: -1.3em;
+  top: 0.18em;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.8em;
+  line-height: 1.85;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+.milkdown .editor h1:hover .fold-toggle,
+.milkdown .editor h2:hover .fold-toggle,
+.milkdown .editor h3:hover .fold-toggle,
+.milkdown .editor h4:hover .fold-toggle,
+.milkdown .editor h5:hover .fold-toggle,
+.milkdown .editor h6:hover .fold-toggle {
+  opacity: 1;
+}
+.fold-toggle.collapsed {
+  opacity: 1;
+}
+/* 折叠后隐藏该标题下的区块内容 */
+.folded-hidden {
+  display: none;
 }
 
 /* 空文档占位提示（唯一空段落时显示） */
@@ -134,19 +175,58 @@
 .milkdown th, .milkdown td {
   position: relative;
 }
-/* 列宽拖拽手柄 */
-.milkdown .column-resize-handle {
+/* 列宽拖拽手柄（挂在 .editor-scroll 内，随列边缘定位） */
+.col-resize-handle {
   position: absolute;
-  right: -2px;
-  top: 0;
-  bottom: 0;
   width: 4px;
+  border-radius: 2px;
   background: var(--accent);
-  opacity: .4;
+  opacity: .55;
   pointer-events: none;
+  z-index: 6;
 }
-.milkdown.resize-cursor {
+.milkdown.resize-cursor,
+.milkdown.resize-cursor th,
+.milkdown.resize-cursor td {
   cursor: col-resize;
+}
+
+/* ====== YAML Frontmatter ====== */
+.milkdown .frontmatter-block {
+  position: relative;
+  margin: 0 0 1.4em;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-hover);
+}
+.milkdown .frontmatter-block::before {
+  content: 'YAML Front Matter';
+  position: absolute;
+  top: -0.62em;
+  left: 12px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.24em;
+  letter-spacing: .04em;
+  color: var(--text-3);
+  background: var(--bg-surface);
+  border-radius: 4px;
+}
+.milkdown .frontmatter-block pre {
+  padding: 14px 16px;
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: .88em;
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+}
+.milkdown .frontmatter-block pre::before { content: none; }
+.milkdown .frontmatter-block pre code {
+  padding: 0;
+  background: transparent;
 }
 
 /* ====== 代码块（轻量 pre>code 渲染） ====== */

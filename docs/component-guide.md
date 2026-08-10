@@ -10,14 +10,28 @@
 ```
 components/
 ├── Sidebar/        侧栏（文件树 + 大纲）
-├── Editor/         Milkdown 编辑器（含命令式接口）
+├── Editor/         Milkdown 编辑器（含命令式接口 + plugins/ 子插件）
+│   └── plugins/    编辑器插件（frontmatter / footnote / sectionFold 等）
+├── TabBar/         多标签页栏（拖拽排序）
 ├── MenuBar/        菜单栏（数据驱动）
 ├── StatusBar/      状态栏
 ├── ThemeSwitcher/  主题切换器
 ├── SearchBar/      查找替换栏
-├── SettingsDialog/ 设置弹窗（Typora 式分类导航）
+├── SettingsDialog/ 设置弹窗（Typora 式分类导航，拆分为 AppearancePanel / EditorPanel / ShortcutsPanel）
 ├── HelpDialog/     帮助弹窗（快捷键/语法/关于）
 └── ImagesDialog/   图片管理面板
+├── WorkspaceSearchDialog/  工作区搜索对话框
+
+src/renderer/src/hooks/
+├── usePersistedSetting.ts  通用设置持久化 hook
+├── useRecentFiles.ts       最近文件管理 hook
+└── useWritingStats.ts      写作统计 hook
+
+src/renderer/src/lib/
+├── drafts.ts      草稿读写（崩溃恢复）
+├── image-path.ts  图片路径处理（mdimg:// 协议）
+├── pdf.ts         PDF 导出（主进程调用）
+└── stats.ts       写作统计数据模型与日期工具
 
 src/renderer/src/data/
 └── demo-files.ts   演示文件树数据源（正式版换成 Main 进程读目录）
@@ -56,9 +70,11 @@ interface SidebarProps {
 ### Editor — 编辑器（Milkdown）
 
 **路径**：`components/Editor/index.tsx`
+**插件目录**：`components/Editor/plugins/`（`frontmatter` / `footnote` / `sectionFold` / `tableColResize` / `bracketMatch` / `codeLineNumbers` / `customCodeFence` / `searchHighlight` / `blockContext` / `nodeAttrs`）
 
 **职责**：
 - 封装 Milkdown（commonmark + gfm + history + listener 插件）
+- 通过插件系统支持：Frontmatter 元数据、脚注、KaTeX 数学公式（动态加载）、Mermaid 图表（动态加载）、章节折叠、表格列宽拖拽、括号匹配高亮、代码块行号、自定义代码围栏、搜索高亮、块上下文标记
 - 提供所见即所得编辑，内容变化通过回调上抛 Markdown
 - 通过 ref 暴露命令式接口，供 App 分发菜单操作
 
@@ -85,6 +101,7 @@ interface EditorHandle {
 - `useEditor` 只在挂载时执行一次，`onChange` 通过 ref 透传，避免重建编辑器丢光标
 - 切换文档用 `replaceAll` 宏而非卸载重建，保留撤销历史与实例
 - 调用 action 前检查 `EditorStatus.Created`，防止初始化未完成时抛异常
+- 编辑器插件统一放在 `plugins/` 子目录，每个插件是一个独立的 `.ts` 文件
 
 ---
 
@@ -191,12 +208,37 @@ interface SearchBarProps {
 ### SettingsDialog — 设置弹窗（Typora 式）
 
 **路径**：`components/SettingsDialog/index.tsx`
+**子组件**：`AppearancePanel.tsx` / `EditorPanel.tsx` / `ShortcutsPanel.tsx` / `constants.ts`
+**Hook**：`useShortcutRecorder.ts`
 
 **职责**：
-- 左侧分类导航（外观 / 编辑器）+ 右侧配置面板
-- 外观：主题卡片、字号分段选择、缩放控制
-- 编辑器：自动保存、打字机模式开关
+- 左侧分类导航（外观 / 编辑器 / 快捷键）+ 右侧配置面板
+- 外观面板：主题卡片、字号分段选择、缩放控制、自定义 CSS 导入
+- 编辑器面板：自动保存、打字机模式、拼写检查（含语言选择）、多窗口模式、空白区点击聚焦、代码块行号、图床配置
+- 快捷键面板：18 项全局快捷键可录入新组合键（需含 Ctrl 或功能键）、冲突检测、清除停用、一键恢复默认
 - 全部受控组件，状态与持久化由 App 负责；Esc/点背景关闭
+
+### TabBar — 多标签页栏
+
+**路径**：`components/TabBar/index.tsx`
+
+**职责**：
+- 展示所有已打开文档的标签，点击切换、× 按钮关闭
+- 支持拖拽排序（重排 openFiles 顺序）
+- 已打开文件用圆点标记，未保存文档标签带 dirty 指示点
+- 样式文件：`styles/components/tabbar.css`
+
+**Props**：
+```typescript
+interface TabBarProps {
+  openFiles: OpenFile[]
+  activeFileId: string
+  savedMap: Record<string, boolean>
+  onSwitch: (id: string) => void
+  onClose: (id: string) => void
+  onReorder: (from: number, to: number) => void
+}
+```
 
 ### HelpDialog — 帮助弹窗
 
@@ -248,6 +290,51 @@ interface HelpDialogProps {
 3. 如需专属样式，在 `styles/components/` 下新建 css 并在 `main.tsx` 中导入
 4. 在 `App.tsx` 中引入并使用
 5. 更新本文档的组件说明
+
+---
+
+## Hook 说明
+
+### usePersistedSetting
+
+**路径**：`hooks/usePersistedSetting.ts`
+
+通用设置持久化 hook，在设置加载完成后将值写回磁盘。支持防抖写入（拖拽、输入等高频变化场景）。
+
+```typescript
+usePersistedSetting<T>(key: string, value: T, readyRef: Ref<boolean>, debounceMs?: number): void
+```
+
+### useRecentFiles
+
+**路径**：`hooks/useRecentFiles.ts`
+
+管理最近打开的磁盘文件列表（置顶 + 去重 + 上限 10），防抖 2 秒持久化。
+
+```typescript
+const { recentFiles, setRecentFiles, recordRecent } = useRecentFiles(readyRef)
+```
+
+### useWritingStats
+
+**路径**：`hooks/useWritingStats.ts`
+
+写作统计 hook：追踪字数净增（同文件字数增加才计入）+ 写作时长（每 60 秒检查最近 90 秒内是否有编辑），持久化防抖 10 秒。
+
+```typescript
+const { writingStats, setWritingStats } = useWritingStats(wordCount, activeFileId, readyRef)
+```
+
+---
+
+## 模块说明：lib/
+
+`src/renderer/src/lib/` 存放与编辑器核心逻辑相关的工具模块：
+
+- **`drafts.ts`**：草稿读写（崩溃/退出后恢复未保存内容）
+- **`image-path.ts`**：图片路径处理，支持 `mdimg://` 本地协议
+- **`pdf.ts`**：PDF 导出逻辑（调用主进程 printToPDF）
+- **`stats.ts`**：写作统计的数据模型与日期工具（`todayStr`、`rollStatsDate`）
 
 ---
 

@@ -53,7 +53,7 @@ interface WorkspaceSearchDialogProps {
   workspaceName: string
   onClose: () => void
   /** 点击结果：打开对应文件（并把查询词带入文档内搜索） */
-  onSelect: (path: string, query: string) => void
+  onSelect: (path: string, query: string, opts?: { caseSensitive: boolean; useRegex: boolean }) => void
 }
 
 /**
@@ -183,7 +183,7 @@ export function WorkspaceSearchDialog({
                 <div
                   key={`${m.path}-${m.line}-${i}`}
                   className="ws-result-item"
-                  onClick={() => onSelect(m.path, query.trim())}
+                  onClick={() => onSelect(m.path, query.trim(), { caseSensitive, useRegex })}
                   title={m.path}
                 >
                   <div className="ws-result-loc">

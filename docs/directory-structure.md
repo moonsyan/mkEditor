@@ -162,8 +162,8 @@ markdownSoftV3/
 │   ├── main/
 │   │   ├── index.ts                   # 主进程入口（已移除原生菜单）
 │   │   ├── ipc/handlers.ts            # 文件打开/保存/另存为/设置 IPC
-│   │   ├── settings/settings-store.ts # 设置持久化（JSON 存储）
-│   │   └── window/window-manager.ts   # 窗口管理
+│   │   ├── window/window-manager.ts   # 窗口管理（含多窗口支持）
+│   │   └── settings/settings-store.ts # 设置持久化（JSON 存储）
 │   ├── preload/
 │   │   ├── index.ts                   # contextBridge 暴露 desktopAPI
 │   │   └── api.d.ts                   # DesktopAPI 类型声明
@@ -175,22 +175,34 @@ markdownSoftV3/
 │           │   ├── MenuBar/index.tsx      # 菜单栏（fixed 定位下拉）
 │           │   ├── Sidebar/index.tsx      # 文件树 + 大纲
 │           │   ├── Editor/index.tsx       # Milkdown 编辑器（命令式接口）
+│           │   │   └── plugins/           # Milkdown 插件集（frontmatter/footnote/sectionFold 等）
+│           │   ├── TabBar/index.tsx       # 多标签页栏（拖拽排序）
 │           │   ├── StatusBar/index.tsx    # 状态栏
 │           │   ├── ThemeSwitcher/index.tsx
 │           │   ├── SearchBar/index.tsx    # 查找替换栏
-│           │   ├── SettingsDialog/index.tsx # 设置弹窗
-│           │   ├── HelpDialog/index.tsx    # 帮助弹窗
-│           │   └── ImagesDialog/index.tsx # 图片管理面板
+│           │   ├── SettingsDialog/        # 设置弹窗（含子面板：AppearancePanel/EditorPanel/ShortcutsPanel）
+│           │   ├── HelpDialog/index.tsx   # 帮助弹窗
+│           │   ├── ImagesDialog/index.tsx # 图片管理面板
+│           │   └── WorkspaceSearchDialog/index.tsx # 工作区搜索对话框
+│           ├── hooks/
+│           │   ├── usePersistedSetting.ts  # 通用设置持久化
+│           │   ├── useRecentFiles.ts       # 最近文件管理
+│           │   └── useWritingStats.ts      # 写作统计
+│           ├── lib/
+│           │   ├── drafts.ts       # 草稿读写（崩溃恢复）
+│           │   ├── image-path.ts   # 图片路径处理（mdimg://）
+│           │   ├── pdf.ts          # PDF 导出
+│           │   └── stats.ts        # 写作统计数据模型
 │           ├── data/demo-files.ts         # 演示文件树数据源
 │           └── styles/
 │               ├── global.css / variables.css / typography.css
 │               ├── themes/ (default/dark/ocean/rose).css
-│               └── components/ (sidebar/editor/menubar/statusbar/searchbar/settings/helpdialog/imagesdialog).css
+│               └── components/ (sidebar/editor/menubar/statusbar/searchbar/settings/helpdialog/imagesdialog/tabbar).css
 ├── package.json
 ├── electron.vite.config.ts
 └── tsconfig(.node/.web).json
 ```
 
-**当前实际落地状态（2026-08-09）**：`main/`、`preload/`、`shared/ipc/` 核心架构已完整；`renderer/` 所有 UI 组件已全部落地（9 个组件）；样式系统完整（全局/主题/组件 CSS）；`main/settings/` 设置持久化已实现。规划中的 `main/bootstrap`、`main/file`、`main/menu`、`renderer/src/features`、`core`、`ports`、`shared/dto`、`shared/result` 尚未创建，当前阶段暂不需要，待架构重构时落地。
+**当前实际落地状态（2026-08-10）**：`main/`、`preload/`、`shared/ipc/` 核心架构已完整；`renderer/` 所有 UI 组件已全部落地（11 个组件 + TabBar + plugins/）；hooks/（3 个）与 lib/（4 个）模块已落地；样式系统完整（全局/主题/组件 CSS）；设置持久化已实现。规划中的 `main/bootstrap`、`main/file`、`main/menu`、`renderer/src/features`、`core`、`ports`、`shared/dto`、`shared/result` 尚未创建，当前阶段暂不需要，待架构重构时落地。
 
 > 注意：原生菜单已移除（`Menu.setApplicationMenu(null)`），所有快捷键由渲染进程接管，避免系统默认行为与编辑器冲突。开发模式 DevTools 快捷键（Ctrl+Shift+I）由主进程 before-input-event 保留。

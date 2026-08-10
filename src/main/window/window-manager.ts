@@ -52,14 +52,28 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
     mainWindow.show()
   })
 
-  // 白屏自愈：渲染进程崩溃或加载失败时自动重载，避免窗口挂死
+  // 白屏自愈：渲染进程崩溃或加载失败时自动重载，避免窗口挂死；
+  // 连续自愈设上限，防止持续性失败（如文件损坏）演变为重载风暴
+  let autoReloads = 0
+  const MAX_AUTO_RELOADS = 3
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    if (details.reason === 'crashed' || details.reason === 'killed') {
+    if (
+      (details.reason === 'crashed' || details.reason === 'killed') &&
+      autoReloads < MAX_AUTO_RELOADS
+    ) {
+      autoReloads++
       mainWindow.webContents.reload()
     }
   })
   mainWindow.webContents.on('did-fail-load', () => {
-    mainWindow.webContents.reload()
+    if (autoReloads < MAX_AUTO_RELOADS) {
+      autoReloads++
+      mainWindow.webContents.reload()
+    }
+  })
+  // 加载成功后重置计数，允许新一轮故障再次自愈
+  mainWindow.webContents.on('did-finish-load', () => {
+    autoReloads = 0
   })
 
   // 关闭确认：有未保存内容时弹原生对话框（修复 beforeunload 静默阻止关闭的问题）
@@ -78,11 +92,31 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
       detail: '关闭前要保存这些更改吗？',
     })
     if (choice === 0) {
-      // 保存全部后关闭（destroy 绕过 beforeunload）
+      // 保存全部后关闭（destroy 绕过 beforeunload）；saveAll 返回保存失败的文件名清单。
+      // 失败文件（外部冲突等）的未保存内容已由渲染端写入草稿兜底，
+      // 此时再次确认告知用户；选"取消"则保留窗口手动处理
       wc.executeJavaScript(
-        'window.__markdownsoft_saveAll ? window.__markdownsoft_saveAll() : Promise.resolve()',
+        'window.__markdownsoft_saveAll ? window.__markdownsoft_saveAll() : Promise.resolve([])',
       )
-        .then(() => mainWindow.destroy())
+        .then((failed: unknown) => {
+          if (Array.isArray(failed) && failed.length > 0) {
+            const names = failed.filter((n): n is string => typeof n === 'string')
+            if (names.length > 0) {
+              const proceed = dialog.showMessageBoxSync(mainWindow, {
+                type: 'warning',
+                buttons: ['仍然关闭', '取消'],
+                defaultId: 0,
+                cancelId: 1,
+                message: `${names.length} 个文件未能保存`,
+                detail:
+                  `「${names.join('」「')}」已被外部修改，未覆盖保存。\n` +
+                  '未保存的内容已保留，下次启动打开时会自动恢复为未保存状态。\n\n仍然要关闭吗？',
+              })
+              if (proceed === 1) return // 取消：保持窗口打开
+            }
+          }
+          mainWindow.destroy()
+        })
         .catch(() => mainWindow.destroy())
     } else if (choice === 1) {
       mainWindow.destroy()

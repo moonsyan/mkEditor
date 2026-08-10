@@ -493,6 +493,26 @@ export function Sidebar({
                     ))}
                   </div>
                 )}
+                {/* 外部打开的文件（不在工作区目录树内的文件也可在此导航） */}
+                {externalFiles.length > 0 && (
+                  <div>
+                    <div className="tree-section-label">外部文件</div>
+                    {externalFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className={`tree-row tree-file-row ${activeFileId === file.id ? 'active' : ''}`}
+                        style={{ paddingLeft: 8 }}
+                        onClick={() => {
+                          if (file.path) onSelectWorkspaceFile(file.path)
+                        }}
+                      >
+                        <span className="tree-chevron-slot" />
+                        <FileIcon />
+                        <span className="tree-name">{file.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </>
             ) : (
               <>

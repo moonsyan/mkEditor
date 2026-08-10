@@ -411,3 +411,38 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* 精细调节滑块（字号/宽度/行距，对标 Typora 的逐像素/逐档调节） */
+.fine-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+  margin: 0;
+}
+.fine-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg, #fff);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  transition: transform var(--dur) var(--ease);
+}
+.fine-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.fine-slider::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg, #fff);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}

@@ -92,10 +92,13 @@ app.whenReady().then(initApp)
 // 退出保护：未保存内容的确认由每个窗口的渲染层 beforeunload 拦截（见 App.tsx）；
 // 此处无需重复处理。
 
-// 安全: 禁止导航到外部
+// 安全: 禁止导航到外部；新开窗口请求转交系统浏览器（仅限安全协议，
+// 避免恶意文档中的 javascript:/file:/自定义协议链接被拉起）
 app.on('web-contents-created', (_, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
+      shell.openExternal(url)
+    }
     return { action: 'deny' }
   })
 })

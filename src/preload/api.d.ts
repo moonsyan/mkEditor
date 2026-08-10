@@ -108,7 +108,7 @@ export interface SaveResult {
 /** 另存为结果 */
 export interface SaveAsResult {
   ok: boolean
-  data?: { path: string; name: string }
+  data?: { path: string; name: string; modifiedTime?: number }
   error?: { code: string; message?: string }
 }
 

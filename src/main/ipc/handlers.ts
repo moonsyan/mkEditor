@@ -260,11 +260,19 @@ export function registerIpcHandlers(): void {
 
       try {
         await writeFile(result.filePath, args.content, 'utf-8')
+        // 返回真实落盘 mtime（渲染端用于下次保存的冲突检测，比 Date.now() 更准）
+        let modifiedTime = 0
+        try {
+          modifiedTime = (await stat(result.filePath)).mtimeMs
+        } catch {
+          /* stat 失败不阻断，渲染端会降级用当前时间 */
+        }
         return {
           ok: true,
           data: {
             path: result.filePath,
             name: result.filePath.split(/[/\\]/).pop() || 'untitled.md',
+            modifiedTime,
           },
         }
       } catch (err) {

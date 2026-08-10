@@ -14,7 +14,6 @@ import { Selection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { InputRule } from '@milkdown/kit/prose/inputrules'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import {
   gfm,
@@ -33,329 +32,32 @@ import {
   getMarkdown,
   forceUpdate,
   callCommand,
-  $inputRule,
-  $node,
   $prose,
 } from '@milkdown/kit/utils'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
-import type { MarkdownNode } from '@milkdown/kit/transformer'
-import { footnote as footnoteSyntax } from 'micromark-extension-footnote'
-import {
-  footnoteFromMarkdown,
-  footnoteToMarkdown,
-} from 'mdast-util-footnote'
 
 /* 注意：plugin-math（KaTeX）与 plugin-diagram（Mermaid）体积很大，
  * 不在启动时静态导入，而是检测到公式/图表内容时动态加载，
  * 避免渲染进程启动内存峰值过高。 */
 
-/* ==================== 搜索引擎（装饰高亮 + 正则 + 计数） ==================== */
+/* ==================== ProseMirror 插件与语法扩展（已拆分至 plugins/） ==================== */
 
-const searchKey = new PluginKey('search-highlight')
-
-interface SearchHit {
-  from: number
-  to: number
-}
-
-/** 模块级搜索状态（单编辑器实例，安全） */
-let searchHits: SearchHit[] = []
-let searchCurrent = -1
-let lastQuery = ''
-let lastUseRegex = false
-let lastCaseSensitive = false
-let lastWholeWord = false
-
-function buildSearchRegex(
-  query: string,
-  useRegex: boolean,
-  caseSensitive: boolean,
-  wholeWord = false,
-): RegExp | null {
-  try {
-    let source = useRegex
-      ? query
-      : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    if (!source) return null
-    // 全字匹配：用 \b 包裹（正则模式下同样包裹整个表达式，与 VSCode 一致）
-    if (wholeWord) source = `\\b(?:${source})\\b`
-    return new RegExp(source, caseSensitive ? 'g' : 'gi')
-  } catch {
-    return null
-  }
-}
-
-function collectHits(doc: ProseNode, re: RegExp): SearchHit[] {
-  const hits: SearchHit[] = []
-  doc.descendants((node, pos) => {
-    // B3：搜索跳过代码块（与 Typora 对齐，避免误匹配代码内容）
-    if (node.type.name === 'code_block') return false
-    if (!node.isText) return
-    const text = node.text ?? ''
-    re.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = re.exec(text)) !== null) {
-      if (m[0].length === 0) {
-        re.lastIndex++
-        continue
-      }
-      hits.push({ from: pos + m.index, to: pos + m.index + m[0].length })
-    }
-  })
-  return hits
-}
-
-/**
- * 节点属性装饰：代码块/行内代码 spellcheck=false（拼写检查排除），图片 draggable（拖拽重定位）。
- * 用 ProseMirror 装饰而非外部 DOM 修改，避免与 ProseMirror 自身 DOM 同步互相触发导致死循环。
- */
-function buildNodeAttrDecos(doc: ProseNode): DecorationSet {
-  const decos: Decoration[] = []
-  doc.descendants((node, pos) => {
-    if (node.type.name === 'code_block') {
-      decos.push(Decoration.node(pos, pos + node.nodeSize, { spellcheck: 'false' }))
-      return false
-    }
-    if (node.type.name === 'image') {
-      decos.push(Decoration.node(pos, pos + node.nodeSize, { draggable: 'true' }))
-      return false
-    }
-    if (node.isText && node.marks.some((m) => m.type.name === 'code')) {
-      decos.push(Decoration.inline(pos, pos + node.nodeSize, { spellcheck: 'false' }))
-    }
-  })
-  return DecorationSet.create(doc, decos)
-}
-
-const nodeAttrsKey = new PluginKey('node-attrs')
-const nodeAttrsPlugin = new Plugin({
-  key: nodeAttrsKey,
-  state: {
-    init: (_config, state) => buildNodeAttrDecos(state.doc),
-    apply: (tr, prev) => (tr.docChanged ? buildNodeAttrDecos(tr.doc) : prev),
-  },
-  props: {
-    decorations(state) {
-      return nodeAttrsKey.getState(state) as DecorationSet
-    },
-  },
-})
-
-/** 搜索高亮插件：装饰集通过 meta 更新 */
-const searchPlugin = new Plugin({
-  key: searchKey,
-  state: {
-    init: () => DecorationSet.empty,
-    apply(tr, prev) {
-      const meta = tr.getMeta(searchKey)
-      if (meta !== undefined) return meta as DecorationSet
-      return (prev as DecorationSet).map(tr.mapping, tr.doc)
-    },
-  },
-  props: {
-    decorations(state) {
-      return searchKey.getState(state) as DecorationSet
-    },
-  },
-})
-
-/* ==================== 代码块行号（装饰 widget，不修改文档） ==================== */
-
-const lineNumKey = new PluginKey('code-line-numbers')
-/** 行号开关（模块级：插件只在编辑器创建时实例化一次，开关变化通过 meta 触发重建） */
-let lineNumbersEnabled = false
-
-/** 为每个代码块生成行号 widget + 节点 class 装饰 */
-function buildLineNumDecos(doc: ProseNode): DecorationSet {
-  if (!lineNumbersEnabled) return DecorationSet.empty
-  const decos: Decoration[] = []
-  doc.descendants((node, pos) => {
-    if (node.type.name !== 'code_block') return
-    const lineCount = Math.max(1, node.textContent.split('\n').length)
-    // 节点 class：CSS 据此给 pre 留出 gutter 空间
-    decos.push(Decoration.node(pos, pos + node.nodeSize, { class: 'has-line-numbers' }))
-    // widget 插入 code 内部起始处，绝对定位到 pre 左侧
-    decos.push(
-      Decoration.widget(
-        pos + 1,
-        () => {
-          const el = document.createElement('span')
-          el.className = 'code-line-numbers'
-          el.setAttribute('aria-hidden', 'true')
-          let text = ''
-          for (let i = 1; i <= lineCount; i++) text += (i > 1 ? '\n' : '') + i
-          el.textContent = text
-          return el
-        },
-        { side: -1, ignoreSelection: true },
-      ),
-    )
-    return false
-  })
-  return DecorationSet.create(doc, decos)
-}
-
-const lineNumPlugin = new Plugin({
-  key: lineNumKey,
-  state: {
-    init: (_config, state) => buildLineNumDecos(state.doc),
-    apply(tr, prev) {
-      // 文档变化或开关切换（带 lineNumKey meta）时重建
-      if (tr.docChanged || tr.getMeta(lineNumKey) !== undefined) {
-        return buildLineNumDecos(tr.doc)
-      }
-      return (prev as DecorationSet).map(tr.mapping, tr.doc)
-    },
-  },
-  props: {
-    decorations(state) {
-      return lineNumKey.getState(state) as DecorationSet
-    },
-  },
-})
-
-/* ==================== 自定义语法扩展 ==================== */
-
-/**
- * 自定义围栏输入规则（补充内置规则）：
- * 支持 ~~~ 围栏与大写语言名（如 ```Python），
- * 输入 ```python / ~~~python + 空格或回车即创建带语言的代码块。
- */
-const customCodeFenceRule = $inputRule((ctx) => {
-  return new InputRule(
-    /^(```|~~~)([A-Za-z0-9+#.-]*)[\s\n]$/,
-    (state, match, start, end) => {
-      const codeBlockType = ctx.get(schemaCtx).nodes.code_block
-      if (!codeBlockType) return null
-      const language = (match[2] ?? '').toLowerCase()
-      const node = codeBlockType.create({ language })
-      const tr = state.tr.replaceRangeWith(start, end, node)
-      return tr
-        .setSelection(TextSelection.create(tr.doc, start + 1))
-        .scrollIntoView()
-    },
-  )
-})
-
-/* ==================== 脚注支持 ==================== */
-
-/** unified 插件：让 remark 解析/序列化 [^1] 脚注语法 */
-interface UnifiedLike {
-  data(): Record<string, unknown[] | undefined>
-}
-function footnoteRemarkPlugin(this: UnifiedLike) {
-  const data = this.data()
-  const add = (field: string, value: unknown) => {
-    ;(data[field] = data[field] ?? []).push(value)
-  }
-  add('micromarkExtensions', footnoteSyntax)
-  add('fromMarkdownExtensions', footnoteFromMarkdown)
-  add('toMarkdownExtensions', footnoteToMarkdown)
-}
-
-/** 脚注引用 [^1]（行内原子节点，渲染为上标） */
-const footnoteRefSchema = $node('footnote_ref', () => ({
-  group: 'inline',
-  inline: true,
-  atom: true,
-  attrs: {
-    label: { default: '' },
-    identifier: { default: '' },
-  },
-  parseMarkdown: {
-    match: (n) => n.type === 'footnoteReference',
-    runner: (state, node, type) => {
-      state.addNode(type, {
-        label: node.label as string,
-        identifier: node.identifier as string,
-      })
-    },
-  },
-  toMarkdown: {
-    match: (n) => n.type.name === 'footnote_ref',
-    runner: (state, node) => {
-      state.addNode('footnoteReference', undefined, undefined, {
-        label: node.attrs.label,
-        identifier: node.attrs.identifier,
-      })
-    },
-  },
-  toDOM: (node) => [
-    'sup',
-    { class: 'footnote-ref', 'data-label': node.attrs.label },
-    `[^${node.attrs.label}]`,
-  ],
-}))
-
-/** 脚注定义 [^1]: 内容（块级节点） */
-const footnoteDefSchema = $node('footnote_def', () => ({
-  group: 'block',
-  content: 'inline*',
-  attrs: {
-    label: { default: '' },
-    identifier: { default: '' },
-  },
-  parseMarkdown: {
-    match: (n) => n.type === 'footnoteDefinition',
-    runner: (state, node, type) => {
-      state.openNode(type, {
-        label: node.label as string,
-        identifier: node.identifier as string,
-      })
-      state.next((node.children ?? []) as MarkdownNode[])
-      state.closeNode()
-    },
-  },
-  toMarkdown: {
-    match: (n) => n.type.name === 'footnote_def',
-    runner: (state, node) => {
-      state.openNode('footnoteDefinition', undefined, {
-        label: node.attrs.label,
-        identifier: node.attrs.identifier,
-      })
-      state.next(node.content)
-      state.closeNode()
-    },
-  },
-  toDOM: (node) => [
-    'div',
-    { class: 'footnote-def', 'data-label': node.attrs.label },
-    0,
-  ],
-}))
-
-/** 行首输入 [^label]: 空格 → 转为脚注定义块 */
-const footnoteDefInputRule = $inputRule((ctx) => {
-  const schema = ctx.get(schemaCtx)
-  return new InputRule(/^\[\^([^\]\s]+)\]:\s$/, (state, match, start, end) => {
-    const type = schema.nodes.footnote_def
-    if (!type) return null
-    const label = match[1]
-    const tr = state.tr.replaceRangeWith(
-      start,
-      end,
-      type.create({ label, identifier: label.toLowerCase() }),
-    )
-    return tr
-      .setSelection(TextSelection.create(tr.doc, start + 1))
-      .scrollIntoView()
-  })
-})
-
-/** 输入 [^label] → 转为脚注引用（上标） */
-const footnoteRefInputRule = $inputRule((ctx) => {
-  const schema = ctx.get(schemaCtx)
-  return new InputRule(/\[\^([^\]\s]+)\]$/, (state, match, start, end) => {
-    const type = schema.nodes.footnote_ref
-    if (!type) return null
-    const label = match[1]
-    return state.tr.replaceRangeWith(
-      start,
-      end,
-      type.create({ label, identifier: label.toLowerCase() }),
-    )
-  })
-})
+import { searchKey, searchState, buildSearchRegex, collectHits, searchPlugin } from './plugins/searchHighlight'
+import { nodeAttrsPlugin } from './plugins/nodeAttrs'
+import { lineNumKey, setLineNumbersEnabled, lineNumPlugin } from './plugins/codeLineNumbers'
+import { blockContextPlugin } from './plugins/blockContext'
+import { bracketMatchPlugin } from './plugins/bracketMatch'
+import { sectionFoldKey, sectionFoldPlugin } from './plugins/sectionFold'
+import { customCodeFenceRule } from './plugins/customCodeFence'
+import {
+  footnoteRemarkPlugin,
+  footnoteRefSchema,
+  footnoteDefSchema,
+  footnoteDefInputRule,
+  footnoteRefInputRule,
+} from './plugins/footnote'
+import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from './plugins/frontmatter'
+import { tableColResizePlugin } from './plugins/tableColResize'
 
 /* ==================== 组件 ==================== */
 
@@ -588,7 +290,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     // 行号开关同步：更新模块级标志并触发装饰重建（编辑器未创建时由 init 读标志）
     useEffect(() => {
-      lineNumbersEnabled = codeLineNumbers
+      setLineNumbersEnabled(codeLineNumbers)
       const ed = editorRef.current
       if (ed?.status === EditorStatus.Created) {
         const view = ed.ctx.get(editorViewCtx)
@@ -625,6 +327,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             plugin: footnoteRemarkPlugin as never,
             options: {},
           })
+          // 注册 YAML frontmatter 解析（文档头部 --- 元数据块）
+          ctx.get(remarkPluginsCtx).push({
+            plugin: frontmatterRemarkPlugin as never,
+            options: {},
+          })
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             changeRef.current(markdown)
             ensureLazyPlugins(markdown)
@@ -636,6 +343,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             ensureLazyPlugins(initialRef.current)
           }
         })
+        // frontmatter 内 Enter 行为（须先于 commonmark 预设注册才能抢先其 Enter 绑定）
+        .use(frontmatterKeymap)
         .use(commonmark)
         .use(gfm)
         .use(history)
@@ -649,6 +358,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           footnoteDefInputRule,
           footnoteRefInputRule,
         ])
+        // YAML frontmatter 元数据块（对标 Typora）
+        .use(frontmatterSchema)
+        // 表格列宽可视化拖拽（视图级，不写入 Markdown）
+        .use($prose(() => tableColResizePlugin))
         .use(customCodeFenceRule)
         // 搜索高亮插件
         .use($prose(() => searchPlugin))
@@ -656,6 +369,12 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use($prose(() => nodeAttrsPlugin))
         // 代码块行号（开关由 codeLineNumbers prop 控制，装饰 widget 实现）
         .use($prose(() => lineNumPlugin))
+        // 块级上下文标记（光标所在块高亮）
+        .use($prose(() => blockContextPlugin))
+        // 前后缀匹配高亮（括号/引号配对高亮）
+        .use($prose(() => bracketMatchPlugin))
+        // 标题段落折叠
+        .use($prose(() => sectionFoldPlugin))
         // 光标位置上报（供状态栏/大纲高亮；rAF 节流，连续输入每帧只算一次）
         .use(
           $prose(() => {
@@ -795,41 +514,48 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /* ==================== 图片粘贴 / 拖入 ==================== */
 
+    /** 插入串行队列：多张图片按顺序依次保存并插入，避免并行时顺序随机 */
+    const imageQueueRef = useRef<Promise<void>>(Promise.resolve())
+
     /** 保存图片并插入 Markdown 图片节点（优先图床，未配置/失败时降级本地） */
     const insertImageFile = (file: File) => {
+      imageQueueRef.current = imageQueueRef.current
+        .then(() => insertImageFileTask(file))
+        .catch(() => {})
+    }
+
+    const insertImageFileTask = async (file: File) => {
       if (!window.desktopAPI) return
-      void (async () => {
-        const dataUrl = await new Promise<string | null>((resolve) => {
-          const reader = new FileReader()
-          reader.onload = () =>
-            resolve(typeof reader.result === 'string' ? reader.result : null)
-          reader.onerror = () => resolve(null)
-          reader.readAsDataURL(file)
-        })
-        if (!dataUrl) return
-        // 图床路径：配置了 SM.MS 且 token 非空时先尝试上传
-        const host = imageHintsRef.current?.imageHost
-        if (host?.provider === 'smms' && host.token) {
-          const up = await window.desktopAPI.document.uploadImage(dataUrl)
-          if (up.ok && up.data?.url) {
-            const alt = file.name.replace(/\.[^.]+$/, '')
-            editorRef.current?.action(insert(`![${alt}](${up.data.url})`))
-            bumpRender((n) => n + 1)
-            return
-          }
-          // 上传失败：提示后降级本地附件
-          notifyRef.current?.('图床上传失败，已改为保存到本地')
+      const dataUrl = await new Promise<string | null>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () =>
+          resolve(typeof reader.result === 'string' ? reader.result : null)
+        reader.onerror = () => resolve(null)
+        reader.readAsDataURL(file)
+      })
+      if (!dataUrl) return
+      // 图床路径：配置了 SM.MS 且 token 非空时先尝试上传
+      const host = imageHintsRef.current?.imageHost
+      if (host?.provider === 'smms' && host.token) {
+        const up = await window.desktopAPI.document.uploadImage(dataUrl)
+        if (up.ok && up.data?.url) {
+          const alt = file.name.replace(/\.[^.]+$/, '')
+          editorRef.current?.action(insert(`![${alt}](${up.data.url})`))
+          bumpRender((n) => n + 1)
+          return
         }
-        const res = await window.desktopAPI.document.saveImage(
-          dataUrl,
-          imageHintsRef.current,
-        )
-        if (!res.ok || !res.data) return
-        // 统一转为 mdimg 协议 URL（dev/生产环境均可渲染）
-        const url = `mdimg:///${res.data.path.replace(/\\/g, '/')}`
-        editorRef.current?.action(insert(`![${res.data.name}](${url})`))
-        bumpRender((n) => n + 1)
-      })()
+        // 上传失败：提示后降级本地附件
+        notifyRef.current?.('图床上传失败，已改为保存到本地')
+      }
+      const res = await window.desktopAPI.document.saveImage(
+        dataUrl,
+        imageHintsRef.current,
+      )
+      if (!res.ok || !res.data) return
+      // 统一转为 mdimg 协议 URL（dev/生产环境均可渲染）
+      const url = `mdimg:///${res.data.path.replace(/\\/g, '/')}`
+      editorRef.current?.action(insert(`![${res.data.name}](${url})`))
+      bumpRender((n) => n + 1)
     }
 
     /** 粘贴：含图片时保存并插入，否则交给 ProseMirror 默认文本粘贴 */
@@ -1042,7 +768,13 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
       return {
         replaceContent: (markdown) => {
-          ready()?.action(replaceAll(markdown))
+          const ed = ready()
+          if (!ed) return
+          ed.action(replaceAll(markdown))
+          // 清空折叠状态：replaceAll 也是 docChanged 事务，不重置会把
+          // 旧文档的折叠位置映射泄漏到新文档（切换文件时误折叠章节）
+          const view = ed.ctx.get(editorViewCtx)
+          view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
         },
         insertMd: (markdown) => {
           ready()?.action(insert(markdown))
@@ -1071,11 +803,23 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           const ed = ready()
           if (!ed) return ''
           const view = ed.ctx.get(editorViewCtx)
-          // 克隆后清理搜索高亮装饰，导出/预览更干净
+          // 克隆后清理编辑器态装饰：搜索高亮、光标块高亮、括号配对，
+          // 及行号 widget（避免预览/导出混入行号）
           const clone = view.dom.cloneNode(true) as HTMLElement
           clone.querySelectorAll('.search-hit').forEach((el) => {
             el.classList.remove('search-hit', 'current')
           })
+          clone
+            .querySelectorAll('.block-active, .bracket-match')
+            .forEach((el) => el.classList.remove('block-active', 'bracket-match'))
+          // 折叠章节在编辑器内 display:none；预览/导出必须完整展示，
+          // 否则折叠状态下导出会丢失整段内容
+          clone
+            .querySelectorAll('.folded-hidden')
+            .forEach((el) => el.classList.remove('folded-hidden'))
+          clone
+            .querySelectorAll('.code-line-numbers, .fold-toggle')
+            .forEach((el) => el.remove())
           return clone.innerHTML
         },
         focus: () => {
@@ -1125,109 +869,109 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           const ed = ready()
           if (!ed) return { count: 0, current: -1 }
           const view = ed.ctx.get(editorViewCtx)
-          lastQuery = query
-          lastUseRegex = useRegex
-          lastCaseSensitive = caseSensitive
-          lastWholeWord = wholeWord
+          searchState.lastQuery = query
+          searchState.lastUseRegex = useRegex
+          searchState.lastCaseSensitive = caseSensitive
+          searchState.lastWholeWord = wholeWord
           const re = buildSearchRegex(query, useRegex, caseSensitive, wholeWord)
           if (!re) {
-            searchHits = []
-            searchCurrent = -1
+            searchState.hits = []
+            searchState.current = -1
             view.dispatch(view.state.tr.setMeta(searchKey, DecorationSet.empty))
             return { count: 0, current: -1 }
           }
-          searchHits = collectHits(view.state.doc, re)
+          searchState.hits = collectHits(view.state.doc, re)
           // 定位到光标后的第一个匹配（没有则回绕到首个）
           const selPos = view.state.selection.from
-          searchCurrent = searchHits.findIndex((h) => h.from >= selPos)
-          if (searchCurrent === -1 && searchHits.length > 0) searchCurrent = 0
-          const decos = searchHits.map((h, i) =>
+          searchState.current = searchState.hits.findIndex((h) => h.from >= selPos)
+          if (searchState.current === -1 && searchState.hits.length > 0) searchState.current = 0
+          const decos = searchState.hits.map((h, i) =>
             Decoration.inline(h.from, h.to, {
-              class: i === searchCurrent ? 'search-hit current' : 'search-hit',
+              class: i === searchState.current ? 'search-hit current' : 'search-hit',
             }),
           )
           view.dispatch(
             view.state.tr.setMeta(searchKey, DecorationSet.create(view.state.doc, decos)),
           )
-          return { count: searchHits.length, current: searchCurrent }
+          return { count: searchState.hits.length, current: searchState.current }
         },
 
         searchNext: (backwards) => {
           const ed = ready()
-          if (!ed || searchHits.length === 0) return searchCurrent
+          if (!ed || searchState.hits.length === 0) return searchState.current
           const view = ed.ctx.get(editorViewCtx)
-          searchCurrent = backwards
-            ? searchCurrent <= 0
-              ? searchHits.length - 1
-              : searchCurrent - 1
-            : (searchCurrent + 1) % searchHits.length
-          const decos = searchHits.map((h, i) =>
+          searchState.current = backwards
+            ? searchState.current <= 0
+              ? searchState.hits.length - 1
+              : searchState.current - 1
+            : (searchState.current + 1) % searchState.hits.length
+          const decos = searchState.hits.map((h, i) =>
             Decoration.inline(h.from, h.to, {
-              class: i === searchCurrent ? 'search-hit current' : 'search-hit',
+              class: i === searchState.current ? 'search-hit current' : 'search-hit',
             }),
           )
-          const hit = searchHits[searchCurrent]
+          const hit = searchState.hits[searchState.current]
           view.dispatch(
             view.state.tr
               .setMeta(searchKey, DecorationSet.create(view.state.doc, decos))
               .setSelection(TextSelection.create(view.state.doc, hit.from))
               .scrollIntoView(),
           )
-          return searchCurrent
+          return searchState.current
         },
 
         replaceCurrent: (replacement) => {
           const ed = ready()
-          const hit = searchHits[searchCurrent]
-          if (!ed || !hit) return { count: searchHits.length, current: searchCurrent }
+          const hit = searchState.hits[searchState.current]
+          if (!ed || !hit) return { count: searchState.hits.length, current: searchState.current }
           const view = ed.ctx.get(editorViewCtx)
           view.dispatch(
             view.state.tr.insertText(replacement, hit.from, hit.to).scrollIntoView(),
           )
           // 替换后重新搜索（复用 startSearch 逻辑）
           const re = buildSearchRegex(
-            lastQuery,
-            lastUseRegex,
-            lastCaseSensitive,
-            lastWholeWord,
+            searchState.lastQuery,
+            searchState.lastUseRegex,
+            searchState.lastCaseSensitive,
+            searchState.lastWholeWord,
           )
           if (!re) return { count: 0, current: -1 }
-          searchHits = collectHits(view.state.doc, re)
+          searchState.hits = collectHits(view.state.doc, re)
           const selPos = view.state.selection.from
-          searchCurrent = searchHits.findIndex((h) => h.from >= selPos)
-          if (searchCurrent === -1 && searchHits.length > 0) searchCurrent = 0
-          const decos = searchHits.map((h, i) =>
+          searchState.current = searchState.hits.findIndex((h) => h.from >= selPos)
+          if (searchState.current === -1 && searchState.hits.length > 0) searchState.current = 0
+          const decos = searchState.hits.map((h, i) =>
             Decoration.inline(h.from, h.to, {
-              class: i === searchCurrent ? 'search-hit current' : 'search-hit',
+              class: i === searchState.current ? 'search-hit current' : 'search-hit',
             }),
           )
           view.dispatch(
             view.state.tr.setMeta(searchKey, DecorationSet.create(view.state.doc, decos)),
           )
-          return { count: searchHits.length, current: searchCurrent }
+          return { count: searchState.hits.length, current: searchState.current }
         },
 
         replaceAllMatches: (replacement) => {
           const ed = ready()
-          if (!ed || searchHits.length === 0) return 0
+          if (!ed || searchState.hits.length === 0) return 0
           const view = ed.ctx.get(editorViewCtx)
           let tr = view.state.tr
           // 从后往前替换，保证位置不回漂
-          for (let i = searchHits.length - 1; i >= 0; i--) {
-            const h = searchHits[i]
+          for (let i = searchState.hits.length - 1; i >= 0; i--) {
+            const h = searchState.hits[i]
             tr = tr.insertText(replacement, h.from, h.to)
           }
           view.dispatch(tr.scrollIntoView())
-          const n = searchHits.length
-          searchHits = []
-          searchCurrent = -1
+          const n = searchState.hits.length
+          searchState.hits = []
+          searchState.current = -1
           view.dispatch(view.state.tr.setMeta(searchKey, DecorationSet.empty))
           return n
         },
 
         endSearch: () => {
-          searchHits = []
-          searchCurrent = -1
+          searchState.hits = []
+          searchState.current = -1
           const ed = ready()
           if (!ed) return
           const view = ed.ctx.get(editorViewCtx)

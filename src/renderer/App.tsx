@@ -18,9 +18,18 @@ import { ImagesDialog } from './src/components/ImagesDialog'
 import { ExportPdfDialog } from './src/components/ExportPdfDialog'
 import type { PdfOptions } from './src/components/ExportPdfDialog'
 import { WorkspaceSearchDialog } from './src/components/WorkspaceSearchDialog'
+import { TabBar } from './src/components/TabBar'
 import { DEFAULT_SHORTCUTS, mergeShortcuts, comboFromEvent } from './src/data/shortcuts'
 import type { ShortcutMap } from './src/data/shortcuts'
 import { DEMO_FILES, DEMO_TREE, DEFAULT_FILE_ID } from './src/data/demo-files'
+import { loadDrafts, saveDrafts } from './src/lib/drafts'
+import type { DraftMap } from './src/lib/drafts'
+import { rollStatsDate, EMPTY_STATS } from './src/lib/stats'
+import { injectToc } from './src/lib/pdf'
+import { toEditorImages, toStoredImages } from './src/lib/image-path'
+import { usePersistedSetting } from './src/hooks/usePersistedSetting'
+import { useWritingStats } from './src/hooks/useWritingStats'
+import { useRecentFiles } from './src/hooks/useRecentFiles'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
@@ -57,109 +66,6 @@ const TITLEBAR_COLORS: Record<string, { bg: string; symbol: string }> = {
   rose: { bg: '#F5EDED', symbol: '#6B4F4F' },
 }
 
-/** 草稿数据（崩溃/退出后恢复未保存内容） */
-type DraftMap = Record<string, { content: string; savedAt: number }>
-
-/** 读取全部草稿 */
-async function loadDrafts(): Promise<DraftMap> {
-  if (!window.desktopAPI) return {}
-  const res = await window.desktopAPI.settings.get('drafts')
-  return (res?.ok && res.data ? res.data : {}) as DraftMap
-}
-
-/** 写回全部草稿 */
-async function saveDrafts(drafts: DraftMap): Promise<void> {
-  await window.desktopAPI?.settings.set('drafts', drafts)
-}
-
-/** 今天日期 YYYY-MM-DD */
-function todayStr(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`
-}
-
-/** 跨天滚动：旧日期数据归档到 history（保留 30 天） */
-function rollStatsDate(stats: WritingStats): WritingStats {
-  const today = todayStr()
-  if (stats.date === today) return stats
-  const history = [
-    ...stats.history.filter((h) => h.date !== today),
-    { date: stats.date, words: stats.words, minutes: stats.minutes },
-  ].slice(-30)
-  return { date: today, words: 0, minutes: 0, history }
-}
-
-const EMPTY_STATS: WritingStats = { date: '', words: 0, minutes: 0, history: [] }
-
-/** 转义正则特殊字符 */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-/**
- * PDF 目录页：给正文标题打锚点 id，并在开头生成可跳转的目录块。
- * 标题少于 2 个时不生成。
- */
-function injectToc(body: string): string {
-  try {
-    const docEl = new DOMParser().parseFromString(
-      `<div id="__mdroot">${body}</div>`,
-      'text/html',
-    )
-    const root = docEl.getElementById('__mdroot')
-    if (!root) return body
-    const heads = Array.from(root.querySelectorAll('h1, h2, h3'))
-    if (heads.length < 2) return body
-    const items = heads
-      .map((h, i) => {
-        const id = `mdsoft-toc-${i}`
-        h.id = id
-        const lv = Number(h.tagName.slice(1))
-        const text = (h.textContent ?? '').replace(/</g, '&lt;')
-        return `<li class="toc-l${lv}"><a href="#${id}">${text}</a></li>`
-      })
-      .join('')
-    return (
-      `<div class="doc-toc"><div class="doc-toc-title">目录</div><ol class="doc-toc-list">${items}</ol></div>` +
-      root.innerHTML
-    )
-  } catch {
-    return body
-  }
-}
-
-/**
- * 渲染前：把文档相对路径的图片解析为 mdimg 协议（编辑器才能加载本地图）
- * 仅处理非 mdimg/http/data 开头的相对路径
- */
-function toEditorImages(md: string, docDir: string | undefined): string {
-  if (!docDir) return md
-  const base = docDir.replace(/\\/g, '/')
-  // 允许路径含空格（Typora 迁移文档常见）；仅排除已带协议的 src
-  return md.replace(
-    /!\[([^\]]*)\]\((?!mdimg:\/\/|https?:\/\/|data:)([^)]+)\)/g,
-    (_m, alt: string, src: string) => {
-      // 去掉尾部 title（"..."）与首尾空白
-      const clean = src.trim().replace(/\s+"[^"]*"$/, '').replace(/^\.\//, '')
-      return `![${alt}](mdimg:///${base}/${clean})`
-    },
-  )
-}
-
-/**
- * 存储前：把 mdimg 绝对路径回写为相对路径（保证 .md 可移植，其它编辑器也能显示）
- * 仅回写落在当前文档目录下的图片
- */
-function toStoredImages(md: string, docDir: string | undefined): string {
-  if (!docDir) return md
-  const base = docDir.replace(/\\/g, '/')
-  const prefix = `mdimg:///${base}/`
-  const re = new RegExp(`!\\[([^\\]]*)\\]\\(${escapeRegExp(prefix)}([^)]+)\\)`, 'g')
-  return md.replace(re, (_m, alt: string, rel: string) => `![${alt}](${rel})`)
-}
-
 /** 初始打开的文件列表（按文件树顺序） */
 const INITIAL_FILES: OpenFile[] = DEMO_TREE.flatMap((folder) =>
   folder.fileIds.map((id) => ({ id, name: DEMO_FILES[id].name })),
@@ -189,6 +95,10 @@ const INITIAL_SAVED: Record<string, boolean> = Object.fromEntries(
 
 let untitledCounter = 1
 
+/** HTML 特殊字符转义（导出 HTML 的 title 来自文件名，可能含 & < >） */
+const escapeHtmlText = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
 export default function App(): JSX.Element {
   const editorRef = useRef<EditorHandle>(null)
   const editorAreaRef = useRef<HTMLDivElement>(null)
@@ -210,16 +120,15 @@ export default function App(): JSX.Element {
   const [searchCurrent, setSearchCurrent] = useState(-1)
   /** 分栏预览 */
   const [previewMode, setPreviewMode] = useState(false)
-  const [previewHtml, setPreviewHtml] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [helpView, setHelpView] = useState<HelpView>(null)
   const [imagesOpen, setImagesOpen] = useState(false)
   const [autosave, setAutosave] = useState(true)
   const [spellcheck, setSpellcheck] = useState(false)
   const [multiWindow, setMultiWindow] = useState(false)
-  const [fontSize, setFontSize] = useState<FontSize>('md')
-  const [contentWidth, setContentWidth] = useState<ContentWidth>('standard')
-  const [lineHeight, setLineHeight] = useState<LineHeight>('standard')
+  const [fontSize, setFontSize] = useState<FontSize>(16)
+  const [contentWidth, setContentWidth] = useState<ContentWidth>(900)
+  const [lineHeight, setLineHeight] = useState<LineHeight>(1.85)
   const [contentFont, setContentFont] = useState<ContentFont>('default')
 
   /** 编辑区缩放（0.7–1.8，Ctrl+滚轮 / Ctrl+= / Ctrl+-） */
@@ -237,15 +146,6 @@ export default function App(): JSX.Element {
   const [toast, setToast] = useState('')
   /** 打开的工作区文件夹 */
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null)
-  /** 写作统计 */
-  const [writingStats, setWritingStats] = useState<WritingStats>(() => ({
-    date: todayStr(),
-    words: 0,
-    minutes: 0,
-    history: [],
-  }))
-  /** 最近打开的磁盘文件 */
-  const [recentFiles, setRecentFiles] = useState<RecentFile[]>([])
   /** 光标位置（行/列 + 当前标题 + 标题索引 + 选中字数） */
   const [cursorPos, setCursorPos] = useState<{
     line: number
@@ -293,6 +193,26 @@ export default function App(): JSX.Element {
   const shortcutLookupRef = useRef<Record<string, string>>({})
 
   const activeContent = contents[activeFileId] ?? ''
+
+  // 字数统计（先剥离 Markdown 语法符号，只统计正文）
+  const { wordCount, lineCount } = useMemo(() => {
+    const plain = activeContent
+      // 头部 YAML frontmatter 元数据不计入正文
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
+      .replace(/^#{1,6}\s+/gm, '')
+      .replace(/^>\s?/gm, '')
+      .replace(/^[-*+]\s+\[[ x]\]\s+/gm, '')
+      .replace(/^[-*+]\s+/gm, '')
+      .replace(/^\d+\.\s+/gm, '')
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+      .replace(/[*_~`|]/g, '')
+    const text = plain.trim()
+    return {
+      wordCount: text.replace(/\s/g, '').length,
+      lineCount: text ? text.split('\n').length : 0,
+    }
+  }, [activeContent])
   const saved = savedMap[activeFileId] ?? true
   const activeFile = openFiles.find((f) => f.id === activeFileId)
 
@@ -325,6 +245,11 @@ export default function App(): JSX.Element {
   // 启动时加载持久化设置，并恢复会话与草稿（加载完成前不写回）
   const settingsReadyRef = useRef(false)
   const settingsInitRef = useRef(false)
+
+  /* ==================== 写作统计与最近文件（垂直 hook） ==================== */
+  const { writingStats, setWritingStats } = useWritingStats(wordCount, activeFileId, settingsReadyRef)
+  const { recentFiles, setRecentFiles, recordRecent } = useRecentFiles(settingsReadyRef)
+
   useEffect(() => {
     // 防 StrictMode 双执行：会话恢复只跑一次（去重后重复执行无害，但避免双倍 IPC 读取）
     if (settingsInitRef.current) return
@@ -362,8 +287,16 @@ export default function App(): JSX.Element {
         if (a?.ok && typeof a.data === 'boolean') setAutosave(a.data)
         if (sp?.ok && typeof sp.data === 'boolean') setSpellcheck(sp.data)
         if (mw?.ok && typeof mw.data === 'boolean') setMultiWindow(mw.data)
-        if (f?.ok && (f.data === 'sm' || f.data === 'md' || f.data === 'lg')) {
-          setFontSize(f.data)
+        if (f?.ok) {
+          const v =
+            typeof f.data === 'number'
+              ? f.data
+              : f.data === 'sm'
+                ? 14
+                : f.data === 'lg'
+                  ? 18
+                  : 16
+          setFontSize(v)
         }
         if (z?.ok && typeof z.data === 'number') {
           setZoom(Math.min(1.8, Math.max(0.7, z.data)))
@@ -371,17 +304,27 @@ export default function App(): JSX.Element {
         if (sw?.ok && typeof sw.data === 'number') {
           setSidebarWidth(Math.min(480, Math.max(180, sw.data)))
         }
-        if (
-          cw?.ok &&
-          (cw.data === 'narrow' || cw.data === 'standard' || cw.data === 'wide')
-        ) {
-          setContentWidth(cw.data)
+        if (cw?.ok) {
+          const v =
+            typeof cw.data === 'number'
+              ? cw.data
+              : cw.data === 'narrow'
+                ? 640
+                : cw.data === 'wide'
+                  ? 1200
+                  : 900
+          setContentWidth(v)
         }
-        if (
-          lh?.ok &&
-          (lh.data === 'compact' || lh.data === 'standard' || lh.data === 'loose')
-        ) {
-          setLineHeight(lh.data)
+        if (lh?.ok) {
+          const v =
+            typeof lh.data === 'number'
+              ? lh.data
+              : lh.data === 'compact'
+                ? 1.65
+                : lh.data === 'loose'
+                  ? 2.1
+                  : 1.85
+          setLineHeight(v)
         }
         if (
           cf?.ok &&
@@ -572,11 +515,12 @@ export default function App(): JSX.Element {
 
         /* ---- fresh 窗口携带的文件：直接打开（右键"在新窗口打开"，U7） ---- */
         if (FRESH_FILE_PATH) {
-          // 等编辑器创建完成再打开，避免 replaceContent 被静默跳过
+          // 等编辑器创建完成再打开，避免 replaceContent 被静默跳过（重试至多 2 秒）
+          let openTries = 0
           const openWhenReady = () => {
             if (editorRef.current?.isReady()) {
               void handleSelectWorkspaceFile(FRESH_FILE_PATH)
-            } else {
+            } else if (openTries++ < 20) {
               setTimeout(openWhenReady, 100)
             }
           }
@@ -594,81 +538,57 @@ export default function App(): JSX.Element {
     // 同步 Windows 标题栏覆盖层颜色，让系统按钮区与顶栏融为一体
     const colors = TITLEBAR_COLORS[theme] ?? TITLEBAR_COLORS.default
     window.desktopAPI?.window.setTitlebarColor(colors.bg, colors.symbol).catch(() => {})
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('theme', theme).catch(() => {})
-    }
   }, [theme])
+  usePersistedSetting('theme', theme, settingsReadyRef)
 
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('autosave', autosave).catch(() => {})
-    }
-  }, [autosave])
+  usePersistedSetting('autosave', autosave, settingsReadyRef)
 
   // 拼写检查：同步会话级开关 + 语言，并持久化
   useEffect(() => {
     window.desktopAPI?.window.setSpellcheck(spellcheck, spellcheckLang).catch(() => {})
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('spellcheck', spellcheck).catch(() => {})
-      window.desktopAPI?.settings.set('spellcheckLang', spellcheckLang).catch(() => {})
-    }
   }, [spellcheck, spellcheckLang])
+  usePersistedSetting('spellcheck', spellcheck, settingsReadyRef)
+  usePersistedSetting('spellcheckLang', spellcheckLang, settingsReadyRef)
 
   // 多窗口模式持久化（主进程下次启动时读取，决定是否跳过单实例锁）
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('multiWindow', multiWindow).catch(() => {})
-    }
-  }, [multiWindow])
+  usePersistedSetting('multiWindow', multiWindow, settingsReadyRef)
 
-  // 快捷键持久化 + 反查表更新
+  // 快捷键反查表更新
   useEffect(() => {
     const lookup: Record<string, string> = {}
     for (const [action, combo] of Object.entries(shortcuts)) {
       if (combo) lookup[combo] = action
     }
     shortcutLookupRef.current = lookup
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('shortcuts', shortcuts).catch(() => {})
-    }
   }, [shortcuts])
+  usePersistedSetting('shortcuts', shortcuts, settingsReadyRef)
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-fontsize', fontSize)
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('fontSize', fontSize).catch(() => {})
-    }
+    document.documentElement.style.setProperty('--efs', `${fontSize}px`)
   }, [fontSize])
+  usePersistedSetting('fontSize', fontSize, settingsReadyRef)
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-contentwidth', contentWidth)
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('contentWidth', contentWidth).catch(() => {})
-    }
+    document.documentElement.style.setProperty('--ecw', `${contentWidth}px`)
   }, [contentWidth])
+  usePersistedSetting('contentWidth', contentWidth, settingsReadyRef)
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-lineheight', lineHeight)
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('lineHeight', lineHeight).catch(() => {})
-    }
+    document.documentElement.style.setProperty('--elh', String(lineHeight))
   }, [lineHeight])
+  usePersistedSetting('lineHeight', lineHeight, settingsReadyRef)
 
-  // 内容字体持久化 + data 属性
+  // 内容字体：data 属性 + 持久化
   useEffect(() => {
     document.documentElement.setAttribute('data-contentfont', contentFont)
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('contentFont', contentFont).catch(() => {})
-    }
   }, [contentFont])
+  usePersistedSetting('contentFont', contentFont, settingsReadyRef)
 
   // 缩放：写入 CSS 变量并持久化
   useEffect(() => {
     document.documentElement.style.setProperty('--editor-zoom', String(zoom))
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('zoom', zoom).catch(() => {})
-    }
   }, [zoom])
+  usePersistedSetting('zoom', zoom, settingsReadyRef)
 
   // Ctrl/Cmd + 滚轮缩放编辑区
   useEffect(() => {
@@ -683,13 +603,7 @@ export default function App(): JSX.Element {
   }, [])
 
   // 侧栏宽度持久化（拖拽中高频变化，防抖写入）
-  useEffect(() => {
-    if (!settingsReadyRef.current) return
-    const timer = setTimeout(() => {
-      window.desktopAPI?.settings.set('sidebarWidth', sidebarWidth).catch(() => {})
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [sidebarWidth])
+  usePersistedSetting('sidebarWidth', sidebarWidth, settingsReadyRef, 500)
 
   /** 拖拽调整侧栏宽度 */
   const startSidebarResize = useCallback((e: React.MouseEvent) => {
@@ -845,9 +759,33 @@ export default function App(): JSX.Element {
   }, [openFiles, activeFileId, workspace])
 
   // 草稿持久化：内容变化 1 秒后写入（崩溃/重启可恢复）
+  // 待写草稿镜像：防抖期间切换标签时补写，避免旧标签最后一次改动丢失
+  const draftPendingRef = useRef<{ id: string; content: string } | null>(null)
+  // 最新激活标签 id 镜像：effect 清理时判断是"切标签"还是"内容变化"
+  const activeFileIdMirrorRef = useRef(activeFileId)
+  activeFileIdMirrorRef.current = activeFileId
+
+  /** 立即落盘待写草稿（切标签/退出防抖窗口时调用） */
+  const flushPendingDraft = useCallback(() => {
+    const pending = draftPendingRef.current
+    if (!pending) return
+    draftPendingRef.current = null
+    loadDrafts()
+      .then((drafts) => {
+        if (drafts[pending.id]?.content === pending.content) return
+        drafts[pending.id] = { content: pending.content, savedAt: Date.now() }
+        return saveDrafts(drafts)
+      })
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
     if (!settingsReadyRef.current) return
+    draftPendingRef.current = { id: activeFileId, content: activeContent }
+    let fired = false
     const timer = setTimeout(() => {
+      fired = true
+      draftPendingRef.current = null
       loadDrafts()
         .then((drafts) => {
           if (drafts[activeFileId]?.content === activeContent) return
@@ -856,8 +794,15 @@ export default function App(): JSX.Element {
         })
         .catch(() => {})
     }, 1000)
-    return () => clearTimeout(timer)
-  }, [activeContent, activeFileId])
+    return () => {
+      clearTimeout(timer)
+      // 定时器未触发且已切换到别的标签：立即补写旧标签内容，
+      // 否则"打字后 1 秒内切标签"会丢掉最后一次改动的草稿
+      if (!fired && activeFileIdMirrorRef.current !== activeFileId) {
+        flushPendingDraft()
+      }
+    }
+  }, [activeContent, activeFileId, flushPendingDraft])
 
   /** 轻提示自动消失 */
   useEffect(() => {
@@ -866,100 +811,14 @@ export default function App(): JSX.Element {
     return () => clearTimeout(timer)
   }, [toast])
 
-  // 字数统计（先剥离 Markdown 语法符号，只统计正文）
-  const { wordCount, lineCount } = useMemo(() => {
-    const plain = activeContent
-      .replace(/^#{1,6}\s+/gm, '')
-      .replace(/^>\s?/gm, '')
-      .replace(/^[-*+]\s+\[[ x]\]\s+/gm, '')
-      .replace(/^[-*+]\s+/gm, '')
-      .replace(/^\d+\.\s+/gm, '')
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/[*_~`|]/g, '')
-    const text = plain.trim()
-    return {
-      wordCount: text.replace(/\s/g, '').length,
-      lineCount: text ? text.split('\n').length : 0,
-    }
-  }, [activeContent])
-
-  /* ==================== 写作统计 ==================== */
-
-  /** 每个文件上次的字数（切换文件不计入增减） */
-  const lastWordCountRef = useRef<Record<string, number>>({})
-  /** 最近一次编辑时间（用于写作时长累计） */
-  const lastEditTimeRef = useRef(0)
-
-  // 字数净增追踪：同一文件字数增加才计入今日字数
-  useEffect(() => {
-    const prev = lastWordCountRef.current[activeFileId]
-    lastWordCountRef.current[activeFileId] = wordCount
-    if (prev === undefined) return // 首次打开该文件，不计
-    lastEditTimeRef.current = Date.now()
-    const delta = wordCount - prev
-    if (delta > 0) {
-      setWritingStats((s) => {
-        const rolled = rollStatsDate(s)
-        return { ...rolled, words: rolled.words + delta }
-      })
-    }
-  }, [wordCount, activeFileId])
-
-  // 写作时长：每 60 秒检查一次，最近 90 秒内有编辑则 +1 分钟
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.hidden) return
-      if (Date.now() - lastEditTimeRef.current < 90_000) {
-        setWritingStats((s) => {
-          const rolled = rollStatsDate(s)
-          return { ...rolled, minutes: rolled.minutes + 1 }
-        })
-      }
-    }, 60_000)
-    return () => clearInterval(timer)
-  }, [])
-
-  // 统计持久化（防抖 10 秒；设置加载完成前不写，避免空值覆盖）
-  useEffect(() => {
-    if (!settingsReadyRef.current) return
-    const timer = setTimeout(() => {
-      window.desktopAPI?.settings.set('writingStats', writingStats).catch(() => {})
-    }, 10_000)
-    return () => clearTimeout(timer)
-  }, [writingStats])
-
-  // 最近文件持久化（防抖 2 秒；设置加载完成前不写，避免空列表覆盖）
-  useEffect(() => {
-    if (!settingsReadyRef.current) return
-    const timer = setTimeout(() => {
-      window.desktopAPI?.settings.set('recentFiles', recentFiles).catch(() => {})
-    }, 2_000)
-    return () => clearTimeout(timer)
-  }, [recentFiles])
-
   // 搜索状态持久化（U4：查询词/选项/替换文本，防抖 1 秒）
-  useEffect(() => {
-    if (!settingsReadyRef.current) return
-    const timer = setTimeout(() => {
-      window.desktopAPI?.settings.set('searchState', searchPref).catch(() => {})
-    }, 1_000)
-    return () => clearTimeout(timer)
-  }, [searchPref])
+  usePersistedSetting('searchState', searchPref, settingsReadyRef, 1_000)
 
   // 空白区点击行为开关持久化（U8）
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('blankClickToEnd', blankClickToEnd).catch(() => {})
-    }
-  }, [blankClickToEnd])
+  usePersistedSetting('blankClickToEnd', blankClickToEnd, settingsReadyRef)
 
   // 代码块行号开关持久化
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('codeLineNumbers', codeLineNumbers).catch(() => {})
-    }
-  }, [codeLineNumbers])
+  usePersistedSetting('codeLineNumbers', codeLineNumbers, settingsReadyRef)
 
   // 自定义主题：注入/移除 <style> 标签
   useEffect(() => {
@@ -978,26 +837,10 @@ export default function App(): JSX.Element {
   }, [customCss])
 
   // 自定义主题持久化
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('customCss', customCss).catch(() => {})
-    }
-  }, [customCss])
+  usePersistedSetting('customCss', customCss, settingsReadyRef)
 
   // 图床配置持久化（token 仅存于主进程 settings 文件）
-  useEffect(() => {
-    if (settingsReadyRef.current) {
-      window.desktopAPI?.settings.set('imageHost', imageHost).catch(() => {})
-    }
-  }, [imageHost])
-
-  /** 记录最近打开的磁盘文件（置顶 + 去重 + 上限 10） */
-  const recordRecent = useCallback((path: string, name: string) => {
-    setRecentFiles((prev) => {
-      const rest = prev.filter((r) => r.path !== path)
-      return [{ path, name }, ...rest].slice(0, 10)
-    })
-  }, [])
+  usePersistedSetting('imageHost', imageHost, settingsReadyRef)
 
   /** 光标位置变化（无变化时返回原对象避免多余渲染） */
   const handleCursorChange = useCallback(
@@ -1055,6 +898,8 @@ export default function App(): JSX.Element {
   const switchFile = useCallback(
     (id: string) => {
       if (id === activeFileId) return
+      // 防御：目标不在打开列表中不切换，避免激活文件悬空的幽灵状态
+      if (!openFiles.some((f) => f.id === id)) return
       // 先让标题输入框失焦：确保标题编辑保存到旧文件，不会串到新文件
       titleRef.current?.blur()
       // 先同步 ref，再替换内容（replaceAll 会同步触发 onChange）
@@ -1191,15 +1036,16 @@ export default function App(): JSX.Element {
       // 只有离开窗口时才隐藏（避免子元素拖拽闪炼）
       if (!e.relatedTarget) setDragFileOver(false)
     }
-    const onDrop = (e: DragEvent) => {
+    const onDrop = async (e: DragEvent) => {
       e.preventDefault()
       setDragFileOver(false)
       const files = Array.from(e.dataTransfer?.files ?? [])
       const mds = files.filter((f) => /\.(md|markdown)$/i.test(f.name))
-      // Electron 为拖入的 File 附加了 path 属性
+      // 串行打开：并行时读盘完成顺序随机，激活标签与打开顺序不一致
       for (const f of mds) {
+        // Electron 为拖入的 File 附加了 path 属性
         const p = (f as File & { path?: string }).path
-        if (p) void handleSelectWorkspaceFile(p)
+        if (p) await handleSelectWorkspaceFile(p)
       }
     }
     window.addEventListener('dragover', onDragOver)
@@ -1220,8 +1066,11 @@ export default function App(): JSX.Element {
     const { path, name } = result.data
     INITIAL_OR_SAVED.current[activeFileId] = content
     setSavedMap((prev) => ({ ...prev, [activeFileId]: true }))
-    // 新写入的文件，mtime 用当前时间近似（下次保存用于冲突检测）
-    setFileMtime((prev) => ({ ...prev, [activeFileId]: Date.now() }))
+    // 优先用主进程返回的真实落盘 mtime，缺失时降级用当前时间（下次保存用于冲突检测）
+    setFileMtime((prev) => ({
+      ...prev,
+      [activeFileId]: result.data!.modifiedTime || Date.now(),
+    }))
     // 另存为统一写 UTF-8，重置编码记录，避免后续保存误用旧编码
     setEncodingMap((prev) => ({ ...prev, [activeFileId]: 'UTF-8' }))
     setOpenFiles((prev) =>
@@ -1266,20 +1115,43 @@ export default function App(): JSX.Element {
     await handleSaveAs()
   }, [openFiles, activeFileId, contents, fileMtime, saveWithEncodingFallback, handleSaveAs, clearDraft])
 
-  /** 保存全部未保存的磁盘文件（窗口关闭"保存并关闭"用） */
-  const saveAll = useCallback(async () => {
-    if (!window.desktopAPI) return
-    const dirty = openFiles.filter((f) => f.path && savedMap[f.id] === false)
+  /**
+   * 保存全部未保存文件（窗口关闭"保存并关闭"用），返回保存失败的文件名清单。
+   * 失败的文件（外部冲突等）与无磁盘路径的未命名文档：内容写入草稿兜底，
+   * destroy 后重启可恢复为未保存状态，编辑永不丢失。
+   */
+  const saveAll = useCallback(async (): Promise<string[]> => {
+    if (!window.desktopAPI) return []
+    const failed: string[] = []
+    const dirty = openFiles.filter((f) => savedMap[f.id] === false)
     for (const f of dirty) {
       const content = contents[f.id] ?? ''
-      const res = await saveWithEncodingFallback(f.path!, content, fileMtime[f.id], f.id)
-      if (res.ok && res.data) {
-        INITIAL_OR_SAVED.current[f.id] = content
-        setSavedMap((prev) => ({ ...prev, [f.id]: true }))
-        setFileMtime((prev) => ({ ...prev, [f.id]: res.data!.modifiedTime }))
-        void clearDraft(f.id)
+      let ok = false
+      if (f.path) {
+        const res = await saveWithEncodingFallback(f.path, content, fileMtime[f.id], f.id)
+        if (res.ok && res.data) {
+          INITIAL_OR_SAVED.current[f.id] = content
+          setSavedMap((prev) => ({ ...prev, [f.id]: true }))
+          setFileMtime((prev) => ({ ...prev, [f.id]: res.data!.modifiedTime }))
+          void clearDraft(f.id)
+          ok = true
+        }
+      }
+      if (!ok) {
+        failed.push(f.name)
+        // 兜底：写入草稿（串行 await，确保 destroy 前全部落盘）
+        try {
+          const drafts = await loadDrafts()
+          if (drafts[f.id]?.content !== content) {
+            drafts[f.id] = { content, savedAt: Date.now() }
+            await saveDrafts(drafts)
+          }
+        } catch {
+          /* 草稿写入失败仅影响兜底能力，不阻断关闭流程 */
+        }
       }
     }
+    return failed
   }, [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, clearDraft])
 
   // 未保存状态同步到主进程（关闭时弹原生确认框，避免静默阻止关闭）
@@ -1288,9 +1160,9 @@ export default function App(): JSX.Element {
     window.desktopAPI?.window.setUnsaved(hasUnsaved)
   }, [hasUnsaved])
 
-  // 暴露 saveAll 供主进程关闭流程调用
+  // 暴露 saveAll 供主进程关闭流程调用（返回保存失败的文件名清单）
   useEffect(() => {
-    const w = window as unknown as { __markdownsoft_saveAll?: () => Promise<void> }
+    const w = window as unknown as { __markdownsoft_saveAll?: () => Promise<string[]> }
     w.__markdownsoft_saveAll = saveAll
     return () => {
       delete w.__markdownsoft_saveAll
@@ -1308,7 +1180,7 @@ export default function App(): JSX.Element {
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>${title}</title>
+<title>${escapeHtmlText(title)}</title>
 <style>
 ${katexCss}
 </style>
@@ -1348,9 +1220,11 @@ img{max-width:100%}
         const resp = await fetch(src)
         if (!resp.ok) continue
         const blob = await resp.blob()
-        const dataUrl = await new Promise<string>((resolve) => {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
           const fr = new FileReader()
           fr.onload = () => resolve(fr.result as string)
+          // 读取失败需 reject：否则 Promise 永不 settle，导出流程永久挂起
+          fr.onerror = () => reject(new Error('read failed'))
           fr.readAsDataURL(blob)
         })
         result = result.split(src).join(dataUrl)
@@ -1474,11 +1348,24 @@ img{max-width:100%}
   const handleRenameFile = useCallback(
     async (path: string, newName: string) => {
       if (!window.desktopAPI || !newName.trim()) return
-      // 先写回未保存内容，避免重命名丢失编辑
+      // 先写回未保存内容，避免重命名丢失编辑（带冲突检测：外部修改过的不静默覆盖，中止重命名）
       const oldId = `file-${path}`
-      const pending = contents[oldId]
-      if (pending !== undefined) {
-        await saveWithEncodingFallback(path, pending, undefined, oldId)
+      let pending: string | undefined
+      if (savedMap[oldId] === false && contents[oldId] !== undefined) {
+        pending = contents[oldId]
+        const saveRes = await saveWithEncodingFallback(path, pending, fileMtime[oldId], oldId)
+        if (!saveRes.ok) {
+          setToast(
+            saveRes.error?.code === 'CONFLICT'
+              ? `「${path.split(/[\\/]/).pop()}」已被外部修改，已中止重命名`
+              : '重命名前保存失败，已中止',
+          )
+          return
+        }
+        if (saveRes.data) {
+          INITIAL_OR_SAVED.current[oldId] = pending
+          setFileMtime((prev) => ({ ...prev, [oldId]: saveRes.data!.modifiedTime }))
+        }
       }
       const res = await window.desktopAPI.workspace.renameFile(path, newName)
       if (!res.ok || !res.data) {
@@ -1524,22 +1411,44 @@ img{max-width:100%}
         setActiveFileId(newId)
         setDocTitle(finalName)
       }
-      // 重命名前内容已写盘，旧草稿清除
+      // 重命名前内容已写盘，旧草稿清除（含防抖中未落盘的待写项，避免写回旧 id）
+      if (draftPendingRef.current?.id === oldId) draftPendingRef.current = null
       void clearDraft(oldId)
       await refreshWorkspace()
     },
-    [contents, activeFileId, saveWithEncodingFallback, refreshWorkspace, clearDraft],
+    [contents, savedMap, fileMtime, activeFileId, saveWithEncodingFallback, refreshWorkspace, clearDraft],
   )
 
   const handleDeleteFile = useCallback(
     async (path: string) => {
       if (!window.desktopAPI) return
+      const delId = `file-${path}`
+      // 删除前先写回未保存内容，避免编辑丢失（与 rename/move 保持一致）
+      if (savedMap[delId] === false) {
+        const saveRes = await saveWithEncodingFallback(
+          path,
+          contents[delId] ?? '',
+          fileMtime[delId],
+          delId,
+        )
+        if (!saveRes.ok) {
+          setToast(
+            saveRes.error?.code === 'CONFLICT'
+              ? `「${path.split(/[\\/]/).pop()}」已被外部修改，已取消删除`
+              : '删除前保存失败，已取消删除',
+          )
+          return
+        }
+        if (saveRes.data) {
+          INITIAL_OR_SAVED.current[delId] = contents[delId] ?? ''
+          setFileMtime((prev) => ({ ...prev, [delId]: saveRes.data!.modifiedTime }))
+        }
+      }
       const res = await window.desktopAPI.workspace.deleteFile(path)
       if (!res.ok) {
         setToast('删除失败')
         return
       }
-      const delId = `file-${path}`
       setOpenFiles((prev) => prev.filter((f) => f.id !== delId))
       setContents((prev) => {
         const next = { ...prev }
@@ -1547,13 +1456,67 @@ img{max-width:100%}
         return next
       })
       // 清理残留草稿/基线，避免重启后恢复已删除文件的内容
+      if (draftPendingRef.current?.id === delId) draftPendingRef.current = null
       void clearDraft(delId)
       delete INITIAL_OR_SAVED.current[delId]
       await refreshWorkspace()
-      if (activeFileId === delId) switchFile(DEFAULT_FILE_ID)
+      if (activeFileId === delId) {
+        // 切到相邻标签；删掉的是最后一个标签时新建空白文档，
+        // 保证始终存在有效激活文件（否则保存静默失败、内容丢失）
+        const idx = openFiles.findIndex((f) => f.id === delId)
+        const neighbor = openFiles[idx + 1] ?? openFiles[idx - 1] ?? null
+        if (neighbor) switchFile(neighbor.id)
+        else handleNew()
+      }
     },
-    [activeFileId, refreshWorkspace, switchFile, clearDraft],
+    [activeFileId, refreshWorkspace, switchFile, clearDraft, savedMap, contents, fileMtime, saveWithEncodingFallback, openFiles, handleNew],
   )
+
+  /** 关闭标签页：从打开列表移除（不删磁盘文件）；有未保存内容时先确认 */
+  const handleCloseTab = useCallback(
+    (id: string) => {
+      const list = openFiles
+      const idx = list.findIndex((f) => f.id === id)
+      if (idx === -1) return
+      const neighbor = list[idx + 1] ?? list[idx - 1] ?? null
+      if (savedMap[id] === false) {
+        const name = list[idx]?.name ?? '未命名文档'
+        if (!window.confirm(`「${name}」有未保存的修改，确定关闭该标签页吗？`)) return
+      }
+      setOpenFiles((prev) => prev.filter((f) => f.id !== id))
+      setContents((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      setSavedMap((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      delete INITIAL_OR_SAVED.current[id]
+      // 防抖中的待写草稿一并作废（内容已确认丢弃），避免在 clearDraft 之后又写回
+      if (draftPendingRef.current?.id === id) draftPendingRef.current = null
+      void clearDraft(id)
+      if (activeFileId === id) {
+        // 无相邻标签（关掉的是最后一个）时新建空白文档，
+        // 避免回退到不在打开列表中的 id 造成幽灵状态（保存静默失败）
+        if (neighbor) switchFile(neighbor.id)
+        else handleNew()
+      }
+    },
+    [openFiles, savedMap, activeFileId, switchFile, clearDraft, handleNew],
+  )
+
+  /** 拖拽重排标签页顺序 */
+  const handleReorderTabs = useCallback((from: number, to: number) => {
+    setOpenFiles((prev) => {
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      if (moved) next.splice(to, 0, moved)
+      return next
+    })
+  }, [])
 
   /** 拖拽移动文件/文件夹到目标目录（U5） */
   const handleMoveFile = useCallback(
@@ -1638,7 +1601,12 @@ img{max-width:100%}
         }
         return changed ? next : prev
       })
-      // 清理被移动文件的旧路径草稿（内容已写盘，避免重启后恢复已不存在的旧路径）
+      // 清理被移动文件的旧路径草稿（内容已写盘，避免重启后恢复已不存在的旧路径）；
+      // 防抖中的待写草稿随 id 迁移到新路径，避免写回旧路径后残留
+      const dp = draftPendingRef.current
+      if (dp && dp.id.startsWith('file-') && isUnder(dp.id.slice(5))) {
+        draftPendingRef.current = { id: `file-${mapPath(dp.id.slice(5))}`, content: dp.content }
+      }
       for (const f of openFiles) {
         if (f.path && isUnder(f.path)) void clearDraft(`file-${f.path}`)
       }
@@ -1743,24 +1711,51 @@ img{max-width:100%}
 
   /* ==================== 分栏预览 ==================== */
 
+  /** 预览内容容器（直接 DOM 注入，绕开 React 协调，大文档不触发全树重渲染） */
+  const previewContentRef = useRef<HTMLDivElement>(null)
+  /** 预览栏滚动容器 */
+  const previewPaneRef = useRef<HTMLDivElement>(null)
+  /** renderPreview 程序化滚动标记：同步监听需吞掉该回显，避免反向拉动编辑区 */
+  const previewProgScrollRef = useRef(false)
+
+  /** 取编辑器 DOM 快照写入预览栏；前后保持滚动比例，内容刷新后不跳动 */
+  const renderPreview = useCallback(() => {
+    const pane = previewPaneRef.current
+    const content = previewContentRef.current
+    if (!pane || !content) return
+    const max = pane.scrollHeight - pane.clientHeight
+    const ratio = max > 0 ? pane.scrollTop / max : 0
+    content.innerHTML = editorRef.current?.getPreviewHtml() ?? ''
+    const nextMax = pane.scrollHeight - pane.clientHeight
+    if (nextMax > 0) {
+      const target = ratio * nextMax
+      if (Math.abs(target - pane.scrollTop) > 1) {
+        previewProgScrollRef.current = true
+        pane.scrollTop = target
+      }
+    }
+  }, [])
+
+  // 打开预览时立即渲染一次
   useEffect(() => {
     if (!previewMode) return
-    // B2：内容变化后下一帧立即取 DOM 快照（取消 200ms 延迟）
-    const raf = requestAnimationFrame(() => {
-      setPreviewHtml(editorRef.current?.getPreviewHtml() ?? '')
-    })
-    return () => cancelAnimationFrame(raf)
-  }, [previewMode, activeContent])
+    renderPreview()
+  }, [previewMode, renderPreview])
+
+  // 内容变化防抖刷新（350ms）：大文档连续输入不再逐键触发全量快照与 DOM 重建
+  useEffect(() => {
+    if (!previewMode) return
+    const timer = setTimeout(renderPreview, 350)
+    return () => clearTimeout(timer)
+  }, [previewMode, activeContent, renderPreview])
 
   /** B1/B2：懒加载插件（KaTeX/Mermaid）渲染完成后立即刷新预览 */
   const handleRichRender = useCallback(() => {
-    setPreviewHtml(editorRef.current?.getPreviewHtml() ?? '')
-  }, [])
+    renderPreview()
+  }, [renderPreview])
 
-  /** 预览栏滚动容器 */
-  const previewPaneRef = useRef<HTMLDivElement>(null)
-
-  // 编辑区 ↔ 预览区按比例同步滚动（lock 防止互相触发回环）
+  // 编辑区 ↔ 预览区按比例同步滚动
+  // 性能优化：rAF 节流（每帧最多同步一次）+ 一次性回显抑制（防程序化滚动乒乓回环）
   useEffect(() => {
     if (!previewMode) return
     const editorScroll = editorAreaRef.current?.querySelector(
@@ -1768,24 +1763,57 @@ img{max-width:100%}
     ) as HTMLElement | null
     const previewEl = previewPaneRef.current
     if (!editorScroll || !previewEl) return
-    let lock = false
-    const syncTo = (from: HTMLElement, to: HTMLElement) => {
-      if (lock) return
-      lock = true
-      const max = from.scrollHeight - from.clientHeight
-      const ratio = max > 0 ? from.scrollTop / max : 0
-      to.scrollTop = ratio * (to.scrollHeight - to.clientHeight)
-      requestAnimationFrame(() => {
-        lock = false
-      })
+
+    let pendingFrom: 'editor' | 'preview' | null = null
+    let suppressPane: 'editor' | 'preview' | null = null
+    let suppressTimer = 0
+    let raf = 0
+
+    const applySync = () => {
+      raf = 0
+      const from = pendingFrom
+      pendingFrom = null
+      if (!from) return
+      const src = from === 'editor' ? editorScroll : previewEl
+      const dst = from === 'editor' ? previewEl : editorScroll
+      const maxSrc = src.scrollHeight - src.clientHeight
+      const maxDst = dst.scrollHeight - dst.clientHeight
+      if (maxSrc <= 0 || maxDst <= 0) return
+      // 标记对侧下一次滚动事件为回显，直接吞掉
+      suppressPane = from === 'editor' ? 'preview' : 'editor'
+      window.clearTimeout(suppressTimer)
+      suppressTimer = window.setTimeout(() => {
+        suppressPane = null
+      }, 150)
+      dst.scrollTop = (src.scrollTop / maxSrc) * maxDst
     }
-    const onEditorScroll = () => syncTo(editorScroll, previewEl)
-    const onPreviewScroll = () => syncTo(previewEl, editorScroll)
+
+    const requestSync = (from: 'editor' | 'preview') => {
+      if (suppressPane === from) {
+        suppressPane = null
+        window.clearTimeout(suppressTimer)
+        return
+      }
+      pendingFrom = from
+      if (!raf) raf = requestAnimationFrame(applySync)
+    }
+
+    const onEditorScroll = () => requestSync('editor')
+    const onPreviewScroll = () => {
+      // renderPreview 刷新内容后的比例恢复滚动是程序化的，不属于用户操作
+      if (previewProgScrollRef.current) {
+        previewProgScrollRef.current = false
+        return
+      }
+      requestSync('preview')
+    }
     editorScroll.addEventListener('scroll', onEditorScroll, { passive: true })
     previewEl.addEventListener('scroll', onPreviewScroll, { passive: true })
     return () => {
       editorScroll.removeEventListener('scroll', onEditorScroll)
       previewEl.removeEventListener('scroll', onPreviewScroll)
+      if (raf) cancelAnimationFrame(raf)
+      window.clearTimeout(suppressTimer)
     }
   }, [previewMode])
 
@@ -1911,7 +1939,8 @@ img{max-width:100%}
         case 'bold': ed?.runCommand(toggleStrongCommand.key); break
         case 'italic': ed?.runCommand(toggleEmphasisCommand.key); break
         case 'strike': ed?.runCommand(toggleStrikethroughCommand.key); break
-        case 'find': setSearchMode('replace'); break
+        case 'find': setSearchMode('find'); break
+        case 'replace': setSearchMode('replace'); break
         case 'wsSearch':
           // 用 ref 镜像而非 workspace 状态：handleAction 依赖数组不含 workspace，
           // 直接读状态会因陈旧闭包导致打开文件夹后菜单仍提示未打开
@@ -2064,6 +2093,16 @@ img{max-width:100%}
         </div>
       </div>
 
+      {/* 多标签页栏：已打开文档切换 / 关闭 / 拖拽排序（对标 Typora） */}
+      <TabBar
+        openFiles={openFiles}
+        activeFileId={activeFileId}
+        savedMap={savedMap}
+        onSwitch={switchFile}
+        onClose={handleCloseTab}
+        onReorder={handleReorderTabs}
+      />
+
       {/* 工作区：侧栏 + 编辑器 */}
       <div
         className="workspace"
@@ -2133,13 +2172,10 @@ img{max-width:100%}
             imageHost,
           }}
         />
-        {/* 分栏预览 */}
+        {/* 分栏预览（内容由 renderPreview 直接写入 DOM，避免 React 协调开销） */}
         {previewMode && (
           <div className="preview-pane" ref={previewPaneRef}>
-            <div
-              className="editor-inner preview-content"
-              dangerouslySetInnerHTML={{ __html: previewHtml }}
-            />
+            <div className="editor-inner preview-content" ref={previewContentRef} />
           </div>
         )}
       </div>
@@ -2214,7 +2250,7 @@ img{max-width:100%}
           workspacePath={workspace.path}
           workspaceName={workspace.name}
           onClose={() => setWsSearchOpen(false)}
-          onSelect={(path, query) => {
+          onSelect={(path, query, opts) => {
             setWsSearchOpen(false)
             // 必须等文件内容替换完成后再开搜索栏，否则搜索会作用在旧文档上；
             // 序号防护连续点击的竞态；打开失败时不弹搜索栏
@@ -2223,7 +2259,12 @@ img{max-width:100%}
               const ok = await handleSelectWorkspaceFile(path)
               if (seq !== wsSelectSeqRef.current || !ok) return
               if (query) {
-                setSearchPref((prev) => ({ ...prev, query }))
+                setSearchPref((prev) => ({
+                  ...prev,
+                  query,
+                  useRegex: opts?.useRegex ?? prev.useRegex,
+                  caseSensitive: opts?.caseSensitive ?? prev.caseSensitive,
+                }))
                 setSearchEpoch((e) => e + 1)
                 setSearchMode('find')
               }

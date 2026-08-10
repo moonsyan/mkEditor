@@ -22,6 +22,7 @@ import './src/styles/components/searchbar.css'
 import './src/styles/components/settings.css'
 import './src/styles/components/helpdialog.css'
 import './src/styles/components/imagesdialog.css'
+import './src/styles/components/tabbar.css'
 
 // 平台标识：顶栏按平台避让系统窗口按钮区域
 document.documentElement.setAttribute(
