@@ -124,29 +124,38 @@ export function SearchBar({
     <div className="search-bar">
       <div className="search-row">
         {/* 正则开关 */}
-        <div
+        <button
+          type="button"
           className={`search-regex ${useRegex ? 'on' : ''}`}
           onClick={toggleRegex}
           title={useRegex ? '正则模式：开' : '正则模式：关'}
+          aria-label="切换正则搜索"
+          aria-pressed={useRegex}
         >
           .*
-        </div>
+        </button>
         {/* 大小写敏感开关 */}
-        <div
+        <button
+          type="button"
           className={`search-regex ${caseSensitive ? 'on' : ''}`}
           onClick={toggleCase}
           title={caseSensitive ? '区分大小写：开' : '区分大小写：关'}
+          aria-label="切换区分大小写"
+          aria-pressed={caseSensitive}
         >
           Aa
-        </div>
+        </button>
         {/* 全字匹配开关 */}
-        <div
+        <button
+          type="button"
           className={`search-regex ${wholeWord ? 'on' : ''}`}
           onClick={toggleWholeWord}
           title={wholeWord ? '全字匹配：开' : '全字匹配：关'}
+          aria-label="切换全字匹配"
+          aria-pressed={wholeWord}
         >
           ab
-        </div>
+        </button>
         <input
           ref={inputRef}
           className="search-input"
@@ -157,15 +166,33 @@ export function SearchBar({
           onKeyDown={handleKeyDown}
         />
         {countText && <span className="search-count">{countText}</span>}
-        <div className="search-btn" onClick={() => onNext(true)} title="上一个 (Shift+Enter)">
+        <button
+          type="button"
+          className="search-btn"
+          onClick={() => onNext(true)}
+          title="上一个 (Shift+Enter)"
+          aria-label="上一个匹配项"
+        >
           <svg viewBox="0 0 24 24"><polyline points="18 15 12 9 6 15" /></svg>
-        </div>
-        <div className="search-btn" onClick={() => onNext(false)} title="下一个 (Enter)">
+        </button>
+        <button
+          type="button"
+          className="search-btn"
+          onClick={() => onNext(false)}
+          title="下一个 (Enter)"
+          aria-label="下一个匹配项"
+        >
           <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9" /></svg>
-        </div>
-        <div className="search-btn" onClick={onClose} title="关闭 (Esc)">
+        </button>
+        <button
+          type="button"
+          className="search-btn"
+          onClick={onClose}
+          title="关闭 (Esc)"
+          aria-label="关闭查找"
+        >
           <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-        </div>
+        </button>
       </div>
       {withReplace && (
         <div className="search-row">
@@ -192,12 +219,22 @@ export function SearchBar({
               }
             }}
           />
-          <div className="search-btn search-btn-text" onClick={() => onReplace(replacement)} title="替换当前匹配并跳到下一个">
+          <button
+            type="button"
+            className="search-btn search-btn-text"
+            onClick={() => onReplace(replacement)}
+            title="替换当前匹配并跳到下一个"
+          >
             替换
-          </div>
-          <div className="search-btn search-btn-text" onClick={() => onReplaceAll(replacement)} title="替换全部匹配">
+          </button>
+          <button
+            type="button"
+            className="search-btn search-btn-text"
+            onClick={() => onReplaceAll(replacement)}
+            title="替换全部匹配"
+          >
             全部
-          </div>
+          </button>
         </div>
       )}
     </div>

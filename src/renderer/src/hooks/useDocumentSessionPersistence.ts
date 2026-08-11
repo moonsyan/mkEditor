@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import type { MutableRefObject } from 'react'
 import type { OpenFile, WorkspaceInfo } from '../components/Sidebar'
 
 export interface SessionData {
@@ -13,7 +12,7 @@ interface UseDocumentSessionPersistenceOptions {
   demoFileIds: ReadonlySet<string>
   freshMode: boolean
   openFiles: OpenFile[]
-  readyRef: MutableRefObject<boolean>
+  ready: boolean
   workspace: WorkspaceInfo | null
 }
 
@@ -23,11 +22,11 @@ export function useDocumentSessionPersistence({
   demoFileIds,
   freshMode,
   openFiles,
-  readyRef,
+  ready,
   workspace,
 }: UseDocumentSessionPersistenceOptions): void {
   useEffect(() => {
-    if (freshMode || !readyRef.current) return
+    if (freshMode || !ready) return
     const seen = new Set<string>()
     const files = openFiles
       .filter((file) => !demoFileIds.has(file.id) && file.id && !seen.has(file.id) && seen.add(file.id))
@@ -39,5 +38,5 @@ export function useDocumentSessionPersistence({
       files,
     }
     window.desktopAPI?.settings.set('session', data).catch(() => {})
-  }, [activeFileId, demoFileIds, freshMode, openFiles, readyRef, workspace])
+  }, [activeFileId, demoFileIds, freshMode, openFiles, ready, workspace])
 }

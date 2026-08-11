@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import type { MutableRefObject } from 'react'
 import type { WritingStats } from '../components/HelpDialog'
 import { todayStr, rollStatsDate } from '../lib/stats'
 import { usePersistedSetting } from './usePersistedSetting'
@@ -12,7 +11,7 @@ import { usePersistedSetting } from './usePersistedSetting'
 export function useWritingStats(
   wordCount: number,
   activeFileId: string,
-  readyRef: MutableRefObject<boolean>,
+  ready: boolean,
 ) {
   const [writingStats, setWritingStats] = useState<WritingStats>(() => ({
     date: todayStr(),
@@ -56,7 +55,7 @@ export function useWritingStats(
   }, [])
 
   // 统计持久化（防抖 10 秒；设置加载完成前不写，避免空值覆盖）
-  usePersistedSetting('writingStats', writingStats, readyRef, 10_000)
+  usePersistedSetting('writingStats', writingStats, ready, 10_000)
 
   return { writingStats, setWritingStats }
 }

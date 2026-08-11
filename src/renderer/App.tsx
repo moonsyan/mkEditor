@@ -278,23 +278,23 @@ export default function App(): JSX.Element {
   }, [])
 
   // 启动时加载持久化设置，并恢复会话与草稿（加载完成前不写回）
-  const settingsReadyRef = useRef(false)
+  const [settingsReady, setSettingsReady] = useState(false)
   const settingsInitRef = useRef(false)
 
   /* ==================== 写作统计与最近文件（垂直 hook） ==================== */
   const { writingStats, setWritingStats } = useWritingStats(
     wordCount,
     deferredStatsSource.fileId,
-    settingsReadyRef,
+    settingsReady,
   )
-  const { recentFiles, setRecentFiles, recordRecent } = useRecentFiles(settingsReadyRef)
+  const { recentFiles, setRecentFiles, recordRecent } = useRecentFiles(settingsReady)
 
   useEffect(() => {
     // 防 StrictMode 双执行：会话恢复只跑一次（去重后重复执行无害，但避免双倍 IPC 读取）
     if (settingsInitRef.current) return
     settingsInitRef.current = true
     if (!window.desktopAPI) {
-      settingsReadyRef.current = true
+      setSettingsReady(true)
       return
     }
     const api = window.desktopAPI.settings
@@ -575,7 +575,7 @@ export default function App(): JSX.Element {
       })
       .catch(() => {})
       .finally(() => {
-        settingsReadyRef.current = true
+        setSettingsReady(true)
       })
   }, [])
 
@@ -585,19 +585,19 @@ export default function App(): JSX.Element {
     const colors = TITLEBAR_COLORS[theme] ?? TITLEBAR_COLORS.default
     window.desktopAPI?.window.setTitlebarColor(colors.bg, colors.symbol).catch(() => {})
   }, [theme])
-  usePersistedSetting('theme', theme, settingsReadyRef)
+  usePersistedSetting('theme', theme, settingsReady)
 
-  usePersistedSetting('autosave', autosave, settingsReadyRef)
+  usePersistedSetting('autosave', autosave, settingsReady)
 
   // 拼写检查：同步会话级开关 + 语言，并持久化
   useEffect(() => {
     window.desktopAPI?.window.setSpellcheck(spellcheck, spellcheckLang).catch(() => {})
   }, [spellcheck, spellcheckLang])
-  usePersistedSetting('spellcheck', spellcheck, settingsReadyRef)
-  usePersistedSetting('spellcheckLang', spellcheckLang, settingsReadyRef)
+  usePersistedSetting('spellcheck', spellcheck, settingsReady)
+  usePersistedSetting('spellcheckLang', spellcheckLang, settingsReady)
 
   // 多窗口模式持久化（主进程下次启动时读取，决定是否跳过单实例锁）
-  usePersistedSetting('multiWindow', multiWindow, settingsReadyRef)
+  usePersistedSetting('multiWindow', multiWindow, settingsReady)
 
   // 快捷键反查表更新
   useEffect(() => {
@@ -607,34 +607,34 @@ export default function App(): JSX.Element {
     }
     shortcutLookupRef.current = lookup
   }, [shortcuts])
-  usePersistedSetting('shortcuts', shortcuts, settingsReadyRef)
+  usePersistedSetting('shortcuts', shortcuts, settingsReady)
 
   useEffect(() => {
     document.documentElement.style.setProperty('--efs', `${fontSize}px`)
   }, [fontSize])
-  usePersistedSetting('fontSize', fontSize, settingsReadyRef)
+  usePersistedSetting('fontSize', fontSize, settingsReady)
 
   useEffect(() => {
     document.documentElement.style.setProperty('--ecw', `${contentWidth}px`)
   }, [contentWidth])
-  usePersistedSetting('contentWidth', contentWidth, settingsReadyRef)
+  usePersistedSetting('contentWidth', contentWidth, settingsReady)
 
   useEffect(() => {
     document.documentElement.style.setProperty('--elh', String(lineHeight))
   }, [lineHeight])
-  usePersistedSetting('lineHeight', lineHeight, settingsReadyRef)
+  usePersistedSetting('lineHeight', lineHeight, settingsReady)
 
   // 内容字体：data 属性 + 持久化
   useEffect(() => {
     document.documentElement.setAttribute('data-contentfont', contentFont)
   }, [contentFont])
-  usePersistedSetting('contentFont', contentFont, settingsReadyRef)
+  usePersistedSetting('contentFont', contentFont, settingsReady)
 
   // 缩放：写入 CSS 变量并持久化
   useEffect(() => {
     document.documentElement.style.setProperty('--editor-zoom', String(zoom))
   }, [zoom])
-  usePersistedSetting('zoom', zoom, settingsReadyRef)
+  usePersistedSetting('zoom', zoom, settingsReady)
 
   // Ctrl/Cmd + 滚轮缩放编辑区
   useEffect(() => {
@@ -650,7 +650,7 @@ export default function App(): JSX.Element {
   }, [])
 
   // 侧栏宽度持久化（拖拽中高频变化，防抖写入）
-  usePersistedSetting('sidebarWidth', sidebarWidth, settingsReadyRef, 500)
+  usePersistedSetting('sidebarWidth', sidebarWidth, settingsReady, 500)
 
   /** 拖拽调整侧栏宽度 */
   const startSidebarResize = useCallback((e: React.MouseEvent) => {
@@ -740,7 +740,7 @@ export default function App(): JSX.Element {
   const { clearDraft, draftPendingRef, saveDraft } = useDraftPersistence({
     activeFileId,
     content: activeContent,
-    readyRef: settingsReadyRef,
+    ready: settingsReady,
   })
 
   // 用 ref 镜像最新状态，供定时器读取（避免闭包捕获旧值）
@@ -799,7 +799,7 @@ export default function App(): JSX.Element {
     demoFileIds: DEMO_FILE_IDS,
     freshMode: FRESH_MODE,
     openFiles,
-    readyRef: settingsReadyRef,
+    ready: settingsReady,
     workspace,
   })
 
@@ -811,13 +811,13 @@ export default function App(): JSX.Element {
   }, [toast])
 
   // 搜索状态持久化（U4：查询词/选项/替换文本，防抖 1 秒）
-  usePersistedSetting('searchState', searchPref, settingsReadyRef, 1_000)
+  usePersistedSetting('searchState', searchPref, settingsReady, 1_000)
 
   // 空白区点击行为开关持久化（U8）
-  usePersistedSetting('blankClickToEnd', blankClickToEnd, settingsReadyRef)
+  usePersistedSetting('blankClickToEnd', blankClickToEnd, settingsReady)
 
   // 代码块行号开关持久化
-  usePersistedSetting('codeLineNumbers', codeLineNumbers, settingsReadyRef)
+  usePersistedSetting('codeLineNumbers', codeLineNumbers, settingsReady)
 
   // 自定义主题：注入/移除 <style> 标签
   useEffect(() => {
@@ -836,10 +836,10 @@ export default function App(): JSX.Element {
   }, [customCss])
 
   // 自定义主题持久化
-  usePersistedSetting('customCss', customCss, settingsReadyRef)
+  usePersistedSetting('customCss', customCss, settingsReady)
 
   // 图床配置持久化（token 仅存于主进程 settings 文件）
-  usePersistedSetting('imageHost', imageHost, settingsReadyRef)
+  usePersistedSetting('imageHost', imageHost, settingsReady)
 
   /** 光标位置变化（无变化时返回原对象避免多余渲染） */
   const handleCursorChange = useCallback(

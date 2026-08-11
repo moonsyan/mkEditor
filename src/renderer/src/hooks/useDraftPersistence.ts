@@ -10,7 +10,7 @@ export interface PendingDraft {
 interface UseDraftPersistenceOptions {
   activeFileId: string
   content: string
-  readyRef: MutableRefObject<boolean>
+  ready: boolean
 }
 
 /**
@@ -19,7 +19,7 @@ interface UseDraftPersistenceOptions {
 export function useDraftPersistence({
   activeFileId,
   content,
-  readyRef,
+  ready,
 }: UseDraftPersistenceOptions): {
   clearDraft: (id: string) => Promise<void>
   draftPendingRef: MutableRefObject<PendingDraft | null>
@@ -49,7 +49,7 @@ export function useDraftPersistence({
   }, [saveDraft])
 
   useEffect(() => {
-    if (!readyRef.current) return
+    if (!ready) return
     draftPendingRef.current = { id: activeFileId, content }
     let didWrite = false
     const timer = setTimeout(() => {
@@ -62,7 +62,7 @@ export function useDraftPersistence({
       clearTimeout(timer)
       if (!didWrite && activeFileIdRef.current !== activeFileId) flushPendingDraft()
     }
-  }, [activeFileId, content, flushPendingDraft, readyRef, saveDraft])
+  }, [activeFileId, content, flushPendingDraft, ready, saveDraft])
 
   return { clearDraft, draftPendingRef, saveDraft }
 }
