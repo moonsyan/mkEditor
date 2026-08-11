@@ -15,7 +15,7 @@ import { dirname, join } from 'path'
 let cache: Record<string, unknown> | null = null
 
 export class SettingsStoreError extends Error {
-  constructor(public readonly code: 'INVALID_VALUE' | 'VALUE_TOO_LARGE') {
+  constructor(public readonly code: 'INVALID_VALUE' | 'VALUE_TOO_LARGE' | 'FILE_TOO_LARGE') {
     super(code)
   }
 }
@@ -156,22 +156,29 @@ export function deleteDraft(id: string): Promise<void> {
 async function applySetSetting(key: string, value: unknown): Promise<void> {
   const all = await load()
   const clean = sanitize(key, value)
-  // 写入体积守卫：单个值超限则拒绝，防止任何键再次膨胀
-  let serialized: string
+  // 写入前检查单项和完整快照体积，避免下次启动将超限设置判为损坏。
+  let serializedValue: string
+  let serializedSettings: string
+  let next: Record<string, unknown>
   try {
-    serialized = JSON.stringify(clean)
+    serializedValue = JSON.stringify(clean)
+    next = { ...all, [key]: clean }
+    serializedSettings = JSON.stringify(next, null, 2)
   } catch {
     throw new SettingsStoreError('INVALID_VALUE')
   }
-  if (Buffer.byteLength(serialized, 'utf-8') > MAX_VALUE_SIZE) {
+  if (Buffer.byteLength(serializedValue, 'utf-8') > MAX_VALUE_SIZE) {
     throw new SettingsStoreError('VALUE_TOO_LARGE')
   }
-  all[key] = clean
-  cache = all
+  if (Buffer.byteLength(serializedSettings, 'utf-8') > MAX_FILE_SIZE) {
+    throw new SettingsStoreError('FILE_TOO_LARGE')
+  }
   const path = settingsPath()
   await mkdir(dirname(path), { recursive: true })
   // 先写临时文件再替换，避免写一半损坏
   const tmp = `${path}.tmp`
-  await writeFile(tmp, JSON.stringify(all, null, 2), 'utf-8')
+  await writeFile(tmp, serializedSettings, 'utf-8')
   await rename(tmp, path)
+  // 仅在磁盘落盘成功后更新缓存，避免写失败时内存与文件状态不一致。
+  cache = next
 }
