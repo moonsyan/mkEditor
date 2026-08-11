@@ -34,7 +34,7 @@ import {
   pinPreviewOpenFile,
   requiresCloseConfirmation,
 } from './src/lib/document-tabs'
-import { isImeComposing } from './src/lib/keyboard'
+import { isEditableShortcutTarget, isImeComposing } from './src/lib/keyboard'
 import { shouldRestoreEditorFocus } from './src/lib/editor-focus'
 import { usePersistedSetting } from './src/hooks/usePersistedSetting'
 import { useWritingStats } from './src/hooks/useWritingStats'
@@ -2204,6 +2204,7 @@ img{max-width:100%}
       const action = shortcutLookupRef.current[combo]
       if (!action) return
       e.preventDefault()
+      if (isEditableShortcutTarget(e.target)) return
       switch (action) {
         case 'new': handleNew(); break
         case 'open': void handleOpen(); break
