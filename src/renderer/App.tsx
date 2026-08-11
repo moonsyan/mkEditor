@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, useDeferredValue } from 'react'
 import katexCss from 'katex/dist/katex.min.css?inline'
 import type { CSSProperties } from 'react'
 import { MenuBar } from './src/components/MenuBar'
@@ -218,10 +218,17 @@ export default function App(): JSX.Element {
 
   // 无打开文件（已全部关闭）时内容视为空，避免状态栏/大纲沿用上一份文档的残留内容
   const activeContent = openFiles.length > 0 ? (contents[activeFileId] ?? '') : ''
+  // 大文档连续输入时，状态栏统计让出渲染优先级；文件 ID 与内容作为一个值延后，
+  // 防止切换文档时把旧内容的字数记到新文档。
+  const statsSource = useMemo(
+    () => ({ fileId: activeFileId, content: activeContent }),
+    [activeFileId, activeContent],
+  )
+  const deferredStatsSource = useDeferredValue(statsSource)
 
   // 字数统计（先剥离 Markdown 语法符号，只统计正文）
   const { wordCount, lineCount } = useMemo(() => {
-    const plain = activeContent
+    const plain = deferredStatsSource.content
       // 头部 YAML frontmatter 元数据不计入正文
       .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')
       .replace(/^#{1,6}\s+/gm, '')
@@ -237,7 +244,7 @@ export default function App(): JSX.Element {
       wordCount: text.replace(/\s/g, '').length,
       lineCount: text ? text.split('\n').length : 0,
     }
-  }, [activeContent])
+  }, [deferredStatsSource])
   const saved = savedMap[activeFileId] ?? true
   const activeFile = openFiles.find((f) => f.id === activeFileId)
 
@@ -272,7 +279,11 @@ export default function App(): JSX.Element {
   const settingsInitRef = useRef(false)
 
   /* ==================== 写作统计与最近文件（垂直 hook） ==================== */
-  const { writingStats, setWritingStats } = useWritingStats(wordCount, activeFileId, settingsReadyRef)
+  const { writingStats, setWritingStats } = useWritingStats(
+    wordCount,
+    deferredStatsSource.fileId,
+    settingsReadyRef,
+  )
   const { recentFiles, setRecentFiles, recordRecent } = useRecentFiles(settingsReadyRef)
 
   useEffect(() => {
@@ -878,14 +889,18 @@ export default function App(): JSX.Element {
         // Milkdown 会规范化部分 Markdown。以规范化结果作为首次加载基线，
         // 避免用户尚未编辑就被误判为“未保存”。
         INITIAL_OR_SAVED.current[fileId] = stored
-        setContents((prev) => ({ ...prev, [fileId]: stored }))
+        setContents((prev) =>
+          prev[fileId] === stored ? prev : { ...prev, [fileId]: stored },
+        )
         setSavedMap((prev) =>
           prev[fileId] === true ? prev : { ...prev, [fileId]: true },
         )
       }
       return
     }
-    setContents((prev) => ({ ...prev, [fileId]: stored }))
+    setContents((prev) =>
+      prev[fileId] === stored ? prev : { ...prev, [fileId]: stored },
+    )
     setSavedMap((prev) => {
       const isSaved = !isDocumentDirty(stored, INITIAL_OR_SAVED.current[fileId] ?? '')
       if (prev[fileId] === isSaved) return prev

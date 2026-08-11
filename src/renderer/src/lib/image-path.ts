@@ -29,6 +29,7 @@ export function toStoredImages(md: string, docDir: string | undefined): string {
   if (!docDir) return md
   const base = docDir.replace(/\\/g, '/')
   const prefix = `mdimg:///${base}/`
+  if (!md.includes(prefix)) return md
   const re = new RegExp(`!\\[([^\\]]*)\\]\\(${escapeRegExp(prefix)}([^)]+)\\)`, 'g')
   return md.replace(re, (_m, alt: string, rel: string) => `![${alt}](${rel})`)
 }
