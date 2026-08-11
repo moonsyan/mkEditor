@@ -1517,7 +1517,11 @@ img{max-width:100%}
 
   const handleRenameFile = useCallback(
     async (path: string, newName: string) => {
-      if (!window.desktopAPI || !newName.trim()) return
+      if (!newName.trim()) {
+        setToast('文件名不能为空')
+        return
+      }
+      if (!window.desktopAPI) return
       // 先写回未保存内容，避免重命名丢失编辑（带冲突检测：外部修改过的不静默覆盖，中止重命名）
       const oldId = `file-${path}`
       let pending: string | undefined
@@ -1539,7 +1543,15 @@ img{max-width:100%}
       }
       const res = await window.desktopAPI.workspace.renameFile(path, newName)
       if (!res.ok || !res.data) {
-        setToast(res.error?.code === 'EXISTS' ? '同名文件已存在' : '重命名失败')
+        if (res.error?.code === 'EXISTS') {
+          setToast('同名文件已存在')
+          return
+        }
+        if (res.error?.code === 'INVALID_NAME') {
+          setToast('文件名不能包含 \\ / : * ? " < > |')
+          return
+        }
+        setToast('重命名失败')
         return
       }
       // 就地迁移打开记录/内容/基线/mtime 到新 id，避免旧路径幽灵标签残留
@@ -1587,6 +1599,32 @@ img{max-width:100%}
       await refreshWorkspace()
     },
     [contents, savedMap, fileMtime, activeFileId, saveWithEncodingFallback, refreshWorkspace, clearDraft],
+  )
+
+  const handleDocumentTitleBlur = useCallback(
+    (event: React.FocusEvent<HTMLDivElement>) => {
+      const currentFile = openFiles.find((file) => file.id === activeFileId)
+      const previousName = currentFile?.name ?? docTitle
+      const nextName = (event.currentTarget.textContent ?? '').trim()
+      // contentEditable 不会自动受 React 控制；先还原显示，等待真实重命名成功后再更新状态。
+      event.currentTarget.textContent = previousName
+      if (!nextName) {
+        setToast('文件名不能为空')
+        return
+      }
+      if (nextName === previousName) return
+      if (currentFile?.path) {
+        void handleRenameFile(currentFile.path, nextName)
+        return
+      }
+      setDocTitle(nextName)
+      setOpenFiles((previousFiles) =>
+        previousFiles.map((file) =>
+          file.id === activeFileId ? { ...file, name: nextName } : file,
+        ),
+      )
+    },
+    [activeFileId, docTitle, handleRenameFile, openFiles],
   )
 
   const handleDeleteFile = useCallback(
@@ -2255,13 +2293,7 @@ img{max-width:100%}
             contentEditable
             suppressContentEditableWarning
             spellCheck={false}
-            onBlur={(e) => {
-              const name = (e.currentTarget.textContent || '').trim() || '未命名文档'
-              setDocTitle(name)
-              setOpenFiles((prev) =>
-                prev.map((f) => (f.id === activeFileId ? { ...f, name } : f)),
-              )
-            }}
+            onBlur={handleDocumentTitleBlur}
           >
             {docTitle}
           </div>
