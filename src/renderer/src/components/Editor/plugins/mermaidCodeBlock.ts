@@ -26,6 +26,8 @@ const observeThemeChanges = () => {
 export const isMermaidLanguage = (language: unknown): boolean =>
   typeof language === 'string' && language.trim().toLowerCase() === 'mermaid'
 
+export const shouldRenderMermaidUpdate = (editingSource: boolean): boolean => !editingSource
+
 const getMermaid = () => {
   if (!mermaidPromise) {
     mermaidPromise = import('mermaid').then(({ default: mermaid }) => mermaid)
@@ -125,6 +127,10 @@ class MermaidCodeBlockView implements NodeView {
       else delete this.dom.dataset.language
       return true
     }
+    if (!shouldRenderMermaidUpdate(this.editing)) {
+      this.captureSource(node.textContent)
+      return true
+    }
     this.scheduleRender(node.textContent)
     return true
   }
@@ -151,6 +157,10 @@ class MermaidCodeBlockView implements NodeView {
 
   ensureRendered = (): Promise<void> => {
     if (!this.isMermaid) return Promise.resolve()
+    if (this.editing) {
+      this.render(this.lastSource)
+      return this.renderPromise ?? Promise.resolve()
+    }
     if (this.renderTimer) {
       clearTimeout(this.renderTimer)
       this.renderTimer = undefined
@@ -160,7 +170,7 @@ class MermaidCodeBlockView implements NodeView {
   }
 
   rerender = () => {
-    if (!this.isMermaid) return
+    if (!this.isMermaid || this.editing) return
     this.scheduleRender(this.lastSource, true)
   }
 
@@ -170,7 +180,16 @@ class MermaidCodeBlockView implements NodeView {
     this.dom.classList.toggle('is-editing', this.editing)
     this.toggle.setAttribute('aria-expanded', String(this.editing))
     this.toggle.textContent = this.editing ? '收起源码' : '编辑源码'
-    if (!this.editing) return
+    if (!this.editing) {
+      this.scheduleRender(this.lastSource, true)
+      return
+    }
+    if (this.renderTimer) {
+      clearTimeout(this.renderTimer)
+      this.renderTimer = undefined
+    }
+    // 使正在进行的旧渲染失效，避免打开源码后回写过时 SVG。
+    this.renderVersion += 1
     requestAnimationFrame(() => {
       const pos = this.getPos()
       if (typeof pos !== 'number') return
@@ -184,8 +203,7 @@ class MermaidCodeBlockView implements NodeView {
   }
 
   private scheduleRender(source: string, immediate = false) {
-    this.lastSource = source
-    this.renderVersion += 1
+    this.captureSource(source)
     if (this.renderTimer) clearTimeout(this.renderTimer)
     if (immediate) {
       this.render(source)
@@ -196,6 +214,11 @@ class MermaidCodeBlockView implements NodeView {
       this.renderTimer = undefined
       this.render(source)
     }, MERMAID_RENDER_DELAY)
+  }
+
+  private captureSource(source: string) {
+    this.lastSource = source
+    this.renderVersion += 1
   }
 
   private render(source: string) {
