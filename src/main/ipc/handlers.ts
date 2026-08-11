@@ -270,6 +270,17 @@ export function registerIpcHandlers(): void {
         folderPath = result.filePaths[0]
       }
 
+      if (typeof folderPath !== 'string' || !folderPath) {
+        return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
+      const folderStat = await stat(folderPath).catch(() => null)
+      if (!folderStat) {
+        return { ok: false, error: { code: 'NOT_FOUND' } }
+      }
+      if (!folderStat.isDirectory()) {
+        return { ok: false, error: { code: 'NOT_DIRECTORY' } }
+      }
+
       try {
         const children = await walkMarkdownTree(folderPath, 0)
         return {
@@ -830,7 +841,23 @@ export function registerIpcHandlers(): void {
       },
     ) => {
       try {
-        const q = (args.query ?? '').trim()
+        if (
+          !args ||
+          typeof args.dir !== 'string' ||
+          !args.dir ||
+          typeof args.query !== 'string'
+        ) {
+          return { ok: false, error: { code: 'INVALID_TARGET' } }
+        }
+        const dirStat = await stat(args.dir).catch(() => null)
+        if (!dirStat) {
+          return { ok: false, error: { code: 'NOT_FOUND' } }
+        }
+        if (!dirStat.isDirectory()) {
+          return { ok: false, error: { code: 'NOT_DIRECTORY' } }
+        }
+
+        const q = args.query.trim()
         if (!q) return { ok: true, data: { matches: [], truncated: false } }
         if (q.length > MAX_SEARCH_QUERY_LENGTH) {
           return {
