@@ -2551,9 +2551,10 @@ img{max-width:100%}
               onRichRender={handleRichRender}
               blankClickToEnd={blankClickToEnd}
               codeLineNumbers={codeLineNumbers}
-              onNotify={setToast}
-              imageHints={{
-                docPath: activeFile?.path,
+            onNotify={setToast}
+            imageHints={{
+              documentId: activeFileId,
+              docPath: activeFile?.path,
                 workspacePath: workspace?.path,
                 imageHost,
               }}

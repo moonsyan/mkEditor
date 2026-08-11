@@ -512,9 +512,23 @@ export function registerIpcHandlers(): void {
           dir = join(app.getPath('userData'), 'images')
         }
         await mkdir(dir, { recursive: true })
-        const name = `image-${Date.now()}-${Math.floor(Math.random() * 1e4)}.${ext}`
-        const filePath = join(dir, name)
-        await writeFile(filePath, buffer)
+        let name = ''
+        let filePath = ''
+        let created = false
+        for (let attempt = 0; attempt < 100; attempt++) {
+          name = `image-${Date.now()}-${Math.floor(Math.random() * 1e4)}.${ext}`
+          filePath = join(dir, name)
+          try {
+            await writeFile(filePath, buffer, { flag: 'wx' })
+            created = true
+            break
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+          }
+        }
+        if (!created) {
+          return { ok: false, error: { code: 'NAME_EXHAUSTED' } }
+        }
         allowImageDirectory(dir)
         return { ok: true, data: { path: filePath, name } }
       } catch (err) {

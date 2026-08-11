@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 import { toMdimgUrl } from '../../lib/image-path'
 
 export interface EditorImageHints {
+  documentId?: string
   docPath?: string
   workspacePath?: string
   imageHost?: { provider: 'local' | 'smms'; configured: boolean }
@@ -39,20 +40,25 @@ export function useImageInsertion({
   const imageQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   const insertImageFileTask = useCallback(
-    async (file: File) => {
+    async (file: File, imageHints: EditorImageHints | undefined) => {
       if (!window.desktopAPI) return
       if (file.size > MAX_IMAGE_SIZE) {
         notify('图片超过 20MB，无法插入')
         return
       }
 
+      const documentId = imageHints?.documentId
       const dataUrl = await readAsDataUrl(file)
       if (!dataUrl) return
 
-      const host = imageHintsRef.current?.imageHost
+      const host = imageHints?.imageHost
       if (host?.provider === 'smms' && host.configured) {
         const upload = await window.desktopAPI.document.uploadImage(dataUrl)
         if (upload.ok && upload.data?.url) {
+          if (imageHintsRef.current?.documentId !== documentId) {
+            notify('已切换文档，图片未插入')
+            return
+          }
           const alt = file.name.replace(/\.[^.]+$/, '')
           insertMarkdown(`![${alt}](${upload.data.url})`)
           return
@@ -60,8 +66,15 @@ export function useImageInsertion({
         notify('图床上传失败，已改为保存到本地')
       }
 
-      const result = await window.desktopAPI.document.saveImage(dataUrl, imageHintsRef.current)
+      const result = await window.desktopAPI.document.saveImage(dataUrl, {
+        docPath: imageHints?.docPath,
+        workspacePath: imageHints?.workspacePath,
+      })
       if (!result.ok || !result.data) return
+      if (imageHintsRef.current?.documentId !== documentId) {
+        notify('已切换文档，图片已保存但未插入')
+        return
+      }
       const url = toMdimgUrl(result.data.path)
       insertMarkdown(`![${result.data.name}](${url})`)
     },
@@ -70,8 +83,9 @@ export function useImageInsertion({
 
   const insertImageFile = useCallback(
     (file: File) => {
+      const imageHints = imageHintsRef.current
       imageQueueRef.current = imageQueueRef.current
-        .then(() => insertImageFileTask(file))
+        .then(() => insertImageFileTask(file, imageHints))
         .catch(() => {})
     },
     [insertImageFileTask],
