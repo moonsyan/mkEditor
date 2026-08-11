@@ -48,15 +48,17 @@ export function AppearancePanel({
       <div className="settings-section-title">主题</div>
       <div className="theme-cards">
         {THEMES.map((t) => (
-          <div
+          <button
+            type="button"
             key={t.id}
             className={`theme-card ${theme === t.id ? 'on' : ''}`}
+            aria-pressed={theme === t.id}
             onClick={() => onThemeChange(t.id)}
           >
             <span className="theme-card-dot" style={{ background: t.color }} />
             <span className="theme-card-name">{t.name}</span>
             <span className="theme-card-desc">{t.desc}</span>
-          </div>
+          </button>
         ))}
       </div>
 
@@ -65,13 +67,15 @@ export function AppearancePanel({
         <span className="settings-label">编辑器文字大小</span>
         <div className="seg">
           {FONT_PRESETS.map((opt) => (
-            <div
+            <button
+              type="button"
               key={opt.label}
               className={`seg-item ${Math.abs(fontSize - opt.value) < 0.01 ? 'on' : ''}`}
+              aria-pressed={Math.abs(fontSize - opt.value) < 0.01}
               onClick={() => onFontSizeChange(opt.value)}
             >
               {opt.label}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -93,13 +97,15 @@ export function AppearancePanel({
         <span className="settings-label">内容宽度</span>
         <div className="seg">
           {WIDTH_PRESETS.map((opt) => (
-            <div
+            <button
+              type="button"
               key={opt.label}
               className={`seg-item ${Math.abs(contentWidth - opt.value) < 0.5 ? 'on' : ''}`}
+              aria-pressed={Math.abs(contentWidth - opt.value) < 0.5}
               onClick={() => onContentWidthChange(opt.value)}
             >
               {opt.label}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -121,13 +127,15 @@ export function AppearancePanel({
         <span className="settings-label">行距</span>
         <div className="seg">
           {LINE_PRESETS.map((opt) => (
-            <div
+            <button
+              type="button"
               key={opt.label}
               className={`seg-item ${Math.abs(lineHeight - opt.value) < 0.001 ? 'on' : ''}`}
+              aria-pressed={Math.abs(lineHeight - opt.value) < 0.001}
               onClick={() => onLineHeightChange(opt.value)}
             >
               {opt.label}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -147,13 +155,15 @@ export function AppearancePanel({
         <span className="settings-label">内容字体</span>
         <div className="seg">
           {CONTENT_FONT_OPTIONS.map((opt) => (
-            <div
+            <button
+              type="button"
               key={opt.id}
               className={`seg-item ${contentFont === opt.id ? 'on' : ''}`}
+              aria-pressed={contentFont === opt.id}
               onClick={() => onContentFontChange(opt.id)}
             >
               {opt.label}
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -164,21 +174,25 @@ export function AppearancePanel({
           整体缩放（{Math.round(zoom * 100)}%）
         </span>
         <div className="zoom-ctrl">
-          <div
+          <button
+            type="button"
             className="zoom-btn"
+            aria-label="缩小"
             onClick={() => onZoomChange(Math.max(0.7, +(zoom - 0.1).toFixed(2)))}
           >
             −
-          </div>
-          <div className="zoom-btn" onClick={() => onZoomChange(1)}>
+          </button>
+          <button type="button" className="zoom-btn" onClick={() => onZoomChange(1)}>
             重置
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             className="zoom-btn"
+            aria-label="放大"
             onClick={() => onZoomChange(Math.min(1.8, +(zoom + 0.1).toFixed(2)))}
           >
             +
-          </div>
+          </button>
         </div>
       </div>
 
@@ -191,13 +205,13 @@ export function AppearancePanel({
           </span>
         </span>
         <div className="sc-edit-group">
-          <div className="sc-btn" onClick={onImportCss}>
+          <button type="button" className="sc-btn" onClick={onImportCss}>
             {customCssName ? '重新导入' : '导入'}
-          </div>
+          </button>
           {customCssName && (
-            <div className="sc-btn" onClick={onRemoveCss}>
+            <button type="button" className="sc-btn" onClick={onRemoveCss}>
               移除
-            </div>
+            </button>
           )}
         </div>
       </div>

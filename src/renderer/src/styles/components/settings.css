@@ -272,12 +272,16 @@ button.search-regex:focus-visible {
   gap: 8px;
 }
 .theme-card {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 9px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: all var(--dur) var(--ease);
 }
@@ -341,6 +345,12 @@ button.settings-row-toggle {
   background: transparent;
   font: inherit;
   text-align: left;
+}
+button.theme-card:focus-visible,
+button.zoom-btn:focus-visible,
+button.sc-reset:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 button.settings-row-toggle:focus-visible,
 button.seg-item:focus-visible,
@@ -447,6 +457,10 @@ button.seg-item {
   cursor: pointer;
   transition: all var(--dur) var(--ease);
 }
+button.zoom-btn {
+  background: transparent;
+  font-family: inherit;
+}
 button.sc-btn {
   background: transparent;
   font-family: inherit;
@@ -468,6 +482,11 @@ button.sc-btn.pdf-export-btn {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+button.sc-reset {
+  border: 0;
+  background: transparent;
+  font-family: inherit;
 }
 
 /* 精细调节滑块（字号/宽度/行距，对标 Typora 的逐像素/逐档调节） */

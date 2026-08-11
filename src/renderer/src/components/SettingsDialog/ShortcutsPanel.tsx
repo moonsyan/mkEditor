@@ -30,21 +30,23 @@ export function ShortcutsPanel({ shortcuts, onShortcutsChange }: ShortcutsPanelP
                 ? '按下组合键…'
                 : shortcuts[def.id] || '未设置'}
             </span>
-            <div className="sc-btn" onClick={() => startRecording(def.id)}>
+            <button type="button" className="sc-btn" onClick={() => startRecording(def.id)}>
               修改
-            </div>
+            </button>
             {shortcuts[def.id] && recordingId !== def.id && (
-              <div
+              <button
+                type="button"
                 className="sc-btn"
                 onClick={() => onShortcutsChange({ ...shortcuts, [def.id]: '' })}
               >
                 清除
-              </div>
+              </button>
             )}
           </div>
         </div>
       ))}
-      <div
+      <button
+        type="button"
         className="sc-reset"
         onClick={() => {
           onShortcutsChange({ ...DEFAULT_SHORTCUTS })
@@ -52,7 +54,7 @@ export function ShortcutsPanel({ shortcuts, onShortcutsChange }: ShortcutsPanelP
         }}
       >
         恢复默认快捷键
-      </div>
+      </button>
     </>
   )
 }
