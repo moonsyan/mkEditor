@@ -50,6 +50,7 @@ const MAX_REGEX_FILE_TIME_MS = 500
 const MAX_IMAGE_LIST_DIRS = 20
 /** 图片管理最多返回的图片数，避免大量缩略图阻塞渲染进程 */
 const MAX_IMAGE_LIST_COUNT = 1000
+const MAX_IMAGE_HOST_TOKEN_LENGTH = 2048
 
 let searchLineCacheBytes = 0
 
@@ -236,6 +237,19 @@ async function walkMarkdownTree(dir: string, depth: number): Promise<FolderTreeN
 export function registerIpcHandlers(): void {
   // pandoc 可用性探测结果缓存（缓存 Promise 本身，避免首次探测期间的并发误报）
   let pandocCheck: Promise<boolean> | null = null
+  const getImageHostStatus = async (): Promise<{
+    provider: 'local' | 'smms'
+    configured: boolean
+  }> => {
+    const config = (await getSetting('imageHost')) as
+      | { provider?: unknown; token?: unknown }
+      | undefined
+    const provider = config?.provider === 'smms' ? 'smms' : 'local'
+    return {
+      provider,
+      configured: provider === 'smms' && typeof config?.token === 'string' && Boolean(config.token),
+    }
+  }
 
   // 打开文件
   ipcMain.handle(CHANNELS.FILE_OPEN, async (event) => {
@@ -1012,6 +1026,9 @@ export function registerIpcHandlers(): void {
 
   // 读取设置
   ipcMain.handle(CHANNELS.SETTINGS_GET, async (_event, key: string) => {
+    if (key === 'imageHost') {
+      return { ok: false, error: { code: 'RESTRICTED_KEY' } }
+    }
     try {
       return { ok: true, data: await getSetting(key) }
     } catch (err) {
@@ -1023,6 +1040,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.SETTINGS_SET,
     async (_event, args: { key: string; value: unknown }) => {
+      if (args?.key === 'imageHost') {
+        return { ok: false, error: { code: 'RESTRICTED_KEY' } }
+      }
       try {
         await setSetting(args.key, args.value)
         return { ok: true }
@@ -1036,6 +1056,47 @@ export function registerIpcHandlers(): void {
   )
 
   // 草稿逐篇原子更新，避免多个标签或窗口以旧草稿字典覆盖彼此内容
+  ipcMain.handle(CHANNELS.IMAGE_HOST_GET_STATUS, async () => {
+    try {
+      return { ok: true, data: await getImageHostStatus() }
+    } catch (err) {
+      return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+    }
+  })
+
+  ipcMain.handle(
+    CHANNELS.IMAGE_HOST_SET_CONFIG,
+    async (_event, args: { provider: 'local' | 'smms'; token?: string }) => {
+      if (!args || (args.provider !== 'local' && args.provider !== 'smms')) {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      if (args.token !== undefined && typeof args.token !== 'string') {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      if (args.token && args.token.length > MAX_IMAGE_HOST_TOKEN_LENGTH) {
+        return { ok: false, error: { code: 'VALUE_TOO_LARGE' } }
+      }
+      try {
+        const current = (await getSetting('imageHost')) as
+          | { token?: unknown }
+          | undefined
+        const token = args.token === undefined
+          ? (typeof current?.token === 'string' ? current.token : '')
+          : args.token.trim()
+        await setSetting(
+          'imageHost',
+          args.provider === 'smms' ? { provider: 'smms', token } : { provider: 'local' },
+        )
+        return { ok: true, data: await getImageHostStatus() }
+      } catch (err) {
+        if (err instanceof SettingsStoreError) {
+          return { ok: false, error: { code: err.code } }
+        }
+        return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+      }
+    },
+  )
+
   ipcMain.handle(
     CHANNELS.SETTINGS_UPSERT_DRAFT,
     async (_event, args: { id: string; content: string }) => {

@@ -39,6 +39,10 @@ export interface DesktopAPI {
     pickCss(): Promise<{ ok: boolean; data?: { name: string; content: string }; error?: { code: string; message?: string } }>
     uploadImage(dataUrl: string): Promise<{ ok: boolean; data?: { url: string }; error?: { code: string; message?: string } }>
   }
+  imageHost: {
+    getStatus(): Promise<{ ok: boolean; data?: { provider: 'local' | 'smms'; configured: boolean }; error?: { code: string; message?: string } }>
+    setConfig(provider: 'local' | 'smms', token?: string): Promise<{ ok: boolean; data?: { provider: 'local' | 'smms'; configured: boolean }; error?: { code: string; message?: string } }>
+  }
   workspace: {
     createFile(dir: string, name: string): Promise<{ ok: boolean; data?: { path: string; name: string }; error?: { code: string; message?: string } }>
     renameFile(path: string, newName: string): Promise<{ ok: boolean; data?: { path: string; name: string; modifiedTime: number }; error?: { code: string; message?: string } }>

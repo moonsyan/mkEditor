@@ -5,7 +5,7 @@ import { toMdimgUrl } from '../../lib/image-path'
 export interface EditorImageHints {
   docPath?: string
   workspacePath?: string
-  imageHost?: { provider: 'local' | 'smms'; token: string }
+  imageHost?: { provider: 'local' | 'smms'; configured: boolean }
 }
 
 interface UseImageInsertionOptions {
@@ -50,7 +50,7 @@ export function useImageInsertion({
       if (!dataUrl) return
 
       const host = imageHintsRef.current?.imageHost
-      if (host?.provider === 'smms' && host.token) {
+      if (host?.provider === 'smms' && host.configured) {
         const upload = await window.desktopAPI.document.uploadImage(dataUrl)
         if (upload.ok && upload.data?.url) {
           const alt = file.name.replace(/\.[^.]+$/, '')

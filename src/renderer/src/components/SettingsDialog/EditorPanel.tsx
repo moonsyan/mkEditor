@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { SPELL_LANG_OPTIONS } from './constants'
 
 interface EditorPanelProps {
@@ -15,8 +16,9 @@ interface EditorPanelProps {
   onBlankClickToEndChange: (value: boolean) => void
   codeLineNumbers: boolean
   onCodeLineNumbersChange: (value: boolean) => void
-  imageHost: { provider: 'local' | 'smms'; token: string }
-  onImageHostChange: (value: { provider: 'local' | 'smms'; token: string }) => void
+  imageHost: { provider: 'local' | 'smms'; configured: boolean }
+  onImageHostProviderChange: (provider: 'local' | 'smms') => Promise<void>
+  onImageHostTokenSave: (token: string) => Promise<boolean>
 }
 
 /** 编辑器面板：编辑行为开关 + 图床配置 */
@@ -36,8 +38,20 @@ export function EditorPanel({
   codeLineNumbers,
   onCodeLineNumbersChange,
   imageHost,
-  onImageHostChange,
+  onImageHostProviderChange,
+  onImageHostTokenSave,
 }: EditorPanelProps): JSX.Element {
+  const [tokenInput, setTokenInput] = useState('')
+
+  useEffect(() => {
+    setTokenInput('')
+  }, [imageHost.provider])
+
+  const handleSaveToken = async () => {
+    if (!tokenInput.trim()) return
+    if (await onImageHostTokenSave(tokenInput)) setTokenInput('')
+  }
+
   return (
     <>
       <div className="settings-section-title">编辑</div>
@@ -109,7 +123,7 @@ export function EditorPanel({
             type="button"
             className={`seg-item ${imageHost.provider === 'local' ? 'on' : ''}`}
             aria-pressed={imageHost.provider === 'local'}
-            onClick={() => onImageHostChange({ ...imageHost, provider: 'local' })}
+            onClick={() => void onImageHostProviderChange('local')}
           >
             本地附件
           </button>
@@ -117,7 +131,7 @@ export function EditorPanel({
             type="button"
             className={`seg-item ${imageHost.provider === 'smms' ? 'on' : ''}`}
             aria-pressed={imageHost.provider === 'smms'}
-            onClick={() => onImageHostChange({ ...imageHost, provider: 'smms' })}
+            onClick={() => void onImageHostProviderChange('smms')}
           >
             SM.MS 图床
           </button>
@@ -133,11 +147,20 @@ export function EditorPanel({
             className="settings-text-input"
             type="password"
             placeholder="粘贴 Token"
-            value={imageHost.token}
+            value={tokenInput}
             spellCheck={false}
             onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onImageHostChange({ ...imageHost, token: e.target.value })}
+            onChange={(e) => setTokenInput(e.target.value)}
           />
+          <button
+            type="button"
+            className="sc-btn"
+            disabled={!tokenInput.trim()}
+            onClick={() => void handleSaveToken()}
+          >
+            保存
+          </button>
+          {imageHost.configured && <span className="settings-hint">已配置</span>}
         </div>
       )}
     </>

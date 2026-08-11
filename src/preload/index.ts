@@ -81,6 +81,12 @@ const desktopAPI = {
       ipcRenderer.invoke(CHANNELS.IMAGE_UPLOAD, { dataUrl }),
   },
 
+  imageHost: {
+    getStatus: () => ipcRenderer.invoke(CHANNELS.IMAGE_HOST_GET_STATUS),
+    setConfig: (provider: 'local' | 'smms', token?: string) =>
+      ipcRenderer.invoke(CHANNELS.IMAGE_HOST_SET_CONFIG, { provider, token }),
+  },
+
   workspace: {
     /** 在目录下新建 Markdown 文件 */
     createFile: (dir: string, name: string) =>

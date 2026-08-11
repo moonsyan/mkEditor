@@ -57,8 +57,9 @@ interface SettingsDialogProps {
   onImportCss: () => void
   onRemoveCss: () => void
   /** 图床配置 */
-  imageHost: { provider: 'local' | 'smms'; token: string }
-  onImageHostChange: (value: { provider: 'local' | 'smms'; token: string }) => void
+  imageHost: { provider: 'local' | 'smms'; configured: boolean }
+  onImageHostProviderChange: (provider: 'local' | 'smms') => Promise<void>
+  onImageHostTokenSave: (token: string) => Promise<boolean>
   /** 快捷键 */
   shortcuts: ShortcutMap
   onShortcutsChange: (map: ShortcutMap) => void
@@ -102,7 +103,8 @@ export function SettingsDialog({
   onImportCss,
   onRemoveCss,
   imageHost,
-  onImageHostChange,
+  onImageHostProviderChange,
+  onImageHostTokenSave,
   shortcuts,
   onShortcutsChange,
 }: SettingsDialogProps): JSX.Element | null {
@@ -186,7 +188,8 @@ export function SettingsDialog({
               codeLineNumbers={codeLineNumbers}
               onCodeLineNumbersChange={onCodeLineNumbersChange}
               imageHost={imageHost}
-              onImageHostChange={onImageHostChange}
+              onImageHostProviderChange={onImageHostProviderChange}
+              onImageHostTokenSave={onImageHostTokenSave}
             />
           )}
 

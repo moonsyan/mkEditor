@@ -199,10 +199,10 @@ export default function App(): JSX.Element {
   const [pdfOptsOpen, setPdfOptsOpen] = useState(false)
   /** 自定义主题 CSS（用户导入，注入 <style> 生效） */
   const [customCss, setCustomCss] = useState<{ name: string; content: string } | null>(null)
-  /** 图床配置（local=本地附件，smms=SM.MS 需 token） */
-  const [imageHost, setImageHost] = useState<{ provider: 'local' | 'smms'; token: string }>({
+  /** 图床状态：访问令牌仅由主进程持久化，渲染端不读取其明文。 */
+  const [imageHost, setImageHost] = useState<{ provider: 'local' | 'smms'; configured: boolean }>({
     provider: 'local',
-    token: '',
+    configured: false,
   })
   /** 拼写检查语言（B4 部分改善：可选 Electron 内置词典语言） */
   const [spellcheckLang, setSpellcheckLang] = useState('en-US')
@@ -321,7 +321,7 @@ export default function App(): JSX.Element {
       api.get('blankClickToEnd'),
       api.get('codeLineNumbers'),
       api.get('customCss'),
-      api.get('imageHost'),
+      window.desktopAPI.imageHost.getStatus(),
       api.get('spellcheckLang'),
     ])
       .then(async ([t, a, sp, mw, f, z, sw, cw, lh, cf, ws, rf, sc, s, dr, srch, bce, cln, ccs, ih, scl]) => {
@@ -419,10 +419,10 @@ export default function App(): JSX.Element {
         }
         // 图床配置
         if (ih?.ok && ih.data && typeof ih.data === 'object') {
-          const v = ih.data as { provider?: unknown; token?: unknown }
+          const v = ih.data as { provider?: unknown; configured?: unknown }
           setImageHost({
             provider: v.provider === 'smms' ? 'smms' : 'local',
-            token: typeof v.token === 'string' ? v.token : '',
+            configured: v.configured === true,
           })
         }
         // 拼写检查语言
@@ -843,8 +843,28 @@ export default function App(): JSX.Element {
   // 自定义主题持久化
   usePersistedSetting('customCss', customCss, settingsReady)
 
-  // 图床配置持久化（token 仅存于主进程 settings 文件）
-  usePersistedSetting('imageHost', imageHost, settingsReady)
+  const handleImageHostProviderChange = useCallback(
+    async (provider: 'local' | 'smms') => {
+      const result = await window.desktopAPI?.imageHost.setConfig(provider)
+      if (!result?.ok || !result.data) {
+        setToast('图床配置保存失败')
+        return
+      }
+      setImageHost(result.data)
+    },
+    [],
+  )
+
+  const handleImageHostTokenSave = useCallback(async (token: string): Promise<boolean> => {
+    const result = await window.desktopAPI?.imageHost.setConfig('smms', token)
+    if (!result?.ok || !result.data) {
+      setToast('Token 保存失败')
+      return false
+    }
+    setImageHost(result.data)
+    setToast('Token 已保存')
+    return true
+  }, [])
 
   /** 光标位置变化（无变化时返回原对象避免多余渲染） */
   const handleCursorChange = useCallback(
@@ -2598,7 +2618,8 @@ img{max-width:100%}
         onImportCss={() => void handleImportCss()}
         onRemoveCss={handleRemoveCss}
         imageHost={imageHost}
-        onImageHostChange={setImageHost}
+        onImageHostProviderChange={handleImageHostProviderChange}
+        onImageHostTokenSave={handleImageHostTokenSave}
         shortcuts={shortcuts}
         onShortcutsChange={setShortcuts}
       />

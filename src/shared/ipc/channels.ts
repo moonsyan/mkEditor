@@ -10,6 +10,8 @@ export const CHANNELS = {
   FILE_EXPORT_PANDOC: 'file:export-pandoc',
   FILE_PICK_CSS: 'file:pick-css',
   IMAGE_UPLOAD: 'image:upload',
+  IMAGE_HOST_GET_STATUS: 'image-host:get-status',
+  IMAGE_HOST_SET_CONFIG: 'image-host:set-config',
   FILE_CREATE: 'file:create',
   FILE_RENAME: 'file:rename',
   FILE_MOVE: 'file:move',
