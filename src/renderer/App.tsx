@@ -634,6 +634,7 @@ export default function App(): JSX.Element {
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
+      if (!(e.target instanceof Element) || !e.target.closest('.editor-content')) return
       e.preventDefault()
       const step = e.deltaY < 0 ? 0.1 : -0.1
       setZoom((z) => Math.min(1.8, Math.max(0.7, +(z + step).toFixed(2))))
