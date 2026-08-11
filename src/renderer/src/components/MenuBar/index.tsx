@@ -159,36 +159,61 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
     setOpenKey(key)
   }, [])
 
+  const handleMenuKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    key: string,
+  ) => {
+    if (event.key === 'Escape') {
+      setOpenKey(null)
+      return
+    }
+    if (!['ArrowDown', 'Enter', ' '].includes(event.key)) return
+    event.preventDefault()
+    openMenu(key, event.currentTarget)
+  }
+
   return (
     <div className="menubar" ref={barRef}>
       {Object.keys(menus).map((key) => (
         <div
           key={key}
-          className={`menu-item ${openKey === key ? 'open' : ''}`}
-          onClick={(e) => {
-            const el = e.currentTarget
-            if (openKey === key) setOpenKey(null)
-            else openMenu(key, el)
-          }}
-          onMouseEnter={(e) => {
-            if (openKey && openKey !== key) openMenu(key, e.currentTarget)
+          className="menu-entry"
+          onMouseEnter={(event) => {
+            if (openKey && openKey !== key) {
+              const trigger = event.currentTarget.querySelector('button')
+              if (trigger) openMenu(key, trigger)
+            }
           }}
         >
+          <button
+            type="button"
+            className={`menu-item ${openKey === key ? 'open' : ''}`}
+            aria-expanded={openKey === key}
+            aria-haspopup="menu"
+            onClick={(event) => {
+              if (openKey === key) setOpenKey(null)
+              else openMenu(key, event.currentTarget)
+            }}
+            onKeyDown={(event) => handleMenuKeyDown(event, key)}
+          >
           {MENU_LABELS[key]}
+          </button>
           {openKey === key && (
-            <div className="dropdown show" style={ddStyle}>
+            <div className="dropdown show" style={ddStyle} role="menu">
             {menus[key].map((item, i) =>
               item.separator ? (
                 <div key={i} className="dd-sep" />
               ) : (
-                <div
+                <button
+                  type="button"
                   key={i}
                   className="dd-item"
+                  role="menuitem"
                   onClick={() => handleItemClick(key, item)}
                 >
                   <span className="dd-label">{item.label}</span>
                   {item.shortcut && <span className="sc">{item.shortcut}</span>}
-                </div>
+                </button>
               ),
             )}
             </div>

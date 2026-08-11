@@ -2353,20 +2353,26 @@ img{max-width:100%}
           </div>
         )}
         <div className="act-group">
-          <div
+          <button
+            type="button"
             className={`act-btn ${!sidebarCollapsed ? 'active' : ''}`}
             onClick={() => setSidebarCollapsed((v) => !v)}
+            aria-label="切换侧栏"
+            aria-pressed={!sidebarCollapsed}
             title="切换侧栏 (Ctrl+J)"
           >
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="9" y1="3" x2="9" y2="21" /></svg>
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             className={`act-btn ${focusMode ? 'active' : ''}`}
             onClick={() => setFocusMode((v) => !v)}
+            aria-label="切换专注模式"
+            aria-pressed={focusMode}
             title="专注模式 (F11)"
           >
             <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>
-          </div>
+          </button>
           <ThemeSwitcher currentTheme={theme} onThemeChange={setTheme} />
           <div
             className={`act-btn ${settingsOpen ? 'active' : ''}`}

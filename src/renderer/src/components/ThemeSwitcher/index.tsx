@@ -26,18 +26,29 @@ export function ThemeSwitcher({ currentTheme, onThemeChange }: ThemeSwitcherProp
 
   return (
     <div className="theme-switcher" ref={ref}>
-      <div className="act-btn" onClick={() => setOpen(!open)} title="切换主题">
+      <button
+        type="button"
+        className="act-btn"
+        aria-label="切换主题"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        onClick={() => setOpen((value) => !value)}
+        title="切换主题"
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="4" />
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
         </svg>
-      </div>
-      <div className={`theme-dd ${open ? 'show' : ''}`}>
+      </button>
+      <div className={`theme-dd ${open ? 'show' : ''}`} role="menu">
         <div className="theme-dd-label">选择主题</div>
         {THEMES.map((t) => (
-          <div
+          <button
+            type="button"
             key={t.id}
             className={`theme-opt ${currentTheme === t.id ? 'on' : ''}`}
+            role="menuitemradio"
+            aria-checked={currentTheme === t.id}
             onClick={() => {
               onThemeChange(t.id)
               setOpen(false)
@@ -45,7 +56,7 @@ export function ThemeSwitcher({ currentTheme, onThemeChange }: ThemeSwitcherProp
           >
             <span className="t-swatch" style={{ background: t.color }} />
             {t.name}
-          </div>
+          </button>
         ))}
       </div>
     </div>
