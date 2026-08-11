@@ -16,6 +16,6 @@
 
 ## 现状说明
 
-- 当前未配置 ESLint、Prettier、Vitest 或 Playwright，也没有项目测试文件。`npm run build` 是每次改动的最低验证门槛；交互修改还需要 `npm run dev` 冒烟验证。
+- 当前已配置 Vitest，覆盖标签状态、输入法与快捷键作用域、焦点恢复、图片路径、大纲和搜索高亮等基础逻辑。每次改动至少执行 `npm run typecheck`、`npm run test` 与 `npm run build`；交互修改还需要 `npm run dev` 冒烟验证。ESLint、Prettier 和 Playwright 尚未配置。
 - `electron-updater` 已集成，但 `package.json` 中的更新 URL 仍是示例地址。未配置真实服务前，不能将自动更新视为可用功能。
 - `pandoc` 导出 Word、EPUB、LaTeX 与纯文本依赖用户系统安装 pandoc；HTML 和 PDF 不依赖该工具。

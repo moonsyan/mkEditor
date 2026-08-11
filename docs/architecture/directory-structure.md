@@ -26,7 +26,7 @@ src/
       data/                   演示文件与默认快捷键
       styles/                 全局、主题与组件 CSS
   shared/ipc/channels.ts      跨进程 IPC 常量
-docs/                         项目说明
+docs/                         项目说明，按 product / architecture / development 分组并由 _index.md 进入
 develop/                      开发者学习资料
 resources/                    图标等发布资源
 ```

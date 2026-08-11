@@ -4,6 +4,8 @@
 
 支持多文件工作区、主题切换、实时预览、代码块行号、拼写检查、拖拽导入文件、写作统计，以及 HTML / PDF / Word / EPUB 等格式导出。
 
+完整的产品、架构与维护文档请从 [docs 文档索引](./docs/_index.md) 进入。
+
 ---
 
 ## 功能概览
@@ -75,9 +77,11 @@ markdown-soft-v3/
 │   │       └── styles/         # 样式（主题变量、组件样式）
 │   └── shared/
 │       └── ipc/               # IPC 通道名称常量（主进程 & 渲染进程共享）
-├── docs/                      # 架构文档
-│   ├── architecture.md        # 系统架构说明
-│   └── theme-guide.md         # 主题开发指南
+├── docs/                      # 项目文档
+│   ├── _index.md              # 文档总入口
+│   ├── product/               # 产品边界、功能规格、对比
+│   ├── architecture/          # 架构、目录与技术选型
+│   └── development/           # 组件、主题、快捷键与维护
 ├── resources/                 # 应用资源（图标等）
 ├── electron.vite.config.ts    # Electron-Vite 构建配置
 ├── tsconfig.json
@@ -127,6 +131,8 @@ npm run dev
 ### 构建
 
 ```bash
+npm run typecheck
+npm run test
 npm run build
 ```
 
