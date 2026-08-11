@@ -37,6 +37,8 @@ const SEARCH_CACHE_FILE_MAX = 512 * 1024
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024
 /** Base64 解码前的长度上限，避免超大 IPC 载荷先造成主进程内存峰值 */
 const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_SIZE * 4) / 3) + 4
+/** 自定义主题 CSS 上限，防止误选大文件阻塞主进程或渲染进程。 */
+const MAX_CSS_FILE_SIZE = 1024 * 1024
 /** 工作区搜索查询长度上限，避免正则与逐行匹配消耗失控 */
 const MAX_SEARCH_QUERY_LENGTH = 256
 /** 单个文件的正则匹配时间上限，防止灾难性回溯阻塞主进程 */
@@ -1053,14 +1055,23 @@ export function registerIpcHandlers(): void {
       return { ok: false, error: { code: 'CANCELLED' } }
     }
     try {
-      const content = await readFile(result.filePaths[0], 'utf-8')
-      // 体积守卫：避免误选超大文件
-      if (content.length > 1024 * 1024) {
+      const filePath = result.filePaths[0]
+      const fileStat = await stat(filePath)
+      if (!fileStat.isFile()) {
+        return { ok: false, error: { code: 'IO_ERROR', message: '选择的不是普通文件' } }
+      }
+      // 必须在 readFile 前检查，避免误选超大文件造成内存峰值。
+      if (fileStat.size > MAX_CSS_FILE_SIZE) {
+        return { ok: false, error: { code: 'TOO_LARGE', message: 'CSS 文件过大（>1MB）' } }
+      }
+      const content = await readFile(filePath, 'utf-8')
+      // 读取期间文件可能被替换，再次校验避免超限内容进入渲染进程。
+      if (Buffer.byteLength(content, 'utf-8') > MAX_CSS_FILE_SIZE) {
         return { ok: false, error: { code: 'TOO_LARGE', message: 'CSS 文件过大（>1MB）' } }
       }
       return {
         ok: true,
-        data: { name: basename(result.filePaths[0]), content },
+        data: { name: basename(filePath), content },
       }
     } catch (err) {
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
