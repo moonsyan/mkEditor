@@ -694,6 +694,15 @@ export function registerIpcHandlers(): void {
     CHANNELS.FILE_MOVE,
     async (_event, args: { path: string; targetDir: string }) => {
       try {
+        if (
+          !args ||
+          typeof args.path !== 'string' ||
+          !args.path ||
+          typeof args.targetDir !== 'string' ||
+          !args.targetDir
+        ) {
+          return { ok: false, error: { code: 'INVALID_TARGET' } }
+        }
         const src = args.path
         const dir = args.targetDir
         // 目标目录必须存在且不能是源自身/源的子目录（防止移入自身内部）
@@ -701,7 +710,16 @@ export function registerIpcHandlers(): void {
         if (!dirStat?.isDirectory()) {
           return { ok: false, error: { code: 'INVALID_TARGET' } }
         }
-        if (dir === src || dir.startsWith(src + sep) || dir.startsWith(src + '/')) {
+        const normalizePathForCompare = (value: string) => {
+          const normalized = value.replace(/[\\/]+/g, sep)
+          return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+        }
+        const sourceForCompare = normalizePathForCompare(src)
+        const targetDirForCompare = normalizePathForCompare(dir)
+        if (
+          targetDirForCompare === sourceForCompare ||
+          targetDirForCompare.startsWith(sourceForCompare + sep)
+        ) {
           return { ok: false, error: { code: 'INVALID_TARGET' } }
         }
         const target = join(dir, basename(src))

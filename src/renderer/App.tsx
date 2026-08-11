@@ -1789,8 +1789,15 @@ img{max-width:100%}
   const handleMoveFile = useCallback(
     async (path: string, targetDir: string) => {
       if (!window.desktopAPI) return
-      const isUnder = (p: string) =>
-        p === path || p.startsWith(path + '/') || p.startsWith(path + '\\')
+      const normalizePathForCompare = (value: string) => {
+        const normalized = value.replace(/\\/g, '/')
+        return window.desktopAPI?.platform === 'win32' ? normalized.toLowerCase() : normalized
+      }
+      const sourceForCompare = normalizePathForCompare(path)
+      const isUnder = (value: string) => {
+        const candidate = normalizePathForCompare(value)
+        return candidate === sourceForCompare || candidate.startsWith(`${sourceForCompare}/`)
+      }
       // 先写回受影响文件的未保存内容，避免移动后编辑丢失（带冲突检测，外部修改过的不静默覆盖）
       const dirty = openFiles.filter(
         (f) => f.path && isUnder(f.path) && savedMap[f.id] === false,
