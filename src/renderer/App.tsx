@@ -1243,7 +1243,12 @@ export default function App(): JSX.Element {
     const oldId = activeFileId
     const content = contents[oldId] ?? ''
     const result = await window.desktopAPI.document.saveAs(content)
-    if (!result.ok || !result.data) return
+    if (!result.ok || !result.data) {
+      if (result.error?.code !== 'CANCELLED') {
+        setToast('另存为失败，请检查目标文件权限或磁盘空间')
+      }
+      return
+    }
     const { path, name } = result.data
     const newId = `file-${path}`
     const targetAlreadyOpen =
@@ -1326,6 +1331,12 @@ export default function App(): JSX.Element {
         setSavedMap((prev) => ({ ...prev, [activeFileId]: true }))
         setFileMtime((prev) => ({ ...prev, [activeFileId]: result.data!.modifiedTime }))
         void clearDraft(activeFileId)
+      } else if (result.error?.code !== 'ENCODING_LOSS') {
+        setToast(
+          result.error?.code === 'NOT_FOUND'
+            ? '原文件已不存在，请使用另存为保存当前内容'
+            : '保存失败，请检查文件权限或磁盘空间',
+        )
       }
       return
     }
