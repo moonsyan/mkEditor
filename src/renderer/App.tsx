@@ -1627,6 +1627,22 @@ img{max-width:100%}
     [activeFileId, docTitle, handleRenameFile, openFiles],
   )
 
+  const handleDocumentTitleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (isImeComposing(event.nativeEvent)) return
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        event.currentTarget.blur()
+        return
+      }
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.currentTarget.textContent = docTitle
+      event.currentTarget.blur()
+    },
+    [docTitle],
+  )
+
   const handleDeleteFile = useCallback(
     async (path: string) => {
       if (!window.desktopAPI) return
@@ -2291,9 +2307,13 @@ img{max-width:100%}
             ref={titleRef}
             className="doc-title"
             contentEditable
+            role="textbox"
+            aria-label="文档文件名"
+            aria-multiline={false}
             suppressContentEditableWarning
             spellCheck={false}
             onBlur={handleDocumentTitleBlur}
+            onKeyDown={handleDocumentTitleKeyDown}
           >
             {docTitle}
           </div>
