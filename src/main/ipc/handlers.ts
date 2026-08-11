@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
-import { chmod, readFile, writeFile, stat, readdir, mkdir, rename, unlink } from 'fs/promises'
+import { chmod, readFile, writeFile, stat, readdir, mkdir, rename, unlink, realpath } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { join, dirname, basename, sep, extname } from 'path'
 import { execFile } from 'child_process'
@@ -712,6 +712,23 @@ export function registerIpcHandlers(): void {
     return trimmed
   }
 
+  /**
+   * Windows/macOS 常见的大小写不敏感文件系统中，文件名仅变更大小写时，
+   * target 会被 stat 到同一个文件。真实同名冲突仍必须拒绝，避免 rename 覆盖目标。
+  */
+  const isCaseOnlyRename = async (source: string, target: string): Promise<boolean> => {
+    if (source === target) return true
+    const [sourceRealPath, targetRealPath] = await Promise.all([
+      realpath(source),
+      realpath(target),
+    ])
+    const normalizeForCaseCompare = (value: string) => value.replace(/[\\/]+/g, sep).toLowerCase()
+    return (
+      sourceRealPath === targetRealPath &&
+      normalizeForCaseCompare(source) === normalizeForCaseCompare(target)
+    )
+  }
+
   // 新建文件
   ipcMain.handle(
     CHANNELS.FILE_CREATE,
@@ -766,11 +783,12 @@ export function registerIpcHandlers(): void {
       if (!name) return { ok: false, error: { code: 'INVALID_NAME' } }
       const target = join(dirname(args.path), name)
       if (target !== args.path) {
-        try {
-          await stat(target)
-          return { ok: false, error: { code: 'EXISTS' } }
-        } catch {
-          /* 目标不存在，可以重命名 */
+        const targetStat = await stat(target).catch(() => null)
+        if (targetStat) {
+          const sameFile = await isCaseOnlyRename(args.path, target).catch(() => false)
+          if (!sameFile) {
+            return { ok: false, error: { code: 'EXISTS' } }
+          }
         }
       }
       try {
