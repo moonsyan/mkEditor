@@ -1,4 +1,5 @@
 import { isImeComposing } from '../../lib/keyboard'
+import { WikiAutocomplete, type WikiSuggestion } from './WikiAutocomplete'
 
 export interface CodePanelState {
   pre: HTMLElement
@@ -18,6 +19,15 @@ export interface FullscreenCodeState {
   text: string
 }
 
+export interface WikiAcOverlayState {
+  query: string
+  suggestions: WikiSuggestion[]
+  x: number
+  y: number
+  onSelect: (path: string) => void
+  onClose: () => void
+}
+
 type TableAction =
   | 'addRow'
   | 'addCol'
@@ -32,6 +42,7 @@ interface EditorOverlaysProps {
   codePanel: CodePanelState | null
   tablePanel: TablePanelState | null
   fullscreenCode: FullscreenCodeState | null
+  wikiAutocomplete: WikiAcOverlayState | null
   language: string
   copied: boolean
   onLanguageChange: (language: string) => void
@@ -48,6 +59,7 @@ export function EditorOverlays({
   codePanel,
   tablePanel,
   fullscreenCode,
+  wikiAutocomplete,
   language,
   copied,
   onLanguageChange,
@@ -157,6 +169,17 @@ export function EditorOverlays({
             </pre>
           </div>
         </div>
+      )}
+
+      {wikiAutocomplete && (
+        <WikiAutocomplete
+          query={wikiAutocomplete.query}
+          suggestions={wikiAutocomplete.suggestions}
+          x={wikiAutocomplete.x}
+          y={wikiAutocomplete.y}
+          onSelect={wikiAutocomplete.onSelect}
+          onClose={wikiAutocomplete.onClose}
+        />
       )}
     </>
   )

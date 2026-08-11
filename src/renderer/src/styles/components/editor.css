@@ -703,3 +703,180 @@
 .ProseMirror-focused .ProseMirror-gapcursor {
   display: block;
 }
+
+/* ====== Wiki 链接 [[target]] ====== */
+.wiki-link {
+  color: var(--accent);
+  background: var(--accent-bg);
+  border-radius: 3px;
+  padding: 0 2px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.wiki-link:hover {
+  background: var(--bg-active);
+  text-decoration: underline;
+}
+
+/* ====== Wiki 链接自动补全浮层 ====== */
+.wiki-ac-panel {
+  position: absolute;
+  z-index: 50;
+  min-width: 240px;
+  max-width: 400px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  overflow: hidden;
+}
+.wiki-ac-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.wiki-ac-item {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.wiki-ac-item.active,
+.wiki-ac-item:hover {
+  background: var(--bg-active);
+}
+.wiki-ac-name {
+  font-size: 13px;
+  color: var(--text-1);
+  line-height: 1.5;
+}
+.wiki-ac-path {
+  font-size: 11px;
+  color: var(--text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ====== Frontmatter 属性面板 ====== */
+.frontmatter-props {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-bottom: 8px;
+}
+.fm-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  width: 100%;
+  text-align: left;
+}
+.fm-toggle-btn:hover {
+  color: var(--text-2);
+}
+.fm-chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.15s;
+}
+.fm-chevron.open {
+  transform: rotate(90deg);
+}
+.fm-count {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 16px;
+}
+.fm-table {
+  padding: 4px 0;
+}
+.fm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-m);
+}
+.fm-row:last-child {
+  border-bottom: none;
+}
+.fm-key {
+  min-width: 80px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.fm-val {
+  flex: 1;
+  min-width: 0;
+}
+.fm-val-text {
+  display: block;
+  font-size: 13px;
+  color: var(--text-1);
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+.fm-val-text:hover {
+  border-color: var(--border);
+}
+.fm-input {
+  width: 100%;
+  font-size: 13px;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: var(--text-1);
+  outline: none;
+}
+.fm-rm-btn {
+  background: none;
+  border: none;
+  color: var(--text-4);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.fm-rm-btn:hover {
+  color: #e74c3c;
+}
+.fm-add-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-4);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 3px;
+  margin-top: 4px;
+  width: 100%;
+  text-align: center;
+  transition: border-color 0.15s, color 0.15s;
+}
+.fm-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.fm-row-new {
+  gap: 4px;
+}
+.fm-key-input {
+  max-width: 120px;
+}

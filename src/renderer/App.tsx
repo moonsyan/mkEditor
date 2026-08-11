@@ -65,6 +65,10 @@ import {
   deleteSelectedCellsCommand,
 } from '@milkdown/kit/preset/gfm'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
+import { resolveWikiTarget } from './src/lib/wiki-resolver'
+import { collectMdFiles } from './src/lib/wiki-resolver'
+import { parseFrontmatterYaml, replaceFrontmatter, extractFrontmatterRaw } from './src/lib/frontmatter-parser'
+import { FrontmatterProperties } from './src/components/Editor/FrontmatterProperties'
 
 /** 每套主题对应的标题栏覆盖层颜色（Windows 系统窗口按钮区域） */
 const TITLEBAR_COLORS: Record<string, { bg: string; symbol: string }> = {
@@ -323,8 +327,11 @@ export default function App(): JSX.Element {
       api.get('customCss'),
       window.desktopAPI.imageHost.getStatus(),
       api.get('spellcheckLang'),
+      api.get('sidebarCollapsedKeys'),
+      api.get('sidebarActiveTab'),
+      api.get('showFrontmatterProps'),
     ])
-      .then(async ([t, a, sp, mw, f, z, sw, cw, lh, cf, ws, rf, sc, s, dr, srch, bce, cln, ccs, ih, scl]) => {
+      .then(async ([t, a, sp, mw, f, z, sw, cw, lh, cf, ws, rf, sc, s, dr, srch, bce, cln, ccs, ih, scl, sck, sat, sfmp]) => {
         if (t?.ok && typeof t.data === 'string') setTheme(t.data)
         if (a?.ok && typeof a.data === 'boolean') setAutosave(a.data)
         if (sp?.ok && typeof sp.data === 'boolean') setSpellcheck(sp.data)
@@ -427,6 +434,13 @@ export default function App(): JSX.Element {
         }
         // 拼写检查语言
         if (scl?.ok && typeof scl.data === 'string') setSpellcheckLang(scl.data)
+        // 侧边栏折叠状态恢复
+        if (sck?.ok && Array.isArray(sck.data)) setSidebarCollapsedKeys(sck.data as string[])
+        // 侧边栏活动标签页恢复
+        if (sat?.ok && (sat.data === 'files' || sat.data === 'outline'))
+          setSidebarActiveTab(sat.data)
+        // frontmatter 属性面板开关恢复
+        if (sfmp?.ok && typeof sfmp.data === 'boolean') setShowFrontmatterProps(sfmp.data)
 
         // fresh 窗口（多窗口模式新建）不恢复会话，避免多窗口互相覆盖
         const session = FRESH_MODE
@@ -752,6 +766,8 @@ export default function App(): JSX.Element {
   const autoSaveInFlightRef = useRef(false)
 
   useEffect(() => {
+    // 浏览器调试环境（无 Electron API）没有落盘能力，直接不创建定时器，避免 30 秒空转
+    if (!window.desktopAPI) return
     // 每 30 秒将已落盘的未保存文档自动写回（演示文件无路径，不参与）。
     // 写入尚未结束时跳过本轮，避免并发保存使用过期 mtime 造成误冲突或旧内容覆盖。
     const runAutoSave = async () => {
@@ -824,6 +840,18 @@ export default function App(): JSX.Element {
   // 代码块行号开关持久化
   usePersistedSetting('codeLineNumbers', codeLineNumbers, settingsReady)
 
+  // 侧边栏折叠键持久化。null = 没有任何持久化记录（从未折叠/展开过），
+  // 此时新打开的工作区默认全部折叠；有记录时按记录恢复
+  const [sidebarCollapsedKeys, setSidebarCollapsedKeys] = useState<string[] | null>(null)
+  usePersistedSetting('sidebarCollapsedKeys', sidebarCollapsedKeys, settingsReady, 500)
+  // 侧边栏活动标签页持久化
+  const [sidebarActiveTab, setSidebarActiveTab] = useState<'files' | 'outline'>('files')
+  usePersistedSetting('sidebarActiveTab', sidebarActiveTab, settingsReady)
+
+  // frontmatter 属性面板开关持久化
+  const [showFrontmatterProps, setShowFrontmatterProps] = useState(true)
+  usePersistedSetting('showFrontmatterProps', showFrontmatterProps, settingsReady)
+
   // 自定义主题：注入/移除 <style> 标签
   useEffect(() => {
     const STYLE_ID = 'custom-theme-css'
@@ -842,6 +870,38 @@ export default function App(): JSX.Element {
 
   // 自定义主题持久化
   usePersistedSetting('customCss', customCss, settingsReady)
+
+  // Wiki 链接自动补全候选文件列表
+  const wikiLinkFileList = useMemo(() => {
+    if (!workspace?.tree) return []
+    const files = collectMdFiles(workspace.tree)
+    return files.map((path) => ({
+      name: path.replace(/\\/g, '/').split('/').pop()?.replace(/\.md$/i, '') ?? '',
+      path,
+    }))
+  }, [workspace?.tree])
+
+  // Wiki 链接点击处理 — 通过 ref 避免 handleSelectWorkspaceFile 循环依赖
+  const wikiClickOpenRef = useRef(
+    (path: string) => { void handleSelectWorkspaceFile(path) },
+  )
+  const handleWikiLinkClick = useCallback(
+    (target: string) => {
+      if (!workspace?.tree) return
+      const result = resolveWikiTarget(
+        target,
+        workspace.path,
+        activeFile?.path,
+        workspace.tree,
+      )
+      if (result.resolved) {
+        wikiClickOpenRef.current(result.path)
+      } else {
+        setToast(`无法找到链接的目标文件：${target}`)
+      }
+    },
+    [workspace, activeFile],
+  )
 
   const handleImageHostProviderChange = useCallback(
     async (provider: 'local' | 'smms') => {
@@ -1265,6 +1325,9 @@ export default function App(): JSX.Element {
       window.removeEventListener('drop', onDrop)
     }
   }, [handleSelectWorkspaceFile])
+
+  // 更新 wiki link click handler 引用的 ref
+  wikiClickOpenRef.current = (path: string) => { void handleSelectWorkspaceFile(path) }
 
   const handleSaveAs = useCallback(async () => {
     if (!window.desktopAPI) return
@@ -2116,6 +2179,8 @@ img{max-width:100%}
     if (!pane || !content) return
     const max = pane.scrollHeight - pane.clientHeight
     const ratio = max > 0 ? pane.scrollTop / max : 0
+    // 信任边界：内容来自 ProseMirror 编辑器自身 DOM（Markdown 经 schema 渲染，无原始 HTML 透传）。
+    // 若未来引入用户可控的原始 HTML 渲染，此处必须先经 DOMPurify 清理再注入。
     content.innerHTML = editorRef.current?.getPreviewHtml() ?? ''
     const nextMax = pane.scrollHeight - pane.clientHeight
     if (nextMax > 0) {
@@ -2534,6 +2599,10 @@ img{max-width:100%}
             onDeleteFile={(path) => void handleDeleteFile(path)}
             onMoveFile={(path, targetDir) => void handleMoveFile(path, targetDir)}
             onOpenInNewWindow={handleOpenInNewWindow}
+            initialCollapsedKeys={sidebarCollapsedKeys}
+            onCollapsedKeysChange={setSidebarCollapsedKeys}
+            activeTab={sidebarActiveTab}
+            onActiveTabChange={setSidebarActiveTab}
           />
         )}
         <button
@@ -2577,6 +2646,33 @@ img{max-width:100%}
             onReorder={handleReorderTabs}
           />
           <div className="editor-content">
+            {/* frontmatter 属性面板 */}
+            {activeFile?.path && showFrontmatterProps && activeContent && (
+              <FrontmatterProperties
+                properties={(() => {
+                  const extracted = extractFrontmatterRaw(activeContent)
+                  return extracted ? parseFrontmatterYaml(extracted.text) : null
+                })()}
+                show={true}
+                onToggle={() => setShowFrontmatterProps((v) => !v)}
+                onUpdateProperty={(key, value) => {
+                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? ''), [key]: value }
+                  const newMarkdown = replaceFrontmatter(activeContent, props)
+                  editorRef.current?.replaceContent(newMarkdown)
+                }}
+                onDeleteProperty={(key) => {
+                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? '') }
+                  delete props[key]
+                  const newMarkdown = replaceFrontmatter(activeContent, props)
+                  editorRef.current?.replaceContent(newMarkdown)
+                }}
+                onAddProperty={(key, value) => {
+                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? ''), [key]: value }
+                  const newMarkdown = replaceFrontmatter(activeContent, props)
+                  editorRef.current?.replaceContent(newMarkdown)
+                }}
+              />
+            )}
             <Editor
               ref={editorRef}
               initialContent={DEMO_FILES[DEFAULT_FILE_ID].content}
@@ -2585,8 +2681,10 @@ img{max-width:100%}
               onRichRender={handleRichRender}
               blankClickToEnd={blankClickToEnd}
               codeLineNumbers={codeLineNumbers}
-            onNotify={setToast}
-            imageHints={{
+              onNotify={setToast}
+              wikiLinkFiles={wikiLinkFileList}
+              onWikiLinkClick={handleWikiLinkClick}
+              imageHints={{
               documentId: activeFileId,
               docPath: activeFile?.path,
                 workspacePath: workspace?.path,

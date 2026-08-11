@@ -52,6 +52,14 @@ interface SidebarProps {
   onMoveFile?: (path: string, targetDir: string) => void
   /** 右键在新窗口打开文件（U7） */
   onOpenInNewWindow?: (path: string) => void
+  /** 初始折叠键列表（持久化恢复）；null = 无记录，所有文件夹默认折叠 */
+  initialCollapsedKeys?: string[] | null
+  /** 折叠键变化回调 */
+  onCollapsedKeysChange?: (keys: string[]) => void
+  /** 当前活动标签页 */
+  activeTab?: 'files' | 'outline'
+  /** 标签页切换回调 */
+  onActiveTabChange?: (tab: 'files' | 'outline') => void
 }
 
 /** 统一的树节点模型（演示树与工作区树归一化后渲染） */
@@ -108,10 +116,18 @@ export function Sidebar({
   onDeleteFile,
   onMoveFile,
   onOpenInNewWindow,
+  initialCollapsedKeys,
+  onCollapsedKeysChange,
+  activeTab: controlledTab,
+  onActiveTabChange,
 }: SidebarProps): JSX.Element {
   const deferredContent = useDeferredValue(content)
-  const [activeTab, setActiveTab] = useState<'files' | 'outline'>('files')
-  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
+  const [localActiveTab, setLocalActiveTab] = useState<'files' | 'outline'>('files')
+  const activeTab = controlledTab ?? localActiveTab
+  const setActiveTab = onActiveTabChange ?? setLocalActiveTab
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(
+    () => new Set(initialCollapsedKeys ?? []),
+  )
   const [collapsedHeadings, setCollapsedHeadings] = useState<Set<number>>(new Set())
   // 右键菜单与内联重命名
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: UiNode } | null>(null)
@@ -192,11 +208,52 @@ export function Sidebar({
     ]
   }, [workspace])
 
+  /** 收集所有文件夹 key（演示树 + 工作区树，含嵌套子文件夹） */
+  const collectFolderKeys = (nodes: UiNode[]): string[] => {
+    const keys: string[] = []
+    const walk = (list: UiNode[]) => {
+      for (const n of list) {
+        if (n.kind === 'folder') {
+          keys.push(n.key)
+          walk(n.children ?? [])
+        }
+      }
+    }
+    walk(nodes)
+    return keys
+  }
+
+  // 折叠状态初始化：
+  // - 无持久化记录（initialCollapsedKeys === null）→ 所有文件夹默认折叠（全新用户）
+  // - 有记录但与当前树完全不匹配 → 打开了新的工作区 → 全部折叠
+  // - 有匹配记录 → 恢复记录原样
+  // 注意：本 effect 不写回记录（折叠全部是幂等的，无需持久化）；
+  // 用户第一次手动折叠/展开时，onCollapsedKeysChange 自然把记录更新为新工作区的键
+  const allFolderKeys = useMemo(
+    () => collectFolderKeys([...demoNodes, ...workspaceNodes]),
+    [demoNodes, workspaceNodes],
+  )
+  useEffect(() => {
+    if (allFolderKeys.length === 0) return
+    // 注意用 != null：同时排除 undefined（未传 prop）与 null（无记录）
+    if (initialCollapsedKeys != null) {
+      // 空数组 = 用户曾展开全部文件夹，必须保持原样（不能当作"无匹配"处理）
+      const matched =
+        initialCollapsedKeys.length === 0 ||
+        initialCollapsedKeys.some((k) => allFolderKeys.includes(k))
+      setCollapsedKeys(matched ? new Set(initialCollapsedKeys) : new Set(allFolderKeys))
+    } else {
+      // 无记录：全部默认折叠
+      setCollapsedKeys(new Set(allFolderKeys))
+    }
+  }, [initialCollapsedKeys, allFolderKeys])
+
   const toggleCollapse = (key: string) => {
     setCollapsedKeys((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
+      onCollapsedKeysChange?.(Array.from(next))
       return next
     })
   }

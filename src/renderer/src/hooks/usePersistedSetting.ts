@@ -11,7 +11,8 @@ export function usePersistedSetting<T>(
   debounceMs = 0,
 ): void {
   useEffect(() => {
-    if (!ready) return
+    // null 表示"无记录"（如折叠键从未持久化过），不写回，避免覆盖其他记录
+    if (!ready || value == null) return
     if (debounceMs <= 0) {
       window.desktopAPI?.settings.set(key, value).catch(() => {})
       return

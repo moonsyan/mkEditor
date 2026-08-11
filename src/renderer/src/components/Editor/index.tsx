@@ -54,6 +54,18 @@ import {
   footnoteRefInputRule,
 } from './plugins/footnote'
 import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from './plugins/frontmatter'
+import {
+  wikiLinkSchema,
+  wikiLinkInputRule,
+  wikiLinkClickPlugin,
+  wikiAutocompletePlugin,
+  wikiTextConvertPlugin,
+  convertWikiTextInDoc,
+  setWikiLinkClickHandler,
+  setWikiAutocompleteHandler,
+  type WikiAutocompleteState,
+} from './plugins/wikiLink'
+import { filterWikiSuggestions, type WikiSuggestion } from './WikiAutocomplete'
 import { tableColResizePlugin } from './plugins/tableColResize'
 import {
   ensureMermaidRendered,
@@ -139,6 +151,10 @@ interface EditorProps {
   codeLineNumbers?: boolean
   /** 轻提示回调（图床上传失败降级等场景） */
   onNotify?: (message: string) => void
+  /** Wiki 链接自动补全候选文件列表（工作区 .md 文件），为空不触发补全 */
+  wikiLinkFiles?: WikiSuggestion[]
+  /** Wiki 链接点击回调（target 为 [[...]] 中的 target 字符串） */
+  onWikiLinkClick?: (target: string) => void
 }
 
 /**
@@ -157,6 +173,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       blankClickToEnd = true,
       codeLineNumbers = false,
       onNotify,
+      wikiLinkFiles,
+      onWikiLinkClick,
     },
     ref,
   ) {
@@ -197,6 +215,43 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     const [tablePanel, setTablePanel] = useState<TablePanelState | null>(null)
     // 代码块全屏预览
     const [fullscreenCode, setFullscreenCode] = useState<FullscreenCodeState | null>(null)
+    // Wiki 链接自动补全浮层状态
+    const [wikiAcState, setWikiAcState] = useState<WikiAutocompleteState | null>(null)
+
+    // 从 ProseMirror autocomplete 状态 + 候选文件列表派生 overlay 数据
+    const wikiAcOverlay = wikiAcState && wikiLinkFiles && wikiLinkFiles.length > 0
+      ? {
+          query: wikiAcState.query,
+          suggestions: filterWikiSuggestions(
+            wikiLinkFiles as unknown as { name: string; path: string; children?: Array<{ name: string; path: string; children?: unknown[] }> }[],
+            wikiAcState.query,
+          ),
+          x: wikiAcState.coords.left,
+          y: wikiAcState.coords.top,
+          onSelect: (path: string) => {
+            setWikiAcState(null)
+            // 通过事务替换 [[...]] 文本为 wiki_link 节点
+            const ed = editorRef.current
+            if (ed?.status === EditorStatus.Created) {
+              const view = ed.ctx.get(editorViewCtx)
+              const schema = view.state.schema
+              const nodeType = schema.nodes.wiki_link
+              if (nodeType) {
+                const tr = view.state.tr.replaceRangeWith(
+                  wikiAcState.from,
+                  wikiAcState.to,
+                  nodeType.create({
+                    target: path.replace(/\\/g, '/'),
+                    alias: '',
+                  }),
+                )
+                view.dispatch(tr)
+              }
+            }
+          },
+          onClose: () => setWikiAcState(null),
+        }
+      : null
 
     // 全屏预览下 Esc 关闭
     useEffect(() => {
@@ -221,6 +276,24 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         view.dispatch(view.state.tr.setMeta(lineNumKey, true))
       }
     }, [codeLineNumbers])
+
+    // Wiki 链接自动补全：监听 ProseMirror 插件状态变化
+    useEffect(() => {
+      setWikiAutocompleteHandler((state) => {
+        setWikiAcState(state)
+      })
+      return () => setWikiAutocompleteHandler(null)
+    }, [])
+
+    // Wiki 链接点击：传递 onWikiLinkClick 到插件
+    const wikiClickRef = useRef(onWikiLinkClick)
+    wikiClickRef.current = onWikiLinkClick
+    useEffect(() => {
+      setWikiLinkClickHandler((target) => {
+        wikiClickRef.current?.(target)
+      })
+      return () => setWikiLinkClickHandler(null)
+    }, [])
 
     /** 元素相对滚动容器的内容坐标（不受整体缩放影响） */
     const offsetInScroll = (el: HTMLElement): { top: number; left: number } => {
@@ -248,12 +321,14 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           }))
           // 注册脚注语法解析（RemarkPlugin 为 { plugin, options } 结构）
           ctx.get(remarkPluginsCtx).push({
-            plugin: footnoteRemarkPlugin as never,
+            // @ts-expect-error — remark-footnote 的类型与 Milkdown 的 RemarkPlugin 不完全匹配，但运行时兼容
+            plugin: footnoteRemarkPlugin,
             options: {},
           })
           // 注册 YAML frontmatter 解析（文档头部 --- 元数据块）
           ctx.get(remarkPluginsCtx).push({
-            plugin: frontmatterRemarkPlugin as never,
+            // @ts-expect-error — remark-frontmatter 的类型与 Milkdown 的 RemarkPlugin 不完全匹配，但运行时兼容
+            plugin: frontmatterRemarkPlugin,
             options: {},
           })
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
@@ -296,6 +371,12 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use($prose(() => bracketMatchPlugin))
         // 标题段落折叠
         .use($prose(() => sectionFoldPlugin))
+        // Wiki 链接 [[target]] 语法与点击跳转
+        .use(wikiLinkSchema)
+        .use(wikiLinkInputRule)
+        .use(wikiLinkClickPlugin)
+        .use(wikiAutocompletePlugin)
+        .use(wikiTextConvertPlugin)
         // 光标位置上报（供状态栏/大纲高亮；rAF 节流，连续输入每帧只算一次）
         .use(
           $prose(() => {
@@ -639,10 +720,14 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         replaceContent: (markdown) => {
           const ed = ready()
           if (!ed) return
-          ed.action(replaceAll(markdown))
-          // 清空折叠状态：replaceAll 也是 docChanged 事务，不重置会把
-          // 旧文档的折叠位置映射泄漏到新文档（切换文件时误折叠章节）
+          // flush=true：重建编辑器状态（重新解析全文，所有插件状态重新初始化），
+          // undo/redo 历史被清空——否则切换文档后 Ctrl+Z 会把上一份文档的内容回退进来
+          ed.action(replaceAll(markdown, true))
           const view = ed.ctx.get(editorViewCtx)
+          // 重新转换新文档中的 [[...]] 文本为 wiki 链接
+          // （wikiTextConvertPlugin 只在编辑器创建时运行一次，切换文档不会触发）
+          convertWikiTextInDoc(view)
+          // 清空折叠状态（兜底：replaceAll 解析失败时也把旧文档的折叠映射清除）
           view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
         },
         insertMd: (markdown) => {
@@ -756,6 +841,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             codePanel={codePanel}
             tablePanel={tablePanel}
             fullscreenCode={fullscreenCode}
+            wikiAutocomplete={wikiAcOverlay}
             language={langInput}
             copied={copied}
             onLanguageChange={setLangInput}
