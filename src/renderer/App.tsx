@@ -32,6 +32,7 @@ import {
   getNeighborTabId,
   isDocumentDirty,
   pinPreviewOpenFile,
+  reorderTabs,
   requiresCloseConfirmation,
 } from './src/lib/document-tabs'
 import { isEditableShortcutTarget, isImeComposing } from './src/lib/keyboard'
@@ -487,11 +488,14 @@ export default function App(): JSX.Element {
         }
 
         if (restoredFiles.length) {
-          // 函数式更新内去重：防止 StrictMode 双执行/重复恢复导致列表膨胀
-          setOpenFiles((prev) => {
-            const existing = new Set(prev.map((f) => f.id))
-            return [...prev, ...restoredFiles.filter((f) => !existing.has(f.id))]
-          })
+          // 同步更新 ref，首次替换编辑器内容时才能正确解析恢复文件的相对图片路径。
+          const existing = new Set(openFilesRef.current.map((file) => file.id))
+          const nextOpenFiles = [
+            ...openFilesRef.current,
+            ...restoredFiles.filter((file) => !existing.has(file.id)),
+          ]
+          openFilesRef.current = nextOpenFiles
+          setOpenFiles(nextOpenFiles)
         }
         if (Object.keys(restoredContents).length) {
           setContents((prev) => ({ ...prev, ...restoredContents }))
@@ -1792,12 +1796,10 @@ img{max-width:100%}
 
   /** 拖拽重排标签页顺序 */
   const handleReorderTabs = useCallback((from: number, to: number) => {
-    setOpenFiles((prev) => {
-      const next = [...prev]
-      const [moved] = next.splice(from, 1)
-      if (moved) next.splice(to, 0, moved)
-      return next
-    })
+    const nextOpenFiles = reorderTabs(openFilesRef.current, from, to)
+    if (nextOpenFiles === openFilesRef.current) return
+    openFilesRef.current = nextOpenFiles
+    setOpenFiles(nextOpenFiles)
   }, [])
 
   /** 拖拽移动文件/文件夹到目标目录（U5） */

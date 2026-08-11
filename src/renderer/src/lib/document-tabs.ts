@@ -25,6 +25,27 @@ export const getNeighborTabId = (openFiles: OpenFile[], fileId: string): string 
   return openFiles[index + 1]?.id ?? openFiles[index - 1]?.id ?? null
 }
 
+export const reorderTabs = (
+  openFiles: OpenFile[],
+  from: number,
+  to: number,
+): OpenFile[] => {
+  if (
+    from === to ||
+    from < 0 ||
+    from >= openFiles.length ||
+    to < 0 ||
+    to >= openFiles.length
+  ) {
+    return openFiles
+  }
+  const next = [...openFiles]
+  const [moved] = next.splice(from, 1)
+  if (!moved) return openFiles
+  next.splice(to, 0, moved)
+  return next
+}
+
 export type DocumentTabNavigationKey = 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End'
 
 /** 返回键盘导航后的标签；左右方向键会在首尾之间循环。 */

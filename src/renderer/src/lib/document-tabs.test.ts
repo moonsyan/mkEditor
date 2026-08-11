@@ -3,6 +3,7 @@ import {
   findDiscardablePreview,
   getNeighborTabId,
   getTabNavigationTargetId,
+  reorderTabs,
   requiresCloseConfirmation,
   updateDocumentContent,
   type DocumentTabState,
@@ -48,6 +49,17 @@ describe('文档标签状态', () => {
     expect(getNeighborTabId(state.openFiles, 'welcome')).toBe('preview')
     expect(getNeighborTabId(state.openFiles, 'preview')).toBe('welcome')
     expect(getNeighborTabId(state.openFiles, 'missing')).toBeNull()
+  })
+
+  it('拖拽排序后保持标签顺序，忽略越界索引', () => {
+    const state = createState()
+
+    expect(reorderTabs(state.openFiles, 0, 1).map((file) => file.id)).toEqual([
+      'preview',
+      'welcome',
+    ])
+    expect(reorderTabs(state.openFiles, -1, 0)).toBe(state.openFiles)
+    expect(reorderTabs(state.openFiles, 0, 2)).toBe(state.openFiles)
   })
 
   it('使用方向键、Home 与 End 在标签之间导航', () => {
