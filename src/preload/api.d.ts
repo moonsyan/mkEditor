@@ -44,7 +44,7 @@ export interface DesktopAPI {
     renameFile(path: string, newName: string): Promise<{ ok: boolean; data?: { path: string; name: string; modifiedTime: number }; error?: { code: string; message?: string } }>
     moveFile(path: string, targetDir: string): Promise<{ ok: boolean; data?: { path: string; name: string; modifiedTime: number }; error?: { code: string; message?: string } }>
     deleteFile(path: string): Promise<{ ok: boolean; data?: { name: string }; error?: { code: string; message?: string } }>
-    listImages(dirs: string[]): Promise<{ ok: boolean; data?: { images: { path: string; name: string; size: number }[] }; error?: { code: string; message?: string } }>
+    listImages(dirs: string[]): Promise<{ ok: boolean; data?: { images: { path: string; name: string; size: number }[]; truncated: boolean }; error?: { code: string; message?: string } }>
     deleteImage(path: string): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
     search(
       dir: string,

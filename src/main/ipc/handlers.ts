@@ -45,6 +45,10 @@ const MAX_CSS_FILE_SIZE = 1024 * 1024
 const MAX_SEARCH_QUERY_LENGTH = 256
 /** 单个文件的正则匹配时间上限，防止灾难性回溯阻塞主进程 */
 const MAX_REGEX_FILE_TIME_MS = 500
+/** 图片管理最多扫描的目录数，避免异常 IPC 参数导致大量目录遍历 */
+const MAX_IMAGE_LIST_DIRS = 20
+/** 图片管理最多返回的图片数，避免大量缩略图阻塞渲染进程 */
+const MAX_IMAGE_LIST_COUNT = 1000
 
 let searchLineCacheBytes = 0
 
@@ -819,6 +823,13 @@ export function registerIpcHandlers(): void {
 
   // 列出指定目录下的图片文件（图片管理面板）
   ipcMain.handle(CHANNELS.FILE_LIST_IMAGES, async (_event, dirs: string[]) => {
+    if (
+      !Array.isArray(dirs) ||
+      dirs.length > MAX_IMAGE_LIST_DIRS ||
+      dirs.some((dir) => typeof dir !== 'string' || !dir || dir.length > 4096)
+    ) {
+      return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+    }
     const images: { path: string; name: string; size: number }[] = []
     const scanned = new Set<string>()
     for (const dir of dirs) {
@@ -832,12 +843,15 @@ export function registerIpcHandlers(): void {
           const p = join(dir, e.name)
           const st = await stat(p).catch(() => null)
           images.push({ path: p, name: e.name, size: st?.size ?? 0 })
+          if (images.length >= MAX_IMAGE_LIST_COUNT) {
+            return { ok: true, data: { images, truncated: true } }
+          }
         }
       } catch {
         /* 目录不存在则跳过 */
       }
     }
-    return { ok: true, data: { images } }
+    return { ok: true, data: { images, truncated: false } }
   })
 
   // 删除图片（移入回收站）

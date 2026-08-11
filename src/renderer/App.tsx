@@ -1462,15 +1462,21 @@ img{max-width:100%}
 
   const handleExportHtml = useCallback(async () => {
     if (!window.desktopAPI) return
-    const title = docTitle.replace(/\.md$/, '')
-    // B1：导出前强制等待 KaTeX/Mermaid 懒加载插件就绪，确保快照含渲染结果
-    setToast('导出中：等待公式/图表渲染…')
-    await editorRef.current?.ensureRichContent()
-    const html = await inlineImagesInHtml(buildDocHtml())
-    await window.desktopAPI.document.saveAs(html, {
-      filters: [{ name: 'HTML', extensions: ['html'] }],
-      defaultPath: `${title}.html`,
-    })
+    try {
+      const title = docTitle.replace(/\.md$/, '')
+      // B1：导出前强制等待 KaTeX/Mermaid 懒加载插件就绪，确保快照含渲染结果
+      setToast('导出中：等待公式/图表渲染…')
+      await editorRef.current?.ensureRichContent()
+      const html = await inlineImagesInHtml(buildDocHtml())
+      const res = await window.desktopAPI.document.saveAs(html, {
+        filters: [{ name: 'HTML', extensions: ['html'] }],
+        defaultPath: `${title}.html`,
+      })
+      if (res.ok) setToast('HTML 已导出')
+      else if (res.error?.code !== 'CANCELLED') setToast('HTML 导出失败，请检查文件权限或磁盘空间')
+    } catch {
+      setToast('HTML 导出失败，请稍后重试')
+    }
   }, [docTitle, buildDocHtml, inlineImagesInHtml])
 
   /** 导出 PDF：先弹选项窗（纸张/页边距/页眉页脚） */
@@ -1483,18 +1489,22 @@ img{max-width:100%}
     async (options: PdfOptions) => {
       setPdfOptsOpen(false)
       if (!window.desktopAPI) return
-      const title = docTitle.replace(/\.md$/, '')
-      // B1：先等富内容渲染完成
-      setToast('导出中：等待公式/图表渲染…')
-      await editorRef.current?.ensureRichContent()
-      const html = await inlineImagesInHtml(buildDocHtml(options.toc === true))
-      const res = await window.desktopAPI.document.exportPdf(
-        html,
-        `${title}.pdf`,
-        options,
-      )
-      if (res.ok) setToast('PDF 导出成功')
-      else if (res.error?.code !== 'CANCELLED') setToast('PDF 导出失败')
+      try {
+        const title = docTitle.replace(/\.md$/, '')
+        // B1：先等富内容渲染完成
+        setToast('导出中：等待公式/图表渲染…')
+        await editorRef.current?.ensureRichContent()
+        const html = await inlineImagesInHtml(buildDocHtml(options.toc === true))
+        const res = await window.desktopAPI.document.exportPdf(
+          html,
+          `${title}.pdf`,
+          options,
+        )
+        if (res.ok) setToast('PDF 导出成功')
+        else if (res.error?.code !== 'CANCELLED') setToast('PDF 导出失败，请检查文件权限或磁盘空间')
+      } catch {
+        setToast('PDF 导出失败，请稍后重试')
+      }
     },
     [docTitle, buildDocHtml, inlineImagesInHtml],
   )
@@ -1502,27 +1512,36 @@ img{max-width:100%}
   /** 导出 Markdown：把当前文档另存为新的 .md 文件 */
   const handleExportMarkdown = useCallback(async () => {
     if (!window.desktopAPI) return
-    const title = docTitle.replace(/\.md$/, '')
-    const content = contents[activeFileId] ?? ''
-    // 默认名加"-导出"后缀，避免与同名源文件混淆直接覆盖
-    const res = await window.desktopAPI.document.saveAs(content, {
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
-      defaultPath: `${title}-导出.md`,
-    })
-    if (res.ok) setToast('Markdown 已导出')
+    try {
+      const title = docTitle.replace(/\.md$/, '')
+      const content = contents[activeFileId] ?? ''
+      // 默认名加"-导出"后缀，避免与同名源文件混淆直接覆盖
+      const res = await window.desktopAPI.document.saveAs(content, {
+        filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+        defaultPath: `${title}-导出.md`,
+      })
+      if (res.ok) setToast('Markdown 已导出')
+      else if (res.error?.code !== 'CANCELLED') setToast('Markdown 导出失败，请检查文件权限或磁盘空间')
+    } catch {
+      setToast('Markdown 导出失败，请稍后重试')
+    }
   }, [docTitle, contents, activeFileId])
 
   /** pandoc 多格式导出（Word/EPUB/LaTeX/纯文本）；未安装 pandoc 时提示安装 */
   const handleExportPandoc = useCallback(async () => {
     if (!window.desktopAPI) return
-    const title = docTitle.replace(/\.md$/, '')
-    const content = contents[activeFileId] ?? ''
-    const res = await window.desktopAPI.document.exportPandoc(content, title)
-    if (res.ok) setToast('导出成功')
-    else if (res.error?.code === 'PANDOC_NOT_FOUND') {
-      setToast('未检测到 pandoc：请先安装（pandoc.org）后重启应用')
-    } else if (res.error?.code !== 'CANCELLED') {
-      setToast(`导出失败：${res.error?.message ?? ''}`)
+    try {
+      const title = docTitle.replace(/\.md$/, '')
+      const content = contents[activeFileId] ?? ''
+      const res = await window.desktopAPI.document.exportPandoc(content, title)
+      if (res.ok) setToast('导出成功')
+      else if (res.error?.code === 'PANDOC_NOT_FOUND') {
+        setToast('未检测到 pandoc：请先安装（pandoc.org）后重启应用')
+      } else if (res.error?.code !== 'CANCELLED') {
+        setToast(`导出失败：${res.error?.message ?? ''}`)
+      }
+    } catch {
+      setToast('导出失败，请稍后重试')
     }
   }, [docTitle, contents, activeFileId])
 

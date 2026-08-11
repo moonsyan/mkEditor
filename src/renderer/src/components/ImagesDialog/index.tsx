@@ -27,22 +27,27 @@ function formatSize(bytes: number): string {
  */
 export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProps): JSX.Element | null {
   const [images, setImages] = useState<ImageItem[]>([])
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [preview, setPreview] = useState<ImageItem | null>(null)
 
   const loadImages = useCallback(async () => {
     if (!window.desktopAPI) return
     setLoading(true)
+    setTruncated(false)
     try {
       const res = await window.desktopAPI.workspace.listImages(dirs)
       if (res.ok && res.data) {
         setImages(res.data.images)
+        setTruncated(res.data.truncated)
         return
       }
       setImages([])
+      setTruncated(false)
       onNotify?.('加载图片失败')
     } catch {
       setImages([])
+      setTruncated(false)
       onNotify?.('加载图片失败')
     } finally {
       setLoading(false)
@@ -112,31 +117,40 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
             <div className="images-grid">
               {images.map((img) => (
                 <div key={img.path} className="image-card">
-                  <div
+                  <button
+                    type="button"
                     className="image-thumb"
                     onClick={() => setPreview(img)}
                     title="点击预览"
+                    aria-label={`预览图片：${img.name}`}
                   >
                     <img src={`mdimg:///${img.path.replace(/\\/g, '/')}`} alt={img.name} />
-                  </div>
+                  </button>
                   <div className="image-meta">
                     <span className="image-name" title={img.name}>
                       {img.name}
                     </span>
                     <span className="image-size">{formatSize(img.size)}</span>
-                    <div
+                    <button
+                      type="button"
                       className="image-del"
                       onClick={() => void handleDelete(img)}
                       title="移入回收站"
+                      aria-label={`删除图片：${img.name}`}
                     >
                       <svg viewBox="0 0 24 24">
                         <polyline points="3 6 5 6 21 6" />
                         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                       </svg>
-                    </div>
+                    </button>
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {truncated && (
+            <div className="images-limit" role="status">
+              图片过多，仅显示前 1000 张
             </div>
           )}
         </div>
