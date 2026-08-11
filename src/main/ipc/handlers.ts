@@ -35,6 +35,8 @@ const SEARCH_CACHE_MAX_BYTES = 32 * 1024 * 1024
 const SEARCH_CACHE_FILE_MAX = 512 * 1024
 /** 剪贴板/拖入图片的最大体积，与图床上传限制保持一致 */
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+/** 单篇 Markdown 文档读取上限，避免误选超大文件拖垮主进程与编辑器。 */
+const MAX_DOCUMENT_FILE_SIZE = 20 * 1024 * 1024
 /** Base64 解码前的长度上限，避免超大 IPC 载荷先造成主进程内存峰值 */
 const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_SIZE * 4) / 3) + 4
 /** 自定义主题 CSS 上限，防止误选大文件阻塞主进程或渲染进程。 */
@@ -224,8 +226,17 @@ export function registerIpcHandlers(): void {
 
     const filePath = result.filePaths[0]
     try {
-      const { content, encoding } = await readTextAutoEncoding(filePath)
       const fileStat = await stat(filePath)
+      if (!fileStat.isFile()) {
+        return { ok: false, error: { code: 'NOT_FILE' } }
+      }
+      if (fileStat.size > MAX_DOCUMENT_FILE_SIZE) {
+        return {
+          ok: false,
+          error: { code: 'TOO_LARGE', message: 'Markdown 文件超过 20MB，无法打开' },
+        }
+      }
+      const { content, encoding } = await readTextAutoEncoding(filePath)
       return {
         ok: true,
         data: {
@@ -277,9 +288,21 @@ export function registerIpcHandlers(): void {
 
   // 按路径读取文件（会话恢复用，不弹对话框）
   ipcMain.handle(CHANNELS.FILE_READ, async (_event, filePath: string) => {
+    if (typeof filePath !== 'string' || !filePath) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
     try {
-      const { content, encoding } = await readTextAutoEncoding(filePath)
       const fileStat = await stat(filePath)
+      if (!fileStat.isFile()) {
+        return { ok: false, error: { code: 'NOT_FILE' } }
+      }
+      if (fileStat.size > MAX_DOCUMENT_FILE_SIZE) {
+        return {
+          ok: false,
+          error: { code: 'TOO_LARGE', message: 'Markdown 文件超过 20MB，无法打开' },
+        }
+      }
+      const { content, encoding } = await readTextAutoEncoding(filePath)
       return {
         ok: true,
         data: {

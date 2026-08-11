@@ -1069,7 +1069,14 @@ export default function App(): JSX.Element {
   const handleOpen = useCallback(async () => {
     if (!window.desktopAPI) return
     const result = await window.desktopAPI.document.open()
-    if (!result.ok || !result.data) return
+    if (!result.ok || !result.data) {
+      if (result.error?.code === 'TOO_LARGE') {
+        setToast(result.error.message ?? 'Markdown 文件超过 20MB，无法打开')
+      } else if (result.error?.code !== 'CANCELLED') {
+        setToast('文件打开失败')
+      }
+      return
+    }
     titleRef.current?.blur()
     const { path, name, content } = result.data
     if (result.data.encoding) {
@@ -1143,7 +1150,11 @@ export default function App(): JSX.Element {
       const openRequest = (async (): Promise<boolean> => {
         const result = await window.desktopAPI!.document.read(path)
         if (!result.ok || !result.data) {
-          setToast('文件读取失败')
+          if (result.error?.code === 'TOO_LARGE') {
+            setToast(result.error.message ?? 'Markdown 文件超过 20MB，无法打开')
+          } else {
+            setToast('文件读取失败')
+          }
           return false
         }
         // 异步读取期间，其他入口可能已先打开同一文件；此时复用已有标签。
