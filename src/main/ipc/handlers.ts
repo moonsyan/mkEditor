@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
-import { readFile, writeFile, stat, readdir, mkdir, rename, unlink } from 'fs/promises'
+import { chmod, readFile, writeFile, stat, readdir, mkdir, rename, unlink } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { join, dirname, basename, sep, extname } from 'path'
 import { execFile } from 'child_process'
@@ -162,6 +162,28 @@ async function readTextAutoEncoding(
     return { content: new TextDecoder('gbk').decode(buf), encoding: 'GBK' }
   } catch {
     return { content: buf.toString('utf-8'), encoding: 'UTF-8' }
+  }
+}
+
+/** 同目录临时文件替换，避免写入中断时损坏用户原文。 */
+async function writeFileAtomically(
+  filePath: string,
+  content: string | Uint8Array,
+  mode?: number,
+): Promise<void> {
+  const tempPath = join(
+    dirname(filePath),
+    `.${basename(filePath)}.${process.pid}-${Date.now()}-${Math.random()}.tmp`,
+  )
+  try {
+    await writeFile(tempPath, content)
+    if (mode !== undefined && process.platform !== 'win32') {
+      await chmod(tempPath, mode & 0o777).catch(() => {})
+    }
+    await rename(tempPath, filePath)
+  } catch (err) {
+    await unlink(tempPath).catch(() => {})
+    throw err
   }
 }
 
@@ -371,9 +393,9 @@ export function registerIpcHandlers(): void {
               },
             }
           }
-          await writeFile(args.path, encoded)
+          await writeFileAtomically(args.path, encoded, pre.mode)
         } else {
-          await writeFile(args.path, args.content, 'utf-8')
+          await writeFileAtomically(args.path, args.content, pre.mode)
         }
         const fileStat = await stat(args.path)
         return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
@@ -407,7 +429,7 @@ export function registerIpcHandlers(): void {
       }
 
       try {
-        await writeFile(result.filePath, args.content, 'utf-8')
+        await writeFileAtomically(result.filePath, args.content)
         // 返回真实落盘 mtime（渲染端用于下次保存的冲突检测，比 Date.now() 更准）
         let modifiedTime = 0
         try {
@@ -1072,7 +1094,10 @@ export function registerIpcHandlers(): void {
       if (!fmt) return { ok: false, error: { code: 'UNSUPPORTED' } }
 
       // 写入临时 .md 后调用 pandoc（避免超长命令行参数）
-      const tmpIn = join(app.getPath('temp'), `mdsoft-${Date.now()}.md`)
+      const tmpIn = join(
+        app.getPath('temp'),
+        `mdsoft-${process.pid}-${Date.now()}-${Math.random()}.md`,
+      )
       try {
         await writeFile(tmpIn, args.markdown, 'utf-8')
         await execFileAsync('pandoc', [
