@@ -63,6 +63,8 @@ export interface DesktopAPI {
   settings: {
     get(key: string): Promise<{ ok: boolean; data?: unknown; error?: { code: string; message?: string } }>
     set(key: string, value: unknown): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
+    upsertDraft(id: string, content: string): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
+    deleteDraft(id: string): Promise<{ ok: boolean; error?: { code: string; message?: string } }>
   }
 }
 

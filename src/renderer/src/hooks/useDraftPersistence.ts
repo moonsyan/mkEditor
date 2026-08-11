@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { MutableRefObject } from 'react'
-import { loadDrafts, saveDrafts } from '../lib/drafts'
+import { deleteDraft, saveDraft as persistDraft } from '../lib/drafts'
 
 export interface PendingDraft {
   id: string
@@ -31,20 +31,14 @@ export function useDraftPersistence({
 
   const clearDraft = useCallback(async (id: string) => {
     try {
-      const drafts = await loadDrafts()
-      if (!drafts[id]) return
-      delete drafts[id]
-      await saveDrafts(drafts)
+      await deleteDraft(id)
     } catch {
       // 草稿清理失败不影响主保存流程。
     }
   }, [])
 
   const saveDraft = useCallback(async (id: string, draftContent: string) => {
-    const drafts = await loadDrafts()
-    if (drafts[id]?.content === draftContent) return
-    drafts[id] = { content: draftContent, savedAt: Date.now() }
-    await saveDrafts(drafts)
+    await persistDraft(id, draftContent)
   }, [])
 
   const flushPendingDraft = useCallback(() => {

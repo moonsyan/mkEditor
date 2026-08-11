@@ -125,6 +125,9 @@ const desktopAPI = {
     get: (key: string) => ipcRenderer.invoke(CHANNELS.SETTINGS_GET, key),
     set: (key: string, value: unknown) =>
       ipcRenderer.invoke(CHANNELS.SETTINGS_SET, { key, value }),
+    upsertDraft: (id: string, content: string) =>
+      ipcRenderer.invoke(CHANNELS.SETTINGS_UPSERT_DRAFT, { id, content }),
+    deleteDraft: (id: string) => ipcRenderer.invoke(CHANNELS.SETTINGS_DELETE_DRAFT, id),
   },
 }
 

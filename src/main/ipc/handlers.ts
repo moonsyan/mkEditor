@@ -7,7 +7,13 @@ import { promisify } from 'util'
 import { Worker } from 'worker_threads'
 import iconv from 'iconv-lite'
 import { CHANNELS } from '../../shared/ipc/channels'
-import { getSetting, setSetting } from '../settings/settings-store'
+import {
+  deleteDraft,
+  getSetting,
+  setSetting,
+  SettingsStoreError,
+  upsertDraft,
+} from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
 
 const execFileAsync = promisify(execFile)
@@ -886,10 +892,50 @@ export function registerIpcHandlers(): void {
         await setSetting(args.key, args.value)
         return { ok: true }
       } catch (err) {
+        if (err instanceof SettingsStoreError) {
+          return { ok: false, error: { code: err.code } }
+        }
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
       }
     },
   )
+
+  // 草稿逐篇原子更新，避免多个标签或窗口以旧草稿字典覆盖彼此内容
+  ipcMain.handle(
+    CHANNELS.SETTINGS_UPSERT_DRAFT,
+    async (_event, args: { id: string; content: string }) => {
+      if (
+        !args ||
+        typeof args.id !== 'string' ||
+        !args.id ||
+        args.id.length > 512 ||
+        typeof args.content !== 'string'
+      ) {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      try {
+        await upsertDraft(args.id, args.content)
+        return { ok: true }
+      } catch (err) {
+        if (err instanceof SettingsStoreError) {
+          return { ok: false, error: { code: err.code } }
+        }
+        return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+      }
+    },
+  )
+
+  ipcMain.handle(CHANNELS.SETTINGS_DELETE_DRAFT, async (_event, id: string) => {
+    if (typeof id !== 'string' || !id || id.length > 512) {
+      return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+    }
+    try {
+      await deleteDraft(id)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+    }
+  })
 
   /* ==================== 多格式导出（pandoc 基础框架） ==================== */
 

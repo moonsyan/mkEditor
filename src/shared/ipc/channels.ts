@@ -21,6 +21,8 @@ export const CHANNELS = {
   FILE_WATCH: 'file:watch',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
+  SETTINGS_UPSERT_DRAFT: 'settings:upsert-draft',
+  SETTINGS_DELETE_DRAFT: 'settings:delete-draft',
   WINDOW_SET_TITLEBAR: 'window:set-titlebar',
   WINDOW_SET_SPELLCHECK: 'window:set-spellcheck',
   WINDOW_NEW: 'window:new',

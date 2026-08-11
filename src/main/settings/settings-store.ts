@@ -14,6 +14,12 @@ import { dirname, join } from 'path'
 
 let cache: Record<string, unknown> | null = null
 
+export class SettingsStoreError extends Error {
+  constructor(public readonly code: 'INVALID_VALUE' | 'VALUE_TOO_LARGE') {
+    super(code)
+  }
+}
+
 /** settings.json 允许的最大体积（字节），超限视为损坏 */
 const MAX_FILE_SIZE = 8 * 1024 * 1024
 /** 单个设置值序列化后的最大体积（字节），超限拒绝写入 */
@@ -116,17 +122,49 @@ export function setSetting(key: string, value: unknown): Promise<void> {
   return task
 }
 
+/**
+ * 原子写入一篇草稿。草稿字典只在主进程队列中读取和更新，
+ * 防止多个渲染进程持有旧副本并相互覆盖。
+ */
+export function upsertDraft(id: string, content: string): Promise<void> {
+  const task = writeQueue.then(async () => {
+    const all = await load()
+    const current = all.drafts
+    const drafts: Record<string, unknown> =
+      current && typeof current === 'object' ? { ...current } : {}
+    drafts[id] = { content, savedAt: Date.now() }
+    await applySetSetting('drafts', drafts)
+  })
+  writeQueue = task.catch(() => undefined)
+  return task
+}
+
+/** 以原子方式删除单篇草稿，保留其他标签或窗口刚写入的草稿。 */
+export function deleteDraft(id: string): Promise<void> {
+  const task = writeQueue.then(async () => {
+    const all = await load()
+    const current = all.drafts
+    if (!current || typeof current !== 'object' || !(id in current)) return
+    const drafts: Record<string, unknown> = { ...current }
+    delete drafts[id]
+    await applySetSetting('drafts', drafts)
+  })
+  writeQueue = task.catch(() => undefined)
+  return task
+}
+
 async function applySetSetting(key: string, value: unknown): Promise<void> {
   const all = await load()
   const clean = sanitize(key, value)
   // 写入体积守卫：单个值超限则拒绝，防止任何键再次膨胀
+  let serialized: string
   try {
-    if (JSON.stringify(clean).length > MAX_VALUE_SIZE) {
-      console.warn(`[settings] 拒绝写入过大的设置项: ${key}`)
-      return
-    }
+    serialized = JSON.stringify(clean)
   } catch {
-    return
+    throw new SettingsStoreError('INVALID_VALUE')
+  }
+  if (Buffer.byteLength(serialized, 'utf-8') > MAX_VALUE_SIZE) {
+    throw new SettingsStoreError('VALUE_TOO_LARGE')
   }
   all[key] = clean
   cache = all
