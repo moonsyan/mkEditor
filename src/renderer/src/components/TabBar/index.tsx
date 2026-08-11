@@ -26,11 +26,12 @@ export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, o
       {openFiles.map((file, i) => {
         const active = file.id === activeFileId
         const dirty = savedMap[file.id] === false
+        const preview = file.preview === true
         return (
           <div
             key={file.id}
             role="tab"
-            className={`tab ${active ? 'active' : ''} ${overIndex === i && dragIndex !== null && dragIndex !== i ? 'drag-over' : ''}`}
+            className={`tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${overIndex === i && dragIndex !== null && dragIndex !== i ? 'drag-over' : ''}`}
             draggable
             onDragStart={(e) => {
               setDragIndex(i)
@@ -54,7 +55,7 @@ export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, o
               setOverIndex(null)
             }}
             onClick={() => onSwitch(file.id)}
-            title={file.path ?? file.name}
+            title={preview ? '预览标签：双击左侧文件可固定' : (file.path ?? file.name)}
           >
             <span className="tab-name">{file.name}</span>
             {dirty && <span className="tab-dot" />}

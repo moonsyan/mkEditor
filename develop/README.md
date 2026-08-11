@@ -1,5 +1,7 @@
 # MarkdownSoft 开发者文档
 
+> 更新基线：2026-08-11。本文档面向学习与维护；项目实际边界以根目录 [项目开发规范](../项目开发规范.md) 和 [docs/架构说明](../docs/architecture.md) 为准。
+
 > 为 Java 开发者准备。读完本文档，你能理解整个项目，修复 Bug，增加新功能。
 
 ---
@@ -13,7 +15,7 @@ develop/
 ├── tech-stack.md          ← 技术栈详解：每项技术的 Java 类比
 ├── development-guide.md   ← 开发实战：修 Bug / 加功能的完整流程
 ├── react-primer.md        ← React 快速入门（概念 + 代码示例）
-├── electron-prider.md     ← Electron 快速入门（主进程/渲染进程/安全模型）
+├── electron-primer.md     ← Electron 快速入门（主进程/渲染进程/安全模型）
 ├── milkdown-editor.md     ← 编辑器扩展指南：懒加载、命令、搜索
 ├── file-index.md          ← 文件索引：按功能分类，快速定位代码
 └── learning-path.md       ← 学习路径 + 项目后续发展建议

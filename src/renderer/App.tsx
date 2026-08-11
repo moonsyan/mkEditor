@@ -19,6 +19,7 @@ import { ExportPdfDialog } from './src/components/ExportPdfDialog'
 import type { PdfOptions } from './src/components/ExportPdfDialog'
 import { WorkspaceSearchDialog } from './src/components/WorkspaceSearchDialog'
 import { TabBar } from './src/components/TabBar'
+import { StartScreen } from './src/components/StartScreen'
 import { DEFAULT_SHORTCUTS, mergeShortcuts, comboFromEvent } from './src/data/shortcuts'
 import type { ShortcutMap } from './src/data/shortcuts'
 import { DEMO_FILES, DEMO_TREE, DEFAULT_FILE_ID } from './src/data/demo-files'
@@ -66,10 +67,9 @@ const TITLEBAR_COLORS: Record<string, { bg: string; symbol: string }> = {
   rose: { bg: '#F5EDED', symbol: '#6B4F4F' },
 }
 
-/** 初始打开的文件列表（按文件树顺序） */
-const INITIAL_FILES: OpenFile[] = DEMO_TREE.flatMap((folder) =>
-  folder.fileIds.map((id) => ({ id, name: DEMO_FILES[id].name })),
-)
+/** 初始只打开「欢迎」一篇样例文档；其余样例文件留在左侧文件夹树中点击打开，
+ * 避免启动时一次性铺开一堆标签页（标签页只在编辑器区域呈现）。 */
+const INITIAL_FILES: OpenFile[] = [{ id: DEFAULT_FILE_ID, name: DEMO_FILES[DEFAULT_FILE_ID].name }]
 
 /** 新窗口模式（#fresh）：跳过会话恢复与写入，避免多窗口间会话互相覆盖 */
 const FRESH_MODE =
@@ -192,7 +192,8 @@ export default function App(): JSX.Element {
   /** 组合键 → 动作 反查表（keydown 中读 ref，避免频繁重建监听） */
   const shortcutLookupRef = useRef<Record<string, string>>({})
 
-  const activeContent = contents[activeFileId] ?? ''
+  // 无打开文件（已全部关闭）时内容视为空，避免状态栏/大纲沿用上一份文档的残留内容
+  const activeContent = openFiles.length > 0 ? (contents[activeFileId] ?? '') : ''
 
   // 字数统计（先剥离 Markdown 语法符号，只统计正文）
   const { wordCount, lineCount } = useMemo(() => {
@@ -506,7 +507,11 @@ export default function App(): JSX.Element {
         const tryApply = () => {
           if (editorRef.current?.isReady()) {
             // 渲染前解析相对路径图片；此时 openFilesRef 已含恢复文件
-            editorRef.current.replaceContent(toEditorImages(finalContent, dirOfFile(target)))
+            replaceEditorContent(
+              target,
+              finalContent,
+              dirtyIds.includes(target) ? 'ignore' : 'initialize',
+            )
           } else if (tries++ < 20) {
             setTimeout(tryApply, 100)
           }
@@ -751,7 +756,8 @@ export default function App(): JSX.Element {
       .slice(0, 200)
       .map((f) => ({ id: f.id, name: f.name, path: f.path }))
     const data: SessionData = {
-      activeFileId,
+      // 全部关闭时 activeFileId 已悬空，写入 undefined 让下次启动回退到默认样例文档
+      activeFileId: openFiles.some((f) => f.id === activeFileId) ? activeFileId : undefined,
       workspacePath: workspace?.path,
       files,
     }
@@ -868,20 +874,90 @@ export default function App(): JSX.Element {
 
   // 记录每个文件"最后一次保存时"的内容，用于脏检查
   const INITIAL_OR_SAVED = useRef<Record<string, string>>({ ...INITIAL_CONTENTS })
+  /** 程序替换编辑器内容时的同步策略，区分首次加载与切换已有标签。 */
+  const editorSyncRef = useRef<{
+    fileId: string
+    mode: 'ignore' | 'initialize'
+  } | null>(null)
 
   const handleEditorChange = useCallback((md: string) => {
     // 读 ref 而非闭包 state：切换文件时 replaceAll 同步触发本回调，
     // 此时 React state 还是旧文件 ID
     const fileId = activeFileIdRef.current
+    // 全部标签页关闭后编辑器处于隐藏态，丢弃此期间的任何回调，避免写入已移除的文件
+    if (!openFilesRef.current.some((f) => f.id === fileId)) return
     // 存储前把 mdimg 绝对路径回写为相对路径（保证 .md 可移植）
     const stored = toStoredImages(md, dirOfFile(fileId))
+    const sync = editorSyncRef.current
+    if (sync?.fileId === fileId) {
+      editorSyncRef.current = null
+      if (sync.mode === 'initialize') {
+        // Milkdown 会规范化部分 Markdown。以规范化结果作为首次加载基线，
+        // 避免用户尚未编辑就被误判为“未保存”。
+        INITIAL_OR_SAVED.current[fileId] = stored
+        setContents((prev) => ({ ...prev, [fileId]: stored }))
+        setSavedMap((prev) =>
+          prev[fileId] === true ? prev : { ...prev, [fileId]: true },
+        )
+      }
+      return
+    }
     setContents((prev) => ({ ...prev, [fileId]: stored }))
     setSavedMap((prev) => {
       const isSaved = stored === INITIAL_OR_SAVED.current[fileId]
       if (prev[fileId] === isSaved) return prev
       return { ...prev, [fileId]: isSaved }
     })
+    if (stored !== INITIAL_OR_SAVED.current[fileId]) {
+      // 预览标签一旦被编辑就自动固定，下一次侧栏单击不会替换它。
+      setOpenFiles((prev) =>
+        prev.map((file) =>
+          file.id === fileId && file.preview ? { ...file, preview: false } : file,
+        ),
+      )
+    }
   }, [dirOfFile])
+
+  /** 用于打开/切换文件的统一替换入口，避免程序性更新被当作用户输入。 */
+  const replaceEditorContent = useCallback(
+    (fileId: string, content: string, mode: 'ignore' | 'initialize' = 'ignore') => {
+      if (!editorRef.current?.isReady()) return
+      editorSyncRef.current = { fileId, mode }
+      editorRef.current.replaceContent(toEditorImages(content, dirOfFile(fileId)))
+    },
+    [dirOfFile],
+  )
+
+  /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
+  const discardPreviewTab = useCallback((nextFileId: string) => {
+    const previous = openFilesRef.current.find(
+      (file) => file.preview && file.id !== nextFileId,
+    )
+    if (!previous) return
+    openFilesRef.current = openFilesRef.current.filter((file) => file.id !== previous.id)
+    setOpenFiles((prev) => prev.filter((file) => file.id !== previous.id))
+    setContents((prev) => {
+      const next = { ...prev }
+      delete next[previous.id]
+      return next
+    })
+    setSavedMap((prev) => {
+      const next = { ...prev }
+      delete next[previous.id]
+      return next
+    })
+    setFileMtime((prev) => {
+      const next = { ...prev }
+      delete next[previous.id]
+      return next
+    })
+    setEncodingMap((prev) => {
+      const next = { ...prev }
+      delete next[previous.id]
+      return next
+    })
+    delete INITIAL_OR_SAVED.current[previous.id]
+  }, [])
 
   /* ==================== 文件操作 ==================== */
 
@@ -909,7 +985,7 @@ export default function App(): JSX.Element {
       setDocTitle(file?.name ?? '未命名文档')
       // 切换编辑器内容（保持同一编辑器实例，避免重建丢光标历史）
       // 渲染前把相对路径图片解析为 mdimg 协议
-      editorRef.current?.replaceContent(toEditorImages(contents[id] ?? '', dirOfFile(id)))
+      replaceEditorContent(id, contents[id] ?? '')
       editorRef.current?.focus()
     },
     [activeFileId, openFiles, contents, dirOfFile],
@@ -919,17 +995,56 @@ export default function App(): JSX.Element {
     titleRef.current?.blur()
     const id = `untitled-${untitledCounter++}`
     const name = `未命名 ${untitledCounter - 1}.md`
-    setOpenFiles((prev) => [...prev, { id, name }])
+    const file = { id, name }
+    openFilesRef.current = [...openFilesRef.current, file]
+    setOpenFiles((prev) => [...prev, file])
     setContents((prev) => ({ ...prev, [id]: '' }))
     setSavedMap((prev) => ({ ...prev, [id]: true }))
     INITIAL_OR_SAVED.current[id] = ''
     activeFileIdRef.current = id
     setActiveFileId(id)
     setDocTitle(name)
-    editorRef.current?.replaceContent('')
+    replaceEditorContent(id, '', 'initialize')
     editorRef.current?.focus()
     focusEditorSoon()
-  }, [focusEditorSoon])
+  }, [focusEditorSoon, replaceEditorContent])
+
+  /**
+   * 点击左侧文件夹树中的样例文件：已打开则切换，未打开则打开为新标签页。
+   * 启动时只预开「欢迎」一篇，其余样例文件通过此函数按需打开，
+   * 标签页统一只在编辑器区域呈现。
+   */
+  const handleSelectDemoFile = useCallback(
+    (id: string, pinned = true) => {
+      if (!DEMO_FILES[id]) return
+      const existed = openFiles.find((file) => file.id === id)
+      if (existed) {
+        if (pinned && existed.preview) {
+          setOpenFiles((prev) =>
+            prev.map((file) => (file.id === id ? { ...file, preview: false } : file)),
+          )
+        }
+        switchFile(id)
+        return
+      }
+      const name = DEMO_FILES[id].name
+      const content = DEMO_FILES[id].content
+      if (!pinned) discardPreviewTab(id)
+      const file = { id, name, preview: !pinned }
+      openFilesRef.current = [...openFilesRef.current, file]
+      activeFileIdRef.current = id
+      setOpenFiles((prev) => [...prev, file])
+      setContents((prev) => ({ ...prev, [id]: content }))
+      setSavedMap((prev) => ({ ...prev, [id]: true }))
+      INITIAL_OR_SAVED.current[id] = content
+      setActiveFileId(id)
+      setDocTitle(name)
+      replaceEditorContent(id, content, 'initialize')
+      editorRef.current?.focus()
+      focusEditorSoon()
+    },
+    [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon],
+  )
 
   const handleOpen = useCallback(async () => {
     if (!window.desktopAPI) return
@@ -943,11 +1058,20 @@ export default function App(): JSX.Element {
     // 已打开则直接切换
     const existed = openFiles.find((f) => f.path === path)
     if (existed) {
+      if (existed.preview) {
+        setOpenFiles((prev) =>
+          prev.map((file) =>
+            file.id === existed.id ? { ...file, preview: false } : file,
+          ),
+        )
+      }
       switchFile(existed.id)
       return
     }
     const id = `file-${path}`
-    setOpenFiles((prev) => [...prev, { id, name, path }])
+    const file = { id, name, path }
+    openFilesRef.current = [...openFilesRef.current, file]
+    setOpenFiles((prev) => [...prev, file])
     setContents((prev) => ({ ...prev, [id]: content }))
     setSavedMap((prev) => ({ ...prev, [id]: true }))
     INITIAL_OR_SAVED.current[id] = content
@@ -956,10 +1080,8 @@ export default function App(): JSX.Element {
     setActiveFileId(id)
     setDocTitle(name)
     recordRecent(path, name)
-    editorRef.current?.replaceContent(
-      toEditorImages(content, path.replace(/[\\/][^\\/]+$/, '')),
-    )
-  }, [openFiles, switchFile, recordRecent])
+    replaceEditorContent(id, content, 'initialize')
+  }, [openFiles, switchFile, recordRecent, replaceEditorContent])
 
   /* ==================== 打开文件夹 / 工作区 ==================== */
 
@@ -984,9 +1106,15 @@ export default function App(): JSX.Element {
 
   /** 点击工作区/外部磁盘文件：首次打开时读盘，之后直接切换；返回是否成功（工作区搜索带入等场景需感知失败） */
   const handleSelectWorkspaceFile = useCallback(
-    async (path: string): Promise<boolean> => {
+    async (path: string, pinned = true): Promise<boolean> => {
       const id = `file-${path}`
-      if (openFiles.some((f) => f.id === id)) {
+      const existed = openFiles.find((file) => file.id === id)
+      if (existed) {
+        if (pinned && existed.preview) {
+          setOpenFiles((prev) =>
+            prev.map((file) => (file.id === id ? { ...file, preview: false } : file)),
+          )
+        }
         switchFile(id)
         return true
       }
@@ -1001,8 +1129,11 @@ export default function App(): JSX.Element {
       if (result.data.encoding) {
         setEncodingMap((prev) => ({ ...prev, [id]: result.data!.encoding! }))
       }
+      if (!pinned) discardPreviewTab(id)
+      const file = { id, name, path, preview: !pinned }
+      openFilesRef.current = [...openFilesRef.current, file]
       activeFileIdRef.current = id
-      setOpenFiles((prev) => [...prev, { id, name, path }])
+      setOpenFiles((prev) => [...prev, file])
       setContents((prev) => ({ ...prev, [id]: content }))
       setSavedMap((prev) => ({ ...prev, [id]: true }))
       INITIAL_OR_SAVED.current[id] = content
@@ -1010,14 +1141,12 @@ export default function App(): JSX.Element {
       setActiveFileId(id)
       setDocTitle(name)
       recordRecent(path, name)
-      editorRef.current?.replaceContent(
-        toEditorImages(content, path.replace(/[\\/][^\\/]+$/, '')),
-      )
+      replaceEditorContent(id, content, 'initialize')
       editorRef.current?.focus()
       focusEditorSoon()
       return true
     },
-    [openFiles, switchFile, recordRecent, focusEditorSoon],
+    [openFiles, switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent],
   )
 
   /* ==================== 拖入 .md 文件直接打开 ==================== */
@@ -1060,25 +1189,59 @@ export default function App(): JSX.Element {
 
   const handleSaveAs = useCallback(async () => {
     if (!window.desktopAPI) return
-    const content = contents[activeFileId] ?? ''
+    const oldId = activeFileId
+    const content = contents[oldId] ?? ''
     const result = await window.desktopAPI.document.saveAs(content)
     if (!result.ok || !result.data) return
     const { path, name } = result.data
-    INITIAL_OR_SAVED.current[activeFileId] = content
-    setSavedMap((prev) => ({ ...prev, [activeFileId]: true }))
+    const newId = `file-${path}`
+    const targetAlreadyOpen =
+      newId !== oldId && openFiles.some((file) => file.id === newId)
+    const modifiedTime = result.data.modifiedTime || Date.now()
+
+    // 文件身份以磁盘路径为准。另存为后若仍沿用 untitled-/旧路径 ID，
+    // 从工作区再次打开同一文件会生成重复标签，重命名和移动也无法命中它。
+    INITIAL_OR_SAVED.current[newId] = content
+    if (newId !== oldId) delete INITIAL_OR_SAVED.current[oldId]
+    setOpenFiles((prev) => {
+      if (newId === oldId) {
+        return prev.map((file) => (file.id === oldId ? { ...file, path, name } : file))
+      }
+      if (targetAlreadyOpen) return prev.filter((file) => file.id !== oldId)
+      return prev.map((file) =>
+        file.id === oldId ? { id: newId, name, path } : file,
+      )
+    })
+    setContents((prev) => {
+      const next = { ...prev, [newId]: content }
+      if (newId !== oldId) delete next[oldId]
+      return next
+    })
+    setSavedMap((prev) => {
+      const next = { ...prev, [newId]: true }
+      if (newId !== oldId) delete next[oldId]
+      return next
+    })
     // 优先用主进程返回的真实落盘 mtime，缺失时降级用当前时间（下次保存用于冲突检测）
-    setFileMtime((prev) => ({
-      ...prev,
-      [activeFileId]: result.data!.modifiedTime || Date.now(),
-    }))
+    setFileMtime((prev) => {
+      const next = { ...prev, [newId]: modifiedTime }
+      if (newId !== oldId) delete next[oldId]
+      return next
+    })
     // 另存为统一写 UTF-8，重置编码记录，避免后续保存误用旧编码
-    setEncodingMap((prev) => ({ ...prev, [activeFileId]: 'UTF-8' }))
-    setOpenFiles((prev) =>
-      prev.map((f) => (f.id === activeFileId ? { ...f, path, name } : f)),
-    )
+    setEncodingMap((prev) => {
+      const next = { ...prev, [newId]: 'UTF-8' }
+      if (newId !== oldId) delete next[oldId]
+      return next
+    })
+    if (draftPendingRef.current?.id === oldId) draftPendingRef.current = null
+    activeFileIdRef.current = newId
+    setActiveFileId(newId)
     setDocTitle(name)
-    void clearDraft(activeFileId)
-  }, [activeFileId, contents, clearDraft])
+    void clearDraft(oldId)
+    if (newId !== oldId) void clearDraft(newId)
+    if (targetAlreadyOpen) setToast('已覆盖并切换到已打开的同名文件')
+  }, [activeFileId, contents, clearDraft, openFiles])
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)
@@ -1455,21 +1618,34 @@ img{max-width:100%}
         delete next[delId]
         return next
       })
+      setSavedMap((prev) => {
+        const next = { ...prev }
+        delete next[delId]
+        return next
+      })
+      setFileMtime((prev) => {
+        const next = { ...prev }
+        delete next[delId]
+        return next
+      })
+      setEncodingMap((prev) => {
+        const next = { ...prev }
+        delete next[delId]
+        return next
+      })
       // 清理残留草稿/基线，避免重启后恢复已删除文件的内容
       if (draftPendingRef.current?.id === delId) draftPendingRef.current = null
       void clearDraft(delId)
       delete INITIAL_OR_SAVED.current[delId]
       await refreshWorkspace()
       if (activeFileId === delId) {
-        // 切到相邻标签；删掉的是最后一个标签时新建空白文档，
-        // 保证始终存在有效激活文件（否则保存静默失败、内容丢失）
+        // 切到相邻标签；删掉的是最后一个标签时进入"开始"界面（不再强制新建空白文档）
         const idx = openFiles.findIndex((f) => f.id === delId)
         const neighbor = openFiles[idx + 1] ?? openFiles[idx - 1] ?? null
         if (neighbor) switchFile(neighbor.id)
-        else handleNew()
       }
     },
-    [activeFileId, refreshWorkspace, switchFile, clearDraft, savedMap, contents, fileMtime, saveWithEncodingFallback, openFiles, handleNew],
+    [activeFileId, refreshWorkspace, switchFile, clearDraft, savedMap, contents, fileMtime, saveWithEncodingFallback, openFiles],
   )
 
   /** 关闭标签页：从打开列表移除（不删磁盘文件）；有未保存内容时先确认 */
@@ -1499,13 +1675,11 @@ img{max-width:100%}
       if (draftPendingRef.current?.id === id) draftPendingRef.current = null
       void clearDraft(id)
       if (activeFileId === id) {
-        // 无相邻标签（关掉的是最后一个）时新建空白文档，
-        // 避免回退到不在打开列表中的 id 造成幽灵状态（保存静默失败）
+        // 关掉最后一个标签页后不再自动新建空白文档：进入"开始"界面（左侧文件夹树保留）
         if (neighbor) switchFile(neighbor.id)
-        else handleNew()
       }
     },
-    [openFiles, savedMap, activeFileId, switchFile, clearDraft, handleNew],
+    [openFiles, savedMap, activeFileId, switchFile, clearDraft],
   )
 
   /** 拖拽重排标签页顺序 */
@@ -2051,22 +2225,24 @@ img{max-width:100%}
         </div>
         <MenuBar onAction={handleAction} recentFiles={recentFiles} />
         <div className="topbar-spacer" />
-        <div
-          ref={titleRef}
-          className="doc-title"
-          contentEditable
-          suppressContentEditableWarning
-          spellCheck={false}
-          onBlur={(e) => {
-            const name = (e.currentTarget.textContent || '').trim() || '未命名文档'
-            setDocTitle(name)
-            setOpenFiles((prev) =>
-              prev.map((f) => (f.id === activeFileId ? { ...f, name } : f)),
-            )
-          }}
-        >
-          {docTitle}
-        </div>
+        {openFiles.length > 0 && (
+          <div
+            ref={titleRef}
+            className="doc-title"
+            contentEditable
+            suppressContentEditableWarning
+            spellCheck={false}
+            onBlur={(e) => {
+              const name = (e.currentTarget.textContent || '').trim() || '未命名文档'
+              setDocTitle(name)
+              setOpenFiles((prev) =>
+                prev.map((f) => (f.id === activeFileId ? { ...f, name } : f)),
+              )
+            }}
+          >
+            {docTitle}
+          </div>
+        )}
         <div className="act-group">
           <div
             className={`act-btn ${!sidebarCollapsed ? 'active' : ''}`}
@@ -2093,16 +2269,6 @@ img{max-width:100%}
         </div>
       </div>
 
-      {/* 多标签页栏：已打开文档切换 / 关闭 / 拖拽排序（对标 Typora） */}
-      <TabBar
-        openFiles={openFiles}
-        activeFileId={activeFileId}
-        savedMap={savedMap}
-        onSwitch={switchFile}
-        onClose={handleCloseTab}
-        onReorder={handleReorderTabs}
-      />
-
       {/* 工作区：侧栏 + 编辑器 */}
       <div
         className="workspace"
@@ -2119,8 +2285,10 @@ img{max-width:100%}
             openFiles={openFiles}
             activeFileId={activeFileId}
             content={activeContent}
-            onSelectDemoFile={switchFile}
-            onSelectWorkspaceFile={(path) => void handleSelectWorkspaceFile(path)}
+            onSelectDemoFile={handleSelectDemoFile}
+            onSelectWorkspaceFile={(path, pinned) =>
+              void handleSelectWorkspaceFile(path, pinned)
+            }
             onOutlineClick={handleOutlineClick}
             focusOutlineTick={focusOutlineTick}
             activeOutlineIndex={cursorPos.headingIndex}
@@ -2157,27 +2325,48 @@ img{max-width:100%}
             onReplacementChange={handleSearchReplacementChange}
           />
         )}
-        <Editor
-          ref={editorRef}
-          initialContent={DEMO_FILES[DEFAULT_FILE_ID].content}
-          onChange={handleEditorChange}
-          onCursorChange={handleCursorChange}
-          onRichRender={handleRichRender}
-          blankClickToEnd={blankClickToEnd}
-          codeLineNumbers={codeLineNumbers}
-          onNotify={setToast}
-          imageHints={{
-            docPath: activeFile?.path,
-            workspacePath: workspace?.path,
-            imageHost,
-          }}
-        />
-        {/* 分栏预览（内容由 renderPreview 直接写入 DOM，避免 React 协调开销） */}
-        {previewMode && (
-          <div className="preview-pane" ref={previewPaneRef}>
-            <div className="editor-inner preview-content" ref={previewContentRef} />
+        <div className="editor-host">
+          {/* 标签栏属于编辑器区域，不占用左侧文件树和大纲的顶部空间。 */}
+          <TabBar
+            openFiles={openFiles}
+            activeFileId={activeFileId}
+            savedMap={savedMap}
+            onSwitch={switchFile}
+            onClose={handleCloseTab}
+            onReorder={handleReorderTabs}
+          />
+          <div className="editor-content">
+            <Editor
+              ref={editorRef}
+              initialContent={DEMO_FILES[DEFAULT_FILE_ID].content}
+              onChange={handleEditorChange}
+              onCursorChange={handleCursorChange}
+              onRichRender={handleRichRender}
+              blankClickToEnd={blankClickToEnd}
+              codeLineNumbers={codeLineNumbers}
+              onNotify={setToast}
+              imageHints={{
+                docPath: activeFile?.path,
+                workspacePath: workspace?.path,
+                imageHost,
+              }}
+            />
+            {/* 分栏预览（内容由 renderPreview 直接写入 DOM，避免 React 协调开销） */}
+            {previewMode && (
+              <div className="preview-pane" ref={previewPaneRef}>
+                <div className="editor-inner preview-content" ref={previewContentRef} />
+              </div>
+            )}
+            {/* 全部标签页关闭后显示开始界面（左侧文件夹树仍保留） */}
+            {openFiles.length === 0 && (
+              <StartScreen
+                onNew={handleNew}
+                onOpen={() => void handleOpen()}
+                onOpenFolder={() => void handleOpenFolder()}
+              />
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* 底部状态栏 */}

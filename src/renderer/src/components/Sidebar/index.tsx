@@ -8,6 +8,8 @@ export interface OpenFile {
   name: string
   /** 磁盘路径（真实文件才有，演示文件为空） */
   path?: string
+  /** 侧栏单击打开的临时预览标签；双击或首次修改后转为固定标签 */
+  preview?: boolean
 }
 
 /** 已打开的工作区文件夹 */
@@ -30,10 +32,10 @@ interface SidebarProps {
   activeFileId: string
   /** 当前文档 Markdown（用于生成大纲） */
   content: string
-  /** 点击演示文件 */
-  onSelectDemoFile: (id: string) => void
-  /** 点击工作区/磁盘文件（传路径） */
-  onSelectWorkspaceFile: (path: string) => void
+  /** 点击演示文件；固定标签由双击触发 */
+  onSelectDemoFile: (id: string, pinned: boolean) => void
+  /** 点击工作区/磁盘文件（传路径）；固定标签由双击触发 */
+  onSelectWorkspaceFile: (path: string, pinned: boolean) => void
   /** 点击大纲标题（index 为标题在文档中的顺序） */
   onOutlineClick: (index: number) => void
   /** 该值变化时自动切到大纲 Tab（用于"视图 → 大纲面板"菜单） */
@@ -210,27 +212,6 @@ export function Sidebar({
     ]
   }, [workspace])
 
-  // 不在任何树中的外部打开文件
-  const externalFiles = useMemo(() => {
-    const inTree = new Set<string>(
-      openFiles.filter((f) => !f.path).map((f) => f.id),
-    )
-    // 演示文件 ID
-    demoTree.forEach((folder) => folder.fileIds.forEach((id) => inTree.add(id)))
-    return openFiles.filter((f) => {
-      if (inTree.has(f.id)) return false
-      // 属于工作区路径下的文件也不算外部
-      if (f.path && workspace && f.path.startsWith(workspace.path)) return false
-      return true
-    })
-  }, [openFiles, demoTree, workspace])
-
-  // 工作区模式下的未命名文档（无磁盘路径且非演示文件）
-  const workspaceUntitled = useMemo(() => {
-    const demoIds = new Set(demoTree.flatMap((folder) => folder.fileIds))
-    return openFiles.filter((f) => !f.path && !demoIds.has(f.id))
-  }, [openFiles, demoTree])
-
   const toggleCollapse = (key: string) => {
     setCollapsedKeys((prev) => {
       const next = new Set(prev)
@@ -339,9 +320,6 @@ export function Sidebar({
       node.demoId !== undefined
         ? activeFileId === node.demoId
         : activeFileId === `file-${node.path}`
-    // 已打开标记（区分打开过与未打开的文件）
-    const isOpened =
-      node.path !== undefined && openFiles.some((f) => f.id === `file-${node.path}`)
     // 内联重命名态
     if (renamingKey === node.key && node.path) {
       return (
@@ -383,8 +361,12 @@ export function Sidebar({
         className={`tree-row tree-file-row ${isActive ? 'active' : ''}`}
         style={{ paddingLeft: indent }}
         onClick={() => {
-          if (node.demoId !== undefined) onSelectDemoFile(node.demoId)
-          else if (node.path) onSelectWorkspaceFile(node.path)
+          if (node.demoId !== undefined) onSelectDemoFile(node.demoId, false)
+          else if (node.path) onSelectWorkspaceFile(node.path, false)
+        }}
+        onDoubleClick={() => {
+          if (node.demoId !== undefined) onSelectDemoFile(node.demoId, true)
+          else if (node.path) onSelectWorkspaceFile(node.path, true)
         }}
         onContextMenu={(e) => openCtxMenu(e, node)}
         draggable={!!workspace && !!node.path}
@@ -403,7 +385,6 @@ export function Sidebar({
         <span className="tree-chevron-slot" />
         <FileIcon />
         <span className="tree-name">{node.name}</span>
-        {isOpened && !isActive && <span className="tree-open-dot" title="已打开" />}
       </div>
     )
   }
@@ -475,69 +456,10 @@ export function Sidebar({
                 ) : (
                   <div className="tree-empty">文件夹为空，已新建空白文档</div>
                 )}
-                {/* 工作区内新建的未命名文档 */}
-                {workspaceUntitled.length > 0 && (
-                  <div>
-                    <div className="tree-section-label">新建文档</div>
-                    {workspaceUntitled.map((file) => (
-                      <div
-                        key={file.id}
-                        className={`tree-row tree-file-row ${activeFileId === file.id ? 'active' : ''}`}
-                        style={{ paddingLeft: 8 }}
-                        onClick={() => onSelectDemoFile(file.id)}
-                      >
-                        <span className="tree-chevron-slot" />
-                        <FileIcon />
-                        <span className="tree-name">{file.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {/* 外部打开的文件（不在工作区目录树内的文件也可在此导航） */}
-                {externalFiles.length > 0 && (
-                  <div>
-                    <div className="tree-section-label">外部文件</div>
-                    {externalFiles.map((file) => (
-                      <div
-                        key={file.id}
-                        className={`tree-row tree-file-row ${activeFileId === file.id ? 'active' : ''}`}
-                        style={{ paddingLeft: 8 }}
-                        onClick={() => {
-                          if (file.path) onSelectWorkspaceFile(file.path)
-                        }}
-                      >
-                        <span className="tree-chevron-slot" />
-                        <FileIcon />
-                        <span className="tree-name">{file.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </>
             ) : (
               <>
                 {demoNodes.map((node) => renderTreeNode(node, 0))}
-
-                {/* 外部打开的文件 */}
-                {externalFiles.length > 0 && (
-                  <div>
-                    <div className="tree-section-label">外部文件</div>
-                    {externalFiles.map((file) => (
-                      <div
-                        key={file.id}
-                        className={`tree-row tree-file-row ${activeFileId === file.id ? 'active' : ''}`}
-                        style={{ paddingLeft: 8 }}
-                        onClick={() => {
-                          if (file.path) onSelectWorkspaceFile(file.path)
-                        }}
-                      >
-                        <span className="tree-chevron-slot" />
-                        <FileIcon />
-                        <span className="tree-name">{file.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </>
             )}
           </div>

@@ -1,5 +1,7 @@
 # Electron 快速入门（Java 开发者视角）
 
+> 更新基线：2026-08-11。本文为概念学习资料；本项目的实际安全边界见 `src/main/index.ts`、`src/preload/index.ts` 与 [架构说明](../docs/architecture.md)。
+
 > 理解主进程和渲染进程的关系，学会安全地读写文件。
 
 ---

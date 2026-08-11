@@ -1,6 +1,6 @@
 # MarkdownSoft
 
-一款优雅的桌面 Markdown 编辑器，基于 Electron + React + Milkdown（ProseMirror）构建。
+一款本地优先的桌面 Markdown 编辑器，基于 Electron 43、React 18 与 Milkdown（ProseMirror）构建。
 
 支持多文件工作区、主题切换、实时预览、代码块行号、拼写检查、拖拽导入文件、写作统计，以及 HTML / PDF / Word / EPUB 等格式导出。
 
@@ -34,7 +34,7 @@
 
 | 层级 | 技术 |
 |------|------|
-| 运行时 | [Electron](https://www.electronjs.org/) 33 |
+| 运行时 | [Electron](https://www.electronjs.org/) 43 |
 | 构建工具 | [electron-vite](https://electron-vite.github.io/) + [Vite](https://vitejs.dev/) |
 | UI 框架 | [React](https://react.dev/) 18 |
 | 编辑器内核 | [Milkdown](https://milkdown.dev/) 7（基于 ProseMirror） |
@@ -97,9 +97,9 @@ Main（Node.js，拥有 fs/path 权限）
 ```
 
 - **渲染进程不能直接访问 Node.js API**（`fs`、`path` 等），所有文件操作必须通过 IPC 由主进程执行
-- **Preload 脚本**通过 `contextBridge` 暴露类型安全的 `DesktopAPI` 接口，不接受任意路径参数
+- **Preload 脚本**通过 `contextBridge` 暴露类型安全的 `DesktopAPI` 接口，不暴露通用 IPC 或 Node.js 权限
 - **自定义 `mdimg://` 协议**：编辑器中引用本地图时使用 `mdimg://` 协议，由主进程安全地将其转换为 `file://` 读取，确保文档可移植
-- **CSP 安全**：生产环境不使用 `unsafe-inline`
+- **窗口导航保护**：窗口内不加载外部页面，HTTP(S) 与 `mailto:` 外链交由系统浏览器打开
 
 ---
 

@@ -1,5 +1,7 @@
 # 组件指南
 
+> 更新基线：2026-08-11。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
+
 ## 组件架构
 
 所有 UI 组件位于 `src/renderer/src/components/` 下，按功能拆分为独立目录。每个组件目录包含：
@@ -19,8 +21,10 @@ components/
 ├── SearchBar/      查找替换栏
 ├── SettingsDialog/ 设置弹窗（Typora 式分类导航，拆分为 AppearancePanel / EditorPanel / ShortcutsPanel）
 ├── HelpDialog/     帮助弹窗（快捷键/语法/关于）
-└── ImagesDialog/   图片管理面板
+├── ImagesDialog/   图片管理面板
+├── ExportPdfDialog/ PDF 导出选项对话框
 ├── WorkspaceSearchDialog/  工作区搜索对话框
+└── StartScreen/    关闭全部标签页后的起始界面
 
 src/renderer/src/hooks/
 ├── usePersistedSetting.ts  通用设置持久化 hook
@@ -37,7 +41,7 @@ src/renderer/src/data/
 └── demo-files.ts   演示文件树数据源（正式版换成 Main 进程读目录）
 ```
 
-> 顶部栏（窗口圆点 + 菜单 + 标题 + 操作按钮）直接在 `App.tsx` 中组装，无独立 TitleBar 组件。
+> 顶部栏（窗口圆点 + 菜单 + 标题 + 操作按钮）直接在 `App.tsx` 中组装，无独立 TitleBar 组件。标签栏位于右侧编辑器区域顶部，不占用侧栏上方空间。侧栏单击文件时以斜体预览标签打开，下一次单击会替换未修改的预览标签；双击或首次修改后固定标签。关闭最后一个标签页会显示 `StartScreen`，不会强制创建空白文档。
 
 ---
 

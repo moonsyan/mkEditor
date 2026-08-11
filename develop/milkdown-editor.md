@@ -1,5 +1,7 @@
 # Milkdown 编辑器扩展指南
 
+> 更新基线：2026-08-11。插件以 `src/renderer/src/components/Editor/index.tsx` 的实际注册和 `plugins/` 目录实现为准。
+
 > 理解编辑器内核，学会添加新功能和修复编辑相关 Bug。
 
 ---

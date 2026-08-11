@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 
+const MAX_SEARCH_QUERY_LENGTH = 256
+
 /** 工作区搜索命中项 */
 interface WsMatch {
   path: string
@@ -98,6 +100,10 @@ export function WorkspaceSearchDialog({
   const doSearch = async () => {
     const q = query.trim()
     if (!q || !window.desktopAPI) return
+    if (q.length > MAX_SEARCH_QUERY_LENGTH) {
+      setError('搜索关键词不能超过 256 个字符')
+      return
+    }
     const seq = ++searchSeqRef.current
     setLoading(true)
     setSearched(true)
@@ -117,6 +123,8 @@ export function WorkspaceSearchDialog({
         setMatches([])
         if (res.error?.code === 'INVALID_REGEX') {
           setError('正则表达式不合法，请检查后重试')
+        } else if (res.error?.code === 'QUERY_TOO_LONG') {
+          setError(res.error.message ?? '搜索关键词不能超过 256 个字符')
         }
       }
     } catch {

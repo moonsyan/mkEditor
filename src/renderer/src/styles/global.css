@@ -127,6 +127,109 @@ html[data-platform='darwin'] .topbar {
   position: relative;
 }
 
+/* 编辑器宿主：上方标签栏只属于编辑器区域，下方承载编辑器、预览和开始界面。 */
+.editor-host {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.editor-content {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ====== 开始界面（关闭所有标签页后显示） ====== */
+.start-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface);
+  transition: background var(--dur) var(--ease);
+}
+.start-inner {
+  text-align: center;
+  padding: 24px;
+  user-select: none;
+}
+.start-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-m);
+  margin-bottom: 18px;
+}
+.start-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: .02em;
+  margin-bottom: 6px;
+}
+.start-sub {
+  font-size: .85rem;
+  color: var(--text-3);
+  margin-bottom: 26px;
+}
+.start-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.start-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 18px;
+  font-size: .82rem;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.start-btn:hover {
+  color: var(--text-1);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.start-btn.primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.start-btn.primary:hover {
+  filter: brightness(1.06);
+  color: #fff;
+}
+.start-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.start-hint {
+  margin-top: 22px;
+  font-size: .74rem;
+  color: var(--text-4);
+}
+
 .sidebar-toggle {
   position: absolute;
   /* 侧栏实际宽度 = --sidebar-w × 缩放倍率，位置同步 */

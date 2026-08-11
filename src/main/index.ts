@@ -97,8 +97,19 @@ app.whenReady().then(initApp)
 app.on('web-contents-created', (_, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
-      shell.openExternal(url)
+      void shell.openExternal(url).catch(() => {})
     }
     return { action: 'deny' }
+  })
+
+  // 普通链接没有 target 时会在当前窗口内导航。初始页面加载完成后，
+  // 仅允许将安全外链交给系统浏览器，避免应用壳被陌生页面替换。
+  contents.once('did-finish-load', () => {
+    contents.on('will-navigate', (event, url) => {
+      event.preventDefault()
+      if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
+        void shell.openExternal(url).catch(() => {})
+      }
+    })
   })
 })

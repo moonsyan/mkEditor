@@ -156,6 +156,9 @@ interface FullscreenCodeState {
   text: string
 }
 
+/** 与主进程写入及图床上传保持一致，避免 Data URL 转换导致渲染进程内存峰值过高 */
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+
 /**
  * Milkdown 编辑器主体
  * useEditor 只在挂载时执行一次，initialContent/onChange 通过 ref 透传，
@@ -526,6 +529,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     const insertImageFileTask = async (file: File) => {
       if (!window.desktopAPI) return
+      if (file.size > MAX_IMAGE_SIZE) {
+        notifyRef.current?.('图片超过 20MB，无法插入')
+        return
+      }
       const dataUrl = await new Promise<string | null>((resolve) => {
         const reader = new FileReader()
         reader.onload = () =>

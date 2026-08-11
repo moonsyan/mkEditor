@@ -24,6 +24,10 @@ const searchLineCache = new Map<
 const SEARCH_CACHE_MAX = 1000
 /** 单文件超过该体积不入缓存，控制最坏内存占用（1000 × 512KB） */
 const SEARCH_CACHE_FILE_MAX = 512 * 1024
+/** 剪贴板/拖入图片的最大体积，与图床上传限制保持一致 */
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+/** 工作区搜索查询长度上限，避免正则与逐行匹配消耗失控 */
+const MAX_SEARCH_QUERY_LENGTH = 256
 
 /**
  * 自动探测编码读取文本（低优14）：先按 UTF-8 严格解码，
@@ -297,6 +301,12 @@ export function registerIpcHandlers(): void {
         }
         const ext = match[2].toLowerCase().replace('jpeg', 'jpg')
         const buffer = Buffer.from(match[3], 'base64')
+        if (buffer.length > MAX_IMAGE_SIZE) {
+          return {
+            ok: false,
+            error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法保存' },
+          }
+        }
 
         // 存储位置：文档旁 attachments/ → 工作区 attachments/ → 用户数据目录
         let dir: string
@@ -639,6 +649,12 @@ export function registerIpcHandlers(): void {
       try {
         const q = (args.query ?? '').trim()
         if (!q) return { ok: true, data: { matches: [], truncated: false } }
+        if (q.length > MAX_SEARCH_QUERY_LENGTH) {
+          return {
+            ok: false,
+            error: { code: 'QUERY_TOO_LONG', message: '搜索关键词不能超过 256 个字符' },
+          }
+        }
         // 正则模式：先验证表达式合法性，非法时直接报错由渲染端提示
         let re: RegExp | null = null
         if (args.regex) {

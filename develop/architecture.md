@@ -1,5 +1,7 @@
 # 架构详解
 
+> 更新基线：2026-08-11。当前壳层状态由 React `useState`/`useRef` 管理，未使用 Zustand；IPC 通道以 `src/shared/ipc/channels.ts` 为唯一来源。
+
 ## 一、整体分层架构
 
 本项目采用 **Electron 多进程架构**，共 3 层：

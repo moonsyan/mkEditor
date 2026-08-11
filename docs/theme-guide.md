@@ -1,5 +1,7 @@
 # 主题定制指南
 
+> 更新基线：2026-08-11。主题文件位于 `src/renderer/src/styles/themes/`；当前内置 `default`、`dark`、`ocean`、`rose` 四套主题。
+
 ## 主题系统原理
 
 MarkdownSoft 使用 **CSS 变量（Custom Properties）** 实现主题系统。所有颜色、间距、阴影等视觉属性都定义为 CSS 变量，切换主题只需改变一组变量的值。

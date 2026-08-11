@@ -1,5 +1,7 @@
 # 项目文件索引
 
+> 更新基线：2026-08-11。当前文件清单以 `src/` 实际目录为准；`StartScreen/`、`ExportPdfDialog/` 与 `WorkspaceSearchDialog/` 已是现有组件。
+
 > 按功能分类，方便快速定位代码。
 
 ---
