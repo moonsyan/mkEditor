@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { isImeComposing } from '../../lib/keyboard'
 
 /** 持久化的搜索状态（U4） */
 export interface SearchState {
@@ -102,6 +103,7 @@ export function SearchBar({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isImeComposing(e.nativeEvent)) return
     if (e.key === 'Escape') {
       e.preventDefault()
       onClose()
@@ -180,6 +182,7 @@ export function SearchBar({
               onReplacementChange?.(e.target.value)
             }}
             onKeyDown={(e) => {
+              if (isImeComposing(e.nativeEvent)) return
               if (e.key === 'Escape') {
                 e.preventDefault()
                 onClose()

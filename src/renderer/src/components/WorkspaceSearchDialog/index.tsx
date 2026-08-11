@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { isImeComposing } from '../../lib/keyboard'
 
 const MAX_SEARCH_QUERY_LENGTH = 256
 
@@ -178,6 +179,7 @@ export function WorkspaceSearchDialog({
               spellCheck={false}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (isImeComposing(e.nativeEvent)) return
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   void doSearch()
