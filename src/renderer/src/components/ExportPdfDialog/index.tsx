@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { isImeComposing } from '../../lib/keyboard'
 
 /** PDF 导出选项（传给主进程 printToPDF） */
 export interface PdfOptions {
@@ -46,6 +47,16 @@ export function ExportPdfDialog({
   const [headerFooter, setHeaderFooter] = useState(true)
   const [toc, setToc] = useState(false)
 
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, onClose])
+
   if (!open) return null
 
   return (
@@ -53,12 +64,12 @@ export function ExportPdfDialog({
       <div className="dialog pdf-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="help-header">
           <span className="help-title">导出 PDF</span>
-          <div className="dialog-close" onClick={onClose} title="关闭">
+          <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭" title="关闭">
             <svg viewBox="0 0 24 24">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-          </div>
+          </button>
         </div>
         <div className="pdf-dialog-body">
           <div className="settings-row">

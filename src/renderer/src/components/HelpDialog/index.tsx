@@ -197,12 +197,12 @@ export function HelpDialog({ view, onClose, stats, shortcuts }: HelpDialogProps)
       <div className="dialog help-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="help-header">
           <span className="help-title">{TITLES[view]}</span>
-          <div className="dialog-close" onClick={onClose} title="关闭">
+          <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭" title="关闭">
             <svg viewBox="0 0 24 24">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-          </div>
+          </button>
         </div>
 
         <div className="help-body">

@@ -128,24 +128,26 @@ export function SettingsDialog({
         <div className="dialog-nav">
           <div className="dialog-nav-title">设置</div>
           {NAV_ITEMS.map((item) => (
-            <div
+            <button
+              type="button"
               key={item.id}
               className={`dialog-nav-item ${nav === item.id ? 'active' : ''}`}
+              aria-current={nav === item.id ? 'page' : undefined}
               onClick={() => setNav(item.id)}
             >
               {item.label}
-            </div>
+            </button>
           ))}
         </div>
 
         {/* 右侧面板 */}
         <div className="dialog-body">
-          <div className="dialog-close" onClick={onClose} title="关闭">
+          <button type="button" className="dialog-close" onClick={onClose} aria-label="关闭" title="关闭">
             <svg viewBox="0 0 24 24">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
-          </div>
+          </button>
 
           {nav === 'appearance' && (
             <AppearancePanel

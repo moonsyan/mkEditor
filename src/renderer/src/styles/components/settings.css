@@ -36,6 +36,10 @@
   justify-content: center;
   border-radius: var(--radius);
   color: var(--text-3);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
   cursor: pointer;
   transition: all var(--dur) var(--ease);
   z-index: 5;
@@ -43,6 +47,10 @@
 .dialog-close:hover {
   background: var(--bg-hover);
   color: var(--text-1);
+}
+.dialog-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .dialog-close svg {
   width: 13px;
@@ -74,7 +82,13 @@
   padding: 4px 10px 12px;
 }
 .dialog-nav-item {
+  display: block;
+  width: 100%;
   padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
   font-size: .78rem;
   color: var(--text-2);
   border-radius: var(--radius);
@@ -90,6 +104,10 @@
   background: var(--accent-bg);
   color: var(--accent);
   font-weight: 600;
+}
+.dialog-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* 右侧面板 */
