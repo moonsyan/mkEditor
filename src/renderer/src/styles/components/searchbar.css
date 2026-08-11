@@ -37,6 +37,11 @@
   flex-shrink: 0;
   transition: all var(--dur) var(--ease);
 }
+button.search-regex {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
 .search-regex:hover { background: var(--bg-hover); color: var(--text-1); }
 .search-regex.on {
   background: var(--accent-bg);

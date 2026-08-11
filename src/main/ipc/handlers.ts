@@ -600,10 +600,20 @@ export function registerIpcHandlers(): void {
 
   /* ==================== 工作区文件操作 ==================== */
 
-  /** 文件名安全校验：禁止路径分隔符与非法字符 */
-  const safeName = (name: string): string | null => {
+  /** 文件名安全校验：禁止路径分隔符、非法字符和 Windows 保留文件名。 */
+  const safeName = (name: unknown): string | null => {
+    if (typeof name !== 'string') return null
     const trimmed = name.trim()
-    if (!trimmed || /[\\/:*?"<>|]/.test(trimmed)) return null
+    if (
+      !trimmed ||
+      trimmed === '.' ||
+      trimmed === '..' ||
+      /[\\/:*?"<>|]/.test(trimmed) ||
+      /[. ]$/.test(trimmed) ||
+      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(trimmed)
+    ) {
+      return null
+    }
     return trimmed
   }
 
@@ -611,17 +621,25 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.FILE_CREATE,
     async (_event, args: { dir: string; name: string }) => {
+      if (!args || typeof args.dir !== 'string' || !args.dir) {
+        return { ok: false, error: { code: 'INVALID_TARGET' } }
+      }
       const base = safeName(args.name)
       if (!base) return { ok: false, error: { code: 'INVALID_NAME' } }
+      const dirStat = await stat(args.dir).catch(() => null)
+      if (!dirStat?.isDirectory()) {
+        return { ok: false, error: { code: 'INVALID_TARGET' } }
+      }
       // 重名时自动编号：新文档.md → 新文档 2.md → 新文档 3.md ...
       const extMatch = base.match(/\.(md|markdown)$/i)
       const ext = extMatch ? extMatch[0] : '.md'
       const stem = extMatch ? base.slice(0, -ext.length) : base
-      let name = base
+      const initialName = extMatch ? base : `${base}${ext}`
+      let name = initialName
       let target = join(args.dir, name)
       let available = false
       for (let index = 1; index <= 1000; index++) {
-        name = index === 1 ? base : `${stem} ${index}${ext}`
+        name = index === 1 ? initialName : `${stem} ${index}${ext}`
         target = join(args.dir, name)
         try {
           await stat(target)
@@ -646,6 +664,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     CHANNELS.FILE_RENAME,
     async (_event, args: { path: string; newName: string }) => {
+      if (!args || typeof args.path !== 'string' || !args.path) {
+        return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
       const name = safeName(args.newName)
       if (!name) return { ok: false, error: { code: 'INVALID_NAME' } }
       const target = join(dirname(args.path), name)

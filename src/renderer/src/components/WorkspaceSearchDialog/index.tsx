@@ -101,7 +101,19 @@ export function WorkspaceSearchDialog({
 
   const doSearch = async () => {
     const q = query.trim()
-    if (!q || !window.desktopAPI) return
+    if (!q) {
+      searchSeqRef.current += 1
+      setMatches([])
+      setTruncated(false)
+      setError('')
+      setLoading(false)
+      setSearched(false)
+      return
+    }
+    if (!window.desktopAPI) {
+      setError('当前环境不支持工作区搜索')
+      return
+    }
     if (q.length > MAX_SEARCH_QUERY_LENGTH) {
       setError('搜索关键词不能超过 256 个字符')
       return
@@ -131,6 +143,8 @@ export function WorkspaceSearchDialog({
           setError(res.error.message ?? '正则表达式匹配超时，请简化表达式')
         } else if (res.error?.code === 'QUERY_TOO_LONG') {
           setError(res.error.message ?? '搜索关键词不能超过 256 个字符')
+        } else {
+          setError(res.error?.message ?? '搜索失败，请稍后重试')
         }
       }
     } catch {
@@ -158,20 +172,26 @@ export function WorkspaceSearchDialog({
         </div>
         <div className="ws-dialog-body">
           <div className="ws-search-row">
-            <div
+            <button
+              type="button"
               className={`search-regex ${useRegex ? 'on' : ''}`}
               onClick={() => setUseRegex((v) => !v)}
               title={useRegex ? '正则模式：开' : '正则模式：关'}
+              aria-label="切换正则搜索"
+              aria-pressed={useRegex}
             >
               .*
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
               className={`search-regex ${caseSensitive ? 'on' : ''}`}
               onClick={() => setCaseSensitive((v) => !v)}
               title={caseSensitive ? '区分大小写：开' : '区分大小写：关'}
+              aria-label="切换区分大小写"
+              aria-pressed={caseSensitive}
             >
               Aa
-            </div>
+            </button>
             <input
               ref={inputRef}
               className="search-input ws-input"
@@ -187,9 +207,9 @@ export function WorkspaceSearchDialog({
                 }
               }}
             />
-            <div className="sc-btn" onClick={() => void doSearch()}>
+            <button type="button" className="sc-btn" onClick={() => void doSearch()}>
               搜索
-            </div>
+            </button>
           </div>
           {error && <div className="ws-error">{error}</div>}
           <div className="ws-results">
@@ -199,7 +219,8 @@ export function WorkspaceSearchDialog({
             )}
             {!loading &&
               matches.map((m, i) => (
-                <div
+                <button
+                  type="button"
                   key={`${m.path}-${m.line}-${i}`}
                   className="ws-result-item"
                   onClick={() => onSelect(m.path, query.trim(), { caseSensitive, useRegex })}
@@ -212,7 +233,7 @@ export function WorkspaceSearchDialog({
                   <div className="ws-result-preview">
                     {renderHighlightedPreview(m.preview, query.trim(), caseSensitive, useRegex)}
                   </div>
-                </div>
+                </button>
               ))}
             {truncated && (
               <div className="ws-empty">结果过多，仅显示前 200 条</div>
