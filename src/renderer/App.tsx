@@ -1583,9 +1583,13 @@ img{max-width:100%}
       const newPath = res.data.path
       const finalName = res.data.name
       const newId = `file-${newPath}`
-      setOpenFiles((prev) =>
-        prev.map((f) => (f.id === oldId ? { id: newId, name: finalName, path: newPath } : f)),
+      const renamedFiles = openFilesRef.current.map((file) =>
+        file.id === oldId
+          ? { ...file, id: newId, name: finalName, path: newPath }
+          : file,
       )
+      openFilesRef.current = renamedFiles
+      setOpenFiles(renamedFiles)
       setContents((prev) => {
         if (prev[oldId] === undefined) return prev
         const next = { ...prev }
@@ -1643,11 +1647,11 @@ img{max-width:100%}
         return
       }
       setDocTitle(nextName)
-      setOpenFiles((previousFiles) =>
-        previousFiles.map((file) =>
-          file.id === activeFileId ? { ...file, name: nextName } : file,
-        ),
+      const renamedFiles = openFilesRef.current.map((file) =>
+        file.id === activeFileId ? { ...file, name: nextName } : file,
       )
+      openFilesRef.current = renamedFiles
+      setOpenFiles(renamedFiles)
     },
     [activeFileId, docTitle, handleRenameFile, openFiles],
   )
@@ -1820,13 +1824,18 @@ img{max-width:100%}
       const mapPath = (p: string) =>
         p === path ? newPath : newPath + p.slice(path.length)
       // 迁移已打开文件的 id（file-旧路径 → file-新路径），文件夹移动时子文件一并迁移
-      setOpenFiles((prev) =>
-        prev.map((f) => {
-          if (!f.path || !isUnder(f.path)) return f
-          const np = mapPath(f.path)
-          return { id: `file-${np}`, name: np.split(/[\\/]/).pop() ?? f.name, path: np }
-        }),
-      )
+      const movedFiles = openFilesRef.current.map((file) => {
+        if (!file.path || !isUnder(file.path)) return file
+        const nextPath = mapPath(file.path)
+        return {
+          ...file,
+          id: `file-${nextPath}`,
+          name: nextPath.split(/[\\/]/).pop() ?? file.name,
+          path: nextPath,
+        }
+      })
+      openFilesRef.current = movedFiles
+      setOpenFiles(movedFiles)
       setContents((prev) => {
         let changed = false
         const next: Record<string, string> = {}
@@ -2282,8 +2291,8 @@ img{max-width:100%}
       if (!combo) return
       const action = shortcutLookupRef.current[combo]
       if (!action) return
-      e.preventDefault()
       if (isEditableShortcutTarget(e.target)) return
+      e.preventDefault()
       switch (action) {
         case 'new': handleNew(); break
         case 'open': void handleOpen(); break
