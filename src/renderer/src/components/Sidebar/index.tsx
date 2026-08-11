@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react'
 import type { DemoFolder } from '../../data/demo-files'
 import type { FolderTreeNode } from '../../../../preload/api'
 import { parseOutline, type OutlineNode } from '../../lib/outline'
+import { isImeComposing } from '../../lib/keyboard'
 
 /** 打开中的文档（含真实文件的磁盘路径） */
 export interface OpenFile {
@@ -307,6 +308,7 @@ export function Sidebar({
             onClick={(e) => e.stopPropagation()}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
+              if (isImeComposing(e.nativeEvent)) return
               if (e.key === 'Enter') {
                 e.preventDefault()
                 if (node.path && renameValue.trim()) {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { SHORTCUT_ACTIONS, comboFromEvent } from '../../data/shortcuts'
 import type { ShortcutMap } from '../../data/shortcuts'
+import { isImeComposing } from '../../lib/keyboard'
 
 /**
  * 快捷键录入：捕获下一个有效组合键（capture 阶段，避免触发其它快捷键逻辑）。
@@ -17,6 +18,7 @@ export function useShortcutRecorder(
   useEffect(() => {
     if (!recordingId) return
     const h = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopImmediatePropagation()

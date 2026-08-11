@@ -90,6 +90,7 @@ export function WorkspaceSearchDialog({
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handler)

@@ -1,3 +1,5 @@
+import { isImeComposing } from '../../lib/keyboard'
+
 export interface CodePanelState {
   pre: HTMLElement
   top: number
@@ -73,6 +75,7 @@ export function EditorOverlays({
             spellCheck={false}
             onChange={(event) => onLanguageChange(event.target.value)}
             onKeyDown={(event) => {
+              if (isImeComposing(event.nativeEvent)) return
               if (event.key === 'Enter') {
                 event.preventDefault()
                 onApplyLanguage(language)
