@@ -1702,6 +1702,8 @@ img{max-width:100%}
         setToast('删除失败')
         return
       }
+      // 立即同步供编辑器异步回调读取的镜像，避免状态提交前继续写入已删除文件。
+      openFilesRef.current = openFilesRef.current.filter((file) => file.id !== delId)
       setOpenFiles((prev) => prev.filter((f) => f.id !== delId))
       setContents((prev) => {
         const next = { ...prev }
