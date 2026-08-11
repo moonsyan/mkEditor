@@ -261,6 +261,9 @@ export default function App(): JSX.Element {
    * 回调必须读这个 ref 才能把内容写到正确的文件。
    */
   const activeFileIdRef = useRef(activeFileId)
+  /** 内容同步镜像：异步保存完成时用于判断用户是否已继续输入。 */
+  const contentsRef = useRef(contents)
+  contentsRef.current = contents
 
   /** 镜像 openFiles/workspace，供 dirOfFile 等在不重建的回调中读取 */
   const openFilesRef = useRef(openFiles)
@@ -770,10 +773,12 @@ export default function App(): JSX.Element {
           // 带冲突检测：外部修改过的文件不自动覆盖；GBK 文件写回原编码（含字符降级保护）
           const result = await saveWithEncodingFallback(f.path, content, mt[f.id], f.id)
           if (result.ok && result.data) {
+            if (!openFilesRef.current.some((file) => file.id === f.id)) continue
             INITIAL_OR_SAVED.current[f.id] = content
-            setSavedMap((prev) => ({ ...prev, [f.id]: true }))
+            const isCurrentContent = contentsRef.current[f.id] === content
+            setSavedMap((prev) => ({ ...prev, [f.id]: isCurrentContent }))
             setFileMtime((prev) => ({ ...prev, [f.id]: result.data!.modifiedTime }))
-            void clearDraft(f.id)
+            if (isCurrentContent) void clearDraft(f.id)
             continue
           }
           if (result.error?.code === 'CONFLICT') {
@@ -904,6 +909,9 @@ export default function App(): JSX.Element {
         )
       }
       return
+    }
+    if (contentsRef.current[fileId] !== stored) {
+      contentsRef.current = { ...contentsRef.current, [fileId]: stored }
     }
     setContents((prev) =>
       prev[fileId] === stored ? prev : { ...prev, [fileId]: stored },
@@ -1327,10 +1335,12 @@ export default function App(): JSX.Element {
         result = await doSave(false)
       }
       if (result.ok && result.data) {
+        if (!openFilesRef.current.some((openFile) => openFile.id === activeFileId)) return
         INITIAL_OR_SAVED.current[activeFileId] = content
-        setSavedMap((prev) => ({ ...prev, [activeFileId]: true }))
+        const isCurrentContent = contentsRef.current[activeFileId] === content
+        setSavedMap((prev) => ({ ...prev, [activeFileId]: isCurrentContent }))
         setFileMtime((prev) => ({ ...prev, [activeFileId]: result.data!.modifiedTime }))
-        void clearDraft(activeFileId)
+        if (isCurrentContent) void clearDraft(activeFileId)
       } else if (result.error?.code !== 'ENCODING_LOSS') {
         setToast(
           result.error?.code === 'NOT_FOUND'
