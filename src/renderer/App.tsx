@@ -264,6 +264,8 @@ export default function App(): JSX.Element {
   /** 镜像 openFiles/workspace，供 dirOfFile 等在不重建的回调中读取 */
   const openFilesRef = useRef(openFiles)
   openFilesRef.current = openFiles
+  /** 同一路径的文件树单击/双击只共享一次读取请求，避免慢磁盘下出现重复标签。 */
+  const openingWorkspaceFilesRef = useRef(new Map<string, Promise<boolean>>())
   const workspacePathRef = useRef<string | undefined>(undefined)
   workspacePathRef.current = workspace?.path
 
@@ -1123,7 +1125,7 @@ export default function App(): JSX.Element {
   const handleSelectWorkspaceFile = useCallback(
     async (path: string, pinned = true): Promise<boolean> => {
       const id = `file-${path}`
-      const existed = openFiles.find((file) => file.id === id)
+      const existed = openFilesRef.current.find((file) => file.id === id)
       if (existed) {
         if (pinned && existed.preview) {
           pinPreviewTab(id)
@@ -1132,33 +1134,55 @@ export default function App(): JSX.Element {
         return true
       }
       if (!window.desktopAPI) return false
-      const result = await window.desktopAPI.document.read(path)
-      if (!result.ok || !result.data) {
-        setToast('文件读取失败')
-        return false
+      const opening = openingWorkspaceFilesRef.current.get(path)
+      if (opening) {
+        const opened = await opening
+        if (opened && pinned) pinPreviewTab(id)
+        return opened
       }
-      titleRef.current?.blur()
-      const { name, content } = result.data
-      if (result.data.encoding) {
-        setEncodingMap((prev) => ({ ...prev, [id]: result.data!.encoding! }))
+      const openRequest = (async (): Promise<boolean> => {
+        const result = await window.desktopAPI!.document.read(path)
+        if (!result.ok || !result.data) {
+          setToast('文件读取失败')
+          return false
+        }
+        // 异步读取期间，其他入口可能已先打开同一文件；此时复用已有标签。
+        const openedMeanwhile = openFilesRef.current.find((file) => file.id === id)
+        if (openedMeanwhile) {
+          if (pinned && openedMeanwhile.preview) pinPreviewTab(id)
+          return true
+        }
+        titleRef.current?.blur()
+        const { name, content } = result.data
+        if (result.data.encoding) {
+          setEncodingMap((prev) => ({ ...prev, [id]: result.data!.encoding! }))
+        }
+        if (!pinned) discardPreviewTab(id)
+        const file = { id, name, path, preview: !pinned }
+        openFilesRef.current = [...openFilesRef.current, file]
+        activeFileIdRef.current = id
+        setOpenFiles((prev) => [...prev, file])
+        setContents((prev) => ({ ...prev, [id]: content }))
+        setSavedMap((prev) => ({ ...prev, [id]: true }))
+        INITIAL_OR_SAVED.current[id] = content
+        setFileMtime((prev) => ({ ...prev, [id]: result.data!.modifiedTime }))
+        setActiveFileId(id)
+        setDocTitle(name)
+        recordRecent(path, name)
+        replaceEditorContent(id, content, 'initialize')
+        focusEditorSoon()
+        return true
+      })()
+      openingWorkspaceFilesRef.current.set(path, openRequest)
+      try {
+        return await openRequest
+      } finally {
+        if (openingWorkspaceFilesRef.current.get(path) === openRequest) {
+          openingWorkspaceFilesRef.current.delete(path)
+        }
       }
-      if (!pinned) discardPreviewTab(id)
-      const file = { id, name, path, preview: !pinned }
-      openFilesRef.current = [...openFilesRef.current, file]
-      activeFileIdRef.current = id
-      setOpenFiles((prev) => [...prev, file])
-      setContents((prev) => ({ ...prev, [id]: content }))
-      setSavedMap((prev) => ({ ...prev, [id]: true }))
-      INITIAL_OR_SAVED.current[id] = content
-      setFileMtime((prev) => ({ ...prev, [id]: result.data!.modifiedTime }))
-      setActiveFileId(id)
-      setDocTitle(name)
-      recordRecent(path, name)
-      replaceEditorContent(id, content, 'initialize')
-      focusEditorSoon()
-      return true
     },
-    [openFiles, switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent, pinPreviewTab],
+    [switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent, pinPreviewTab],
   )
 
   /* ==================== 拖入 .md 文件直接打开 ==================== */
