@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react'
 import type { MutableRefObject } from 'react'
+import { toMdimgUrl } from '../../lib/image-path'
 
 export interface EditorImageHints {
   docPath?: string
@@ -61,7 +62,7 @@ export function useImageInsertion({
 
       const result = await window.desktopAPI.document.saveImage(dataUrl, imageHintsRef.current)
       if (!result.ok || !result.data) return
-      const url = `mdimg:///${result.data.path.replace(/\\/g, '/')}`
+      const url = toMdimgUrl(result.data.path)
       insertMarkdown(`![${result.data.name}](${url})`)
     },
     [imageHintsRef, insertMarkdown, notify],

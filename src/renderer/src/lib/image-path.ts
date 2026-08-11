@@ -7,6 +7,11 @@ function encodeMdimgPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/')
 }
 
+/** 将本地绝对路径转换为可安全写入 Markdown 的 mdimg URL。 */
+export function toMdimgUrl(path: string): string {
+  return `mdimg:///${encodeMdimgPath(path.replace(/\\/g, '/'))}`
+}
+
 /**
  * 渲染前：把文档相对路径的图片解析为 mdimg 协议（编辑器才能加载本地图）
  * 仅处理非 mdimg/http/data 开头的相对路径
@@ -20,7 +25,7 @@ export function toEditorImages(md: string, docDir: string | undefined): string {
     (_m, alt: string, src: string) => {
       // 去掉尾部 title（"..."）与首尾空白
       const clean = src.trim().replace(/\s+"[^"]*"$/, '').replace(/^\.\//, '')
-      return `![${alt}](mdimg:///${encodeMdimgPath(`${base}/${clean}`)})`
+      return `![${alt}](${toMdimgUrl(`${base}/${clean}`)})`
     },
   )
 }
