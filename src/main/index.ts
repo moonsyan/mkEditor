@@ -1,11 +1,11 @@
-import { app, shell, BrowserWindow, Menu, ipcMain, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, Menu, ipcMain, protocol } from 'electron'
 import { join } from 'path'
 import { readFileSync } from 'fs'
-import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createWindow } from './window/window-manager'
 import { registerIpcHandlers } from './ipc/handlers'
+import { fetchAllowedImage } from './image-protocol'
 
 // 本地图片协议：mdimg:///<绝对路径> → 渲染进程可直接展示本地图片
 // （必须在 app ready 之前注册特权）
@@ -53,19 +53,8 @@ function initApp(): void {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 处理 mdimg 协议：把本地文件路径转成 file:// 读取
-  protocol.handle('mdimg', (request) => {
-    try {
-      let filePath = decodeURIComponent(new URL(request.url).pathname)
-      // Windows 绝对路径：/C:/xxx → C:/xxx
-      if (process.platform === 'win32' && filePath.startsWith('/')) {
-        filePath = filePath.slice(1)
-      }
-      return net.fetch(pathToFileURL(filePath).toString())
-    } catch {
-      return new Response('Not Found', { status: 404 })
-    }
-  })
+  // 处理 mdimg 协议：仅允许已打开文档或工作区范围内的图片资源。
+  protocol.handle('mdimg', (request) => fetchAllowedImage(request.url))
 
   // 注册 IPC 处理器
   registerIpcHandlers()

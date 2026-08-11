@@ -3,6 +3,10 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function encodeMdimgPath(path: string): string {
+  return path.split('/').map(encodeURIComponent).join('/')
+}
+
 /**
  * 渲染前：把文档相对路径的图片解析为 mdimg 协议（编辑器才能加载本地图）
  * 仅处理非 mdimg/http/data 开头的相对路径
@@ -16,7 +20,7 @@ export function toEditorImages(md: string, docDir: string | undefined): string {
     (_m, alt: string, src: string) => {
       // 去掉尾部 title（"..."）与首尾空白
       const clean = src.trim().replace(/\s+"[^"]*"$/, '').replace(/^\.\//, '')
-      return `![${alt}](mdimg:///${base}/${clean})`
+      return `![${alt}](mdimg:///${encodeMdimgPath(`${base}/${clean}`)})`
     },
   )
 }
@@ -28,8 +32,18 @@ export function toEditorImages(md: string, docDir: string | undefined): string {
 export function toStoredImages(md: string, docDir: string | undefined): string {
   if (!docDir) return md
   const base = docDir.replace(/\\/g, '/')
-  const prefix = `mdimg:///${base}/`
-  if (!md.includes(prefix)) return md
-  const re = new RegExp(`!\\[([^\\]]*)\\]\\(${escapeRegExp(prefix)}([^)]+)\\)`, 'g')
-  return md.replace(re, (_m, alt: string, rel: string) => `![${alt}](${rel})`)
+  const prefixes = [`mdimg:///${encodeMdimgPath(base)}/`, `mdimg:///${base}/`]
+  let result = md
+  for (const prefix of prefixes) {
+    if (!result.includes(prefix)) continue
+    const re = new RegExp(`!\\[([^\\]]*)\\]\\(${escapeRegExp(prefix)}([^)]+)\\)`, 'g')
+    result = result.replace(re, (_m, alt: string, rel: string) => {
+      try {
+        return `![${alt}](${decodeURIComponent(rel)})`
+      } catch {
+        return `![${alt}](${rel})`
+      }
+    })
+  }
+  return result
 }

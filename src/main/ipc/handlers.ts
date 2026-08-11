@@ -15,6 +15,7 @@ import {
   upsertDraft,
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
+import { allowImageDirectory } from '../image-protocol'
 
 const execFileAsync = promisify(execFile)
 
@@ -263,6 +264,7 @@ export function registerIpcHandlers(): void {
         }
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
+      allowImageDirectory(dirname(filePath))
       return {
         ok: true,
         data: {
@@ -309,6 +311,7 @@ export function registerIpcHandlers(): void {
 
       try {
         const children = await walkMarkdownTree(folderPath, 0)
+        allowImageDirectory(folderPath)
         return {
           ok: true,
           data: {
@@ -340,6 +343,7 @@ export function registerIpcHandlers(): void {
         }
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
+      allowImageDirectory(dirname(filePath))
       return {
         ok: true,
         data: {
@@ -497,6 +501,7 @@ export function registerIpcHandlers(): void {
         const name = `image-${Date.now()}-${Math.floor(Math.random() * 1e4)}.${ext}`
         const filePath = join(dir, name)
         await writeFile(filePath, buffer)
+        allowImageDirectory(dir)
         return { ok: true, data: { path: filePath, name } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
