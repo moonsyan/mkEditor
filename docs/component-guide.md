@@ -63,7 +63,8 @@ interface SidebarProps {
   openFiles: OpenFile[]           // 当前打开的所有文件
   activeFileId: string            // 当前激活文件 ID
   content: string                 // 当前文档 Markdown（生成大纲）
-  onSelectFile: (id: string) => void      // 点击文件回调
+  onSelectDemoFile: (id: string, pinned: boolean) => void
+  onSelectWorkspaceFile: (path: string, pinned: boolean) => void
   onOutlineClick: (index: number) => void // 点击大纲回调（标题序号）
   focusOutlineTick?: number       // 递增时自动切到大纲 tab
 }
@@ -229,7 +230,7 @@ interface SearchBarProps {
 **职责**：
 - 展示所有已打开文档的标签，点击切换、× 按钮关闭
 - 支持拖拽排序（重排 openFiles 顺序）
-- 已打开文件用圆点标记，未保存文档标签带 dirty 指示点
+- 侧栏单击以预览标签打开，双击或首次编辑后固定；仅未保存文档显示 dirty 指示点
 - 样式文件：`styles/components/tabbar.css`
 
 **Props**：

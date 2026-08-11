@@ -880,6 +880,18 @@ export default function App(): JSX.Element {
     mode: 'ignore' | 'initialize'
   } | null>(null)
 
+  /** 将预览标签升级为固定标签，并同步 React 状态与供同步回调读取的镜像。 */
+  const pinPreviewTab = useCallback((fileId: string) => {
+    const previewFile = openFilesRef.current.find((file) => file.id === fileId)
+    if (!previewFile?.preview) return
+    openFilesRef.current = openFilesRef.current.map((file) =>
+      file.id === fileId ? { ...file, preview: false } : file,
+    )
+    setOpenFiles((prev) =>
+      prev.map((file) => (file.id === fileId ? { ...file, preview: false } : file)),
+    )
+  }, [])
+
   const handleEditorChange = useCallback((md: string) => {
     // 读 ref 而非闭包 state：切换文件时 replaceAll 同步触发本回调，
     // 此时 React state 还是旧文件 ID
@@ -910,13 +922,9 @@ export default function App(): JSX.Element {
     })
     if (stored !== INITIAL_OR_SAVED.current[fileId]) {
       // 预览标签一旦被编辑就自动固定，下一次侧栏单击不会替换它。
-      setOpenFiles((prev) =>
-        prev.map((file) =>
-          file.id === fileId && file.preview ? { ...file, preview: false } : file,
-        ),
-      )
+      pinPreviewTab(fileId)
     }
-  }, [dirOfFile])
+  }, [dirOfFile, pinPreviewTab])
 
   /** 用于打开/切换文件的统一替换入口，避免程序性更新被当作用户输入。 */
   const replaceEditorContent = useCallback(
@@ -1020,9 +1028,7 @@ export default function App(): JSX.Element {
       const existed = openFiles.find((file) => file.id === id)
       if (existed) {
         if (pinned && existed.preview) {
-          setOpenFiles((prev) =>
-            prev.map((file) => (file.id === id ? { ...file, preview: false } : file)),
-          )
+          pinPreviewTab(id)
         }
         switchFile(id)
         return
@@ -1043,7 +1049,7 @@ export default function App(): JSX.Element {
       editorRef.current?.focus()
       focusEditorSoon()
     },
-    [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon],
+    [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon, pinPreviewTab],
   )
 
   const handleOpen = useCallback(async () => {
@@ -1059,11 +1065,7 @@ export default function App(): JSX.Element {
     const existed = openFiles.find((f) => f.path === path)
     if (existed) {
       if (existed.preview) {
-        setOpenFiles((prev) =>
-          prev.map((file) =>
-            file.id === existed.id ? { ...file, preview: false } : file,
-          ),
-        )
+        pinPreviewTab(existed.id)
       }
       switchFile(existed.id)
       return
@@ -1081,7 +1083,7 @@ export default function App(): JSX.Element {
     setDocTitle(name)
     recordRecent(path, name)
     replaceEditorContent(id, content, 'initialize')
-  }, [openFiles, switchFile, recordRecent, replaceEditorContent])
+  }, [openFiles, switchFile, recordRecent, replaceEditorContent, pinPreviewTab])
 
   /* ==================== 打开文件夹 / 工作区 ==================== */
 
@@ -1111,9 +1113,7 @@ export default function App(): JSX.Element {
       const existed = openFiles.find((file) => file.id === id)
       if (existed) {
         if (pinned && existed.preview) {
-          setOpenFiles((prev) =>
-            prev.map((file) => (file.id === id ? { ...file, preview: false } : file)),
-          )
+          pinPreviewTab(id)
         }
         switchFile(id)
         return true
@@ -1146,7 +1146,7 @@ export default function App(): JSX.Element {
       focusEditorSoon()
       return true
     },
-    [openFiles, switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent],
+    [openFiles, switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent, pinPreviewTab],
   )
 
   /* ==================== 拖入 .md 文件直接打开 ==================== */
