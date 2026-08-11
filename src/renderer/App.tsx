@@ -1243,22 +1243,26 @@ export default function App(): JSX.Element {
     const { path, name } = result.data
     const newId = `file-${path}`
     const targetAlreadyOpen =
-      newId !== oldId && openFiles.some((file) => file.id === newId)
+      newId !== oldId && openFilesRef.current.some((file) => file.id === newId)
     const modifiedTime = result.data.modifiedTime || Date.now()
 
     // 文件身份以磁盘路径为准。另存为后若仍沿用 untitled-/旧路径 ID，
     // 从工作区再次打开同一文件会生成重复标签，重命名和移动也无法命中它。
     INITIAL_OR_SAVED.current[newId] = content
     if (newId !== oldId) delete INITIAL_OR_SAVED.current[oldId]
-    setOpenFiles((prev) => {
+    const nextOpenFiles = (() => {
+      const current = openFilesRef.current
       if (newId === oldId) {
-        return prev.map((file) => (file.id === oldId ? { ...file, path, name } : file))
+        return current.map((file) => (file.id === oldId ? { ...file, path, name } : file))
       }
-      if (targetAlreadyOpen) return prev.filter((file) => file.id !== oldId)
-      return prev.map((file) =>
+      if (targetAlreadyOpen) return current.filter((file) => file.id !== oldId)
+      return current.map((file) =>
         file.id === oldId ? { id: newId, name, path } : file,
       )
-    })
+    })()
+    // 另存为会改变文件 ID，必须立即同步镜像，避免编辑器回调写入旧 ID。
+    openFilesRef.current = nextOpenFiles
+    setOpenFiles(nextOpenFiles)
     setContents((prev) => {
       const next = { ...prev, [newId]: content }
       if (newId !== oldId) delete next[oldId]
@@ -1288,7 +1292,7 @@ export default function App(): JSX.Element {
     void clearDraft(oldId)
     if (newId !== oldId) void clearDraft(newId)
     if (targetAlreadyOpen) setToast('已覆盖并切换到已打开的同名文件')
-  }, [activeFileId, contents, clearDraft, openFiles])
+  }, [activeFileId, contents, clearDraft])
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)
