@@ -25,6 +25,22 @@ export const getNeighborTabId = (openFiles: OpenFile[], fileId: string): string 
   return openFiles[index + 1]?.id ?? openFiles[index - 1]?.id ?? null
 }
 
+export type DocumentTabNavigationKey = 'ArrowLeft' | 'ArrowRight' | 'Home' | 'End'
+
+/** 返回键盘导航后的标签；左右方向键会在首尾之间循环。 */
+export const getTabNavigationTargetId = (
+  openFiles: OpenFile[],
+  fileId: string,
+  key: DocumentTabNavigationKey,
+): string | null => {
+  const index = openFiles.findIndex((file) => file.id === fileId)
+  if (index === -1 || openFiles.length === 0) return null
+  if (key === 'Home') return openFiles[0].id
+  if (key === 'End') return openFiles[openFiles.length - 1].id
+  const offset = key === 'ArrowRight' ? 1 : -1
+  return openFiles[(index + offset + openFiles.length) % openFiles.length].id
+}
+
 export const requiresCloseConfirmation = (
   savedMap: Record<string, boolean>,
   fileId: string,

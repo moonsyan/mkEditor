@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   findDiscardablePreview,
   getNeighborTabId,
+  getTabNavigationTargetId,
   requiresCloseConfirmation,
   updateDocumentContent,
   type DocumentTabState,
@@ -47,6 +48,16 @@ describe('文档标签状态', () => {
     expect(getNeighborTabId(state.openFiles, 'welcome')).toBe('preview')
     expect(getNeighborTabId(state.openFiles, 'preview')).toBe('welcome')
     expect(getNeighborTabId(state.openFiles, 'missing')).toBeNull()
+  })
+
+  it('使用方向键、Home 与 End 在标签之间导航', () => {
+    const state = createState()
+
+    expect(getTabNavigationTargetId(state.openFiles, 'welcome', 'ArrowLeft')).toBe('preview')
+    expect(getTabNavigationTargetId(state.openFiles, 'preview', 'ArrowRight')).toBe('welcome')
+    expect(getTabNavigationTargetId(state.openFiles, 'preview', 'Home')).toBe('welcome')
+    expect(getTabNavigationTargetId(state.openFiles, 'welcome', 'End')).toBe('preview')
+    expect(getTabNavigationTargetId(state.openFiles, 'missing', 'ArrowRight')).toBeNull()
   })
 
   it('仅修改过的文档在关闭前需要确认', () => {

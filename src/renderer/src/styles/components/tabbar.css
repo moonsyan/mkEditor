@@ -30,6 +30,11 @@
 .tab:hover {
   background: var(--bg-elevated, var(--bg-surface));
 }
+.tab:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--accent, #4a8af0);
+  outline-offset: -2px;
+}
 .tab.active {
   background: var(--bg-elevated, var(--bg-surface));
   color: var(--text-1);
@@ -67,8 +72,17 @@
   line-height: 1;
   color: var(--text-3);
   flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
 }
 .tab-close:hover {
   background: rgba(128, 128, 128, 0.25);
   color: var(--text-1);
+}
+.tab-close:focus-visible {
+  outline: 1px solid var(--accent, #4a8af0);
+  outline-offset: 1px;
 }
