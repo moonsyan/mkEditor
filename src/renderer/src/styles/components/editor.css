@@ -633,12 +633,31 @@
 }
 .milkdown .mermaid-source {
   display: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 160px;
   margin: 0;
+  padding: 12px 14px;
   border-top: 1px solid var(--border);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
   border-radius: 0;
+  resize: vertical;
+  outline: 0;
+  background: var(--bg-code);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: .84rem;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
 }
 .milkdown .mermaid-block.is-editing .mermaid-source {
   display: block;
+}
+.milkdown .mermaid-source:focus {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .milkdown .mermaid-block.is-editing .mermaid-preview {
   opacity: .72;

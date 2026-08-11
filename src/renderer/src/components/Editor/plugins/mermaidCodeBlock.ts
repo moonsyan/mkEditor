@@ -42,7 +42,7 @@ const getErrorMessage = (error: unknown): string => {
 
 class MermaidCodeBlockView implements NodeView {
   dom: HTMLElement
-  contentDOM: HTMLElement
+  contentDOM?: HTMLElement
 
   private readonly isMermaid: boolean
   private readonly view: EditorView
@@ -50,6 +50,7 @@ class MermaidCodeBlockView implements NodeView {
   private readonly preview: HTMLElement | null
   private readonly status: HTMLElement | null
   private readonly toggle: HTMLButtonElement | null
+  private readonly sourceInput: HTMLTextAreaElement | null
   private renderTimer: ReturnType<typeof setTimeout> | undefined
   private renderPromise: Promise<void> | null = null
   private renderVersion = 0
@@ -72,6 +73,7 @@ class MermaidCodeBlockView implements NodeView {
       this.preview = null
       this.status = null
       this.toggle = null
+      this.sourceInput = null
       return
     }
 
@@ -100,18 +102,19 @@ class MermaidCodeBlockView implements NodeView {
     status.textContent = '正在加载图表…'
     preview.append(status)
 
-    const source = document.createElement('pre')
+    const source = document.createElement('textarea')
     source.className = 'mermaid-source'
     source.spellcheck = false
-    const code = document.createElement('code')
-    source.append(code)
+    source.value = node.textContent
+    source.setAttribute('aria-label', 'Mermaid 图表源码')
+    source.addEventListener('input', this.handleSourceInput)
     container.append(toolbar, preview, source)
 
     this.dom = container
-    this.contentDOM = code
     this.preview = preview
     this.status = status
     this.toggle = toggle
+    this.sourceInput = source
     this.toggle.addEventListener('click', this.handleToggleSource)
     activeViews.add(this)
     observeThemeChanges()
@@ -127,27 +130,32 @@ class MermaidCodeBlockView implements NodeView {
       else delete this.dom.dataset.language
       return true
     }
+    const source = node.textContent
+    if (this.sourceInput && this.sourceInput.value !== source) {
+      this.sourceInput.value = source
+    }
     if (!shouldRenderMermaidUpdate(this.editing)) {
-      this.captureSource(node.textContent)
+      this.captureSource(source)
       return true
     }
-    this.scheduleRender(node.textContent)
+    this.scheduleRender(source)
     return true
   }
 
   stopEvent(event: Event): boolean {
-    return event.target instanceof Element && Boolean(event.target.closest('.mermaid-toolbar'))
+    return event.target instanceof Element && Boolean(event.target.closest('.mermaid-toolbar, .mermaid-source'))
   }
 
   ignoreMutation(mutation: ViewMutationRecord): boolean {
     if (!this.isMermaid || mutation.type === 'selection') return false
     const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement
-    return Boolean(target?.closest('.mermaid-preview, .mermaid-toolbar'))
+    return Boolean(target?.closest('.mermaid-preview, .mermaid-toolbar, .mermaid-source'))
   }
 
   destroy(): void {
     if (this.renderTimer) clearTimeout(this.renderTimer)
     if (this.toggle) this.toggle.removeEventListener('click', this.handleToggleSource)
+    if (this.sourceInput) this.sourceInput.removeEventListener('input', this.handleSourceInput)
     activeViews.delete(this)
     if (activeViews.size === 0 && themeObserver) {
       themeObserver.disconnect()
@@ -182,6 +190,7 @@ class MermaidCodeBlockView implements NodeView {
     this.toggle.textContent = this.editing ? '收起源码' : '编辑源码'
     if (!this.editing) {
       this.scheduleRender(this.lastSource, true)
+      this.focusEditorAtSource()
       return
     }
     if (this.renderTimer) {
@@ -190,6 +199,21 @@ class MermaidCodeBlockView implements NodeView {
     }
     // 使正在进行的旧渲染失效，避免打开源码后回写过时 SVG。
     this.renderVersion += 1
+    requestAnimationFrame(() => this.sourceInput?.focus())
+  }
+
+  private handleSourceInput = () => {
+    if (!this.sourceInput) return
+    const pos = this.getPos()
+    if (typeof pos !== 'number') return
+    const node = this.view.state.doc.nodeAt(pos)
+    if (!node || node.type.name !== 'code_block') return
+    const from = pos + 1
+    const to = pos + node.nodeSize - 1
+    this.view.dispatch(this.view.state.tr.insertText(this.sourceInput.value, from, to))
+  }
+
+  private focusEditorAtSource() {
     requestAnimationFrame(() => {
       const pos = this.getPos()
       if (typeof pos !== 'number') return
