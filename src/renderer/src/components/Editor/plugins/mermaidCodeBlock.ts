@@ -24,6 +24,13 @@ type MermaidPreviewState = {
 export const isMermaidLanguage = (language: unknown): boolean =>
   typeof language === 'string' && language.trim().toLowerCase() === 'mermaid'
 
+export const isSelectionInsideMermaidBlock = (
+  from: number,
+  to: number,
+  blockPos: number,
+  blockSize: number,
+): boolean => from >= blockPos + 1 && to <= blockPos + blockSize - 1
+
 const getMermaid = () => {
   if (!mermaidPromise) {
     mermaidPromise = import('mermaid').then(({ default: mermaid }) => mermaid)
@@ -169,17 +176,23 @@ class MermaidPreview {
 
   getSourcePosition = (): number | undefined => this.getPos()
 
+  syncSelection = () => {
+    if (!this.isEditingSource) return
+    const codePos = this.getPos()
+    if (typeof codePos !== 'number') return
+    const codeNode = this.view.state.doc.nodeAt(codePos)
+    const { from, to } = this.view.state.selection
+    const isInsideCodeBlock =
+      codeNode &&
+      codeNode.type.name === 'code_block' &&
+      isSelectionInsideMermaidBlock(from, to, codePos, codeNode.nodeSize)
+    if (isInsideCodeBlock) return
+    this.showPreview()
+  }
+
   private handleToggleSource = () => {
-    this.isEditingSource = !this.isEditingSource
-    this.dom.classList.toggle('is-editing-source', this.isEditingSource)
-    this.button.textContent = this.isEditingSource ? '查看图表' : '编辑源码'
-    this.button.setAttribute('aria-pressed', String(this.isEditingSource))
-    this.button.setAttribute(
-      'aria-label',
-      this.isEditingSource ? '查看 Mermaid 图表' : '编辑 Mermaid 源码',
-    )
-    if (!this.isEditingSource) {
-      this.renderNow()
+    if (this.isEditingSource) {
+      this.showPreview()
       this.button.focus()
       return
     }
@@ -187,12 +200,26 @@ class MermaidPreview {
     if (typeof codePos !== 'number') return
     const codeNode = this.view.state.doc.nodeAt(codePos)
     if (!codeNode || codeNode.type.name !== 'code_block') return
+    this.setSourceEditing(true)
     this.view.dispatch(
       this.view.state.tr
         .setSelection(TextSelection.create(this.view.state.doc, codePos + 1))
         .scrollIntoView(),
     )
     this.view.focus()
+  }
+
+  private showPreview() {
+    this.setSourceEditing(false)
+    this.renderNow()
+  }
+
+  private setSourceEditing(editing: boolean) {
+    this.isEditingSource = editing
+    this.dom.classList.toggle('is-editing-source', editing)
+    this.button.textContent = editing ? '查看图表' : '编辑源码'
+    this.button.setAttribute('aria-pressed', String(editing))
+    this.button.setAttribute('aria-label', editing ? '查看 Mermaid 图表' : '编辑 Mermaid 源码')
   }
 }
 
@@ -276,6 +303,7 @@ export const mermaidPreviewPlugin = new Plugin({
   },
   view: () => ({
     update: (view, previousState) => {
+      activePreviews.forEach((preview) => preview.syncSelection())
       if (previousState.doc.eq(view.state.doc)) return
       activePreviews.forEach((preview) => {
         const pos = preview.getSourcePosition()
