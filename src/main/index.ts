@@ -76,7 +76,10 @@ function initApp(): void {
   })
 }
 
-app.whenReady().then(initApp)
+app.whenReady().then(initApp).catch((err) => {
+  console.error('App initialization failed:', err)
+  app.quit(1)
+})
 
 // 退出保护：未保存内容的确认由每个窗口的渲染层 beforeunload 拦截（见 App.tsx）；
 // 此处无需重复处理。

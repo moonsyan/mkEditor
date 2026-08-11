@@ -1,6 +1,7 @@
 import { BrowserWindow, dialog } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { getWebContentsUnsaved } from '../unsaved'
 
 /**
  * 创建窗口
@@ -36,7 +37,9 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
     backgroundColor: '#F7F5F2',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      // 沙箱化 preload 提供 process.platform（ipcRenderer/contextBridge 亦可用），
+      // 无需因此禁用沙箱；开启后渲染进程无法接触 Node 完整能力，进一步加固
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       // 拼写检查能力保留（由设置面板控制开关，默认关）；
@@ -89,7 +92,7 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
   })
 
   // 关闭确认：有未保存内容时弹原生对话框（修复 beforeunload 静默阻止关闭的问题）
-  // 未保存状态由渲染端通过 WINDOW_SET_UNSAVED 同步到 webContents.__unsaved
+  // 未保存状态由渲染端通过 WINDOW_SET_UNSAVED 同步（存储于 unsaved.ts 的 WeakMap）
   let closeSaveInProgress = false
   mainWindow.on('close', (e) => {
     if (closeSaveInProgress) {
@@ -97,7 +100,7 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
       return
     }
     const wc = mainWindow.webContents
-    const unsaved = (wc as unknown as { __unsaved?: boolean }).__unsaved === true
+    const unsaved = getWebContentsUnsaved(wc)
     if (!unsaved) return // 无未保存，直接放行
     e.preventDefault()
     const choice = dialog.showMessageBoxSync(mainWindow, {

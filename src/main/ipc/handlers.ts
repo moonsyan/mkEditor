@@ -16,6 +16,7 @@ import {
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
 import { allowImageDirectory } from '../image-protocol'
+import { setWebContentsUnsaved } from '../unsaved'
 
 const execFileAsync = promisify(execFile)
 
@@ -607,7 +608,7 @@ export function registerIpcHandlers(): void {
 
   // 渲染端同步未保存状态到主进程（关闭时弹原生确认框用，避免静默阻止关闭）
   ipcMain.on(CHANNELS.WINDOW_SET_UNSAVED, (event, unsaved: boolean) => {
-    ;(event.sender as unknown as { __unsaved?: boolean }).__unsaved = !!unsaved
+    setWebContentsUnsaved(event.sender, !!unsaved)
   })
 
   // 导出 PDF：隐藏窗口渲染 HTML 后 printToPDF（支持纸张/页边距/页眉页脚选项）
@@ -1302,11 +1303,20 @@ export function registerIpcHandlers(): void {
           new Blob([buffer], { type: match[1] }),
           `image-${Date.now()}.${ext}`,
         )
-        const resp = await fetch('https://sm.ms/api/v2/upload', {
-          method: 'POST',
-          headers: { Authorization: cfg.token },
-          body: form,
-        })
+        // 30 秒超时：图床 API 挂起时不能让 IPC 调用无限期阻塞
+        const controller = new AbortController()
+        const timeoutTimer = setTimeout(() => controller.abort(), 30_000)
+        let resp: Response
+        try {
+          resp = await fetch('https://sm.ms/api/v2/upload', {
+            method: 'POST',
+            headers: { Authorization: cfg.token },
+            body: form,
+            signal: controller.signal,
+          })
+        } finally {
+          clearTimeout(timeoutTimer)
+        }
         const json = (await resp.json()) as {
           success?: boolean
           data?: { url?: string }

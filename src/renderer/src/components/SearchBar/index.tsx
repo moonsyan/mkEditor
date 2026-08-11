@@ -66,7 +66,9 @@ export function SearchBar({
     inputRef.current?.focus()
   }, [withReplace])
 
-  // U4：携带上次查询词打开时，立即重新执行搜索恢复高亮
+  // U4：携带上次查询词打开时，立即重新执行搜索恢复高亮。
+  // 初始化仅在挂载时执行一次：参数更新由父组件通过 key={searchEpoch} 重新挂载实现。
+  // 请勿添加 deps——改动需要同步修改 App.tsx 中的 key 机制。
   useEffect(() => {
     if (initial?.query) {
       onQueryChange(
