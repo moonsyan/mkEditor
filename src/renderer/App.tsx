@@ -35,6 +35,7 @@ import {
   requiresCloseConfirmation,
 } from './src/lib/document-tabs'
 import { isImeComposing } from './src/lib/keyboard'
+import { shouldRestoreEditorFocus } from './src/lib/editor-focus'
 import { usePersistedSetting } from './src/hooks/usePersistedSetting'
 import { useWritingStats } from './src/hooks/useWritingStats'
 import { useRecentFiles } from './src/hooks/useRecentFiles'
@@ -943,9 +944,38 @@ export default function App(): JSX.Element {
    */
   const focusEditorSoon = useCallback(() => {
     requestAnimationFrame(() => {
-      setTimeout(() => editorRef.current?.focus(), 60)
+      setTimeout(() => {
+        // 用户已在关闭面板后转去其他输入控件时，不再抢回焦点。
+        if (!shouldRestoreEditorFocus(document.activeElement, document.body)) return
+        editorRef.current?.focus()
+      }, 60)
     })
   }, [])
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    focusEditorSoon()
+  }, [focusEditorSoon])
+
+  const closeHelp = useCallback(() => {
+    setHelpView(null)
+    focusEditorSoon()
+  }, [focusEditorSoon])
+
+  const closeImages = useCallback(() => {
+    setImagesOpen(false)
+    focusEditorSoon()
+  }, [focusEditorSoon])
+
+  const closePdfOptions = useCallback(() => {
+    setPdfOptsOpen(false)
+    focusEditorSoon()
+  }, [focusEditorSoon])
+
+  const closeWorkspaceSearch = useCallback(() => {
+    setWsSearchOpen(false)
+    focusEditorSoon()
+  }, [focusEditorSoon])
 
   const switchFile = useCallback(
     (id: string) => {
@@ -962,9 +992,9 @@ export default function App(): JSX.Element {
       // 切换编辑器内容（保持同一编辑器实例，避免重建丢光标历史）
       // 渲染前把相对路径图片解析为 mdimg 协议
       replaceEditorContent(id, contents[id] ?? '')
-      editorRef.current?.focus()
+      focusEditorSoon()
     },
-    [activeFileId, openFiles, contents, dirOfFile],
+    [activeFileId, openFiles, contents, dirOfFile, focusEditorSoon],
   )
 
   const handleNew = useCallback(() => {
@@ -981,7 +1011,6 @@ export default function App(): JSX.Element {
     setActiveFileId(id)
     setDocTitle(name)
     replaceEditorContent(id, '', 'initialize')
-    editorRef.current?.focus()
     focusEditorSoon()
   }, [focusEditorSoon, replaceEditorContent])
 
@@ -1014,7 +1043,6 @@ export default function App(): JSX.Element {
       setActiveFileId(id)
       setDocTitle(name)
       replaceEditorContent(id, content, 'initialize')
-      editorRef.current?.focus()
       focusEditorSoon()
     },
     [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon, pinPreviewTab],
@@ -1051,7 +1079,8 @@ export default function App(): JSX.Element {
     setDocTitle(name)
     recordRecent(path, name)
     replaceEditorContent(id, content, 'initialize')
-  }, [openFiles, switchFile, recordRecent, replaceEditorContent, pinPreviewTab])
+    focusEditorSoon()
+  }, [openFiles, switchFile, recordRecent, replaceEditorContent, focusEditorSoon, pinPreviewTab])
 
   /* ==================== 打开文件夹 / 工作区 ==================== */
 
@@ -1110,7 +1139,6 @@ export default function App(): JSX.Element {
       setDocTitle(name)
       recordRecent(path, name)
       replaceEditorContent(id, content, 'initialize')
-      editorRef.current?.focus()
       focusEditorSoon()
       return true
     },
@@ -1846,7 +1874,8 @@ img{max-width:100%}
     setSearchMode('none')
     setSearchCount(0)
     setSearchCurrent(-1)
-  }, [])
+    focusEditorSoon()
+  }, [focusEditorSoon])
 
   /* ==================== 分栏预览 ==================== */
 
@@ -2364,7 +2393,7 @@ img{max-width:100%}
       {/* 弹窗：设置 / 帮助 */}
       <SettingsDialog
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
         theme={theme}
         onThemeChange={setTheme}
         fontSize={fontSize}
@@ -2399,16 +2428,16 @@ img{max-width:100%}
         shortcuts={shortcuts}
         onShortcutsChange={setShortcuts}
       />
-      <HelpDialog view={helpView} onClose={() => setHelpView(null)} stats={writingStats} shortcuts={shortcuts} />
+      <HelpDialog view={helpView} onClose={closeHelp} stats={writingStats} shortcuts={shortcuts} />
       <ImagesDialog
         open={imagesOpen}
-        onClose={() => setImagesOpen(false)}
+        onClose={closeImages}
         dirs={imageDirs}
         onNotify={setToast}
       />
       <ExportPdfDialog
         open={pdfOptsOpen}
-        onClose={() => setPdfOptsOpen(false)}
+        onClose={closePdfOptions}
         onExport={(opts) => void handleDoExportPdf(opts)}
       />
       {workspace && (
@@ -2416,7 +2445,7 @@ img{max-width:100%}
           open={wsSearchOpen}
           workspacePath={workspace.path}
           workspaceName={workspace.name}
-          onClose={() => setWsSearchOpen(false)}
+          onClose={closeWorkspaceSearch}
           onSelect={(path, query, opts) => {
             setWsSearchOpen(false)
             // 必须等文件内容替换完成后再开搜索栏，否则搜索会作用在旧文档上；
