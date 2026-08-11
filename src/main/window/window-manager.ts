@@ -56,24 +56,36 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
   // 连续自愈设上限，防止持续性失败（如文件损坏）演变为重载风暴
   let autoReloads = 0
   const MAX_AUTO_RELOADS = 3
+  const AUTO_RELOAD_RESET_DELAY_MS = 30_000
+  let resetAutoReloadsTimer: ReturnType<typeof setTimeout> | null = null
+  const attemptReload = () => {
+    if (autoReloads >= MAX_AUTO_RELOADS) return
+    if (resetAutoReloadsTimer) {
+      clearTimeout(resetAutoReloadsTimer)
+      resetAutoReloadsTimer = null
+    }
+    autoReloads++
+    mainWindow.webContents.reload()
+  }
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    if (
-      (details.reason === 'crashed' || details.reason === 'killed') &&
-      autoReloads < MAX_AUTO_RELOADS
-    ) {
-      autoReloads++
-      mainWindow.webContents.reload()
-    }
+    if (details.reason !== 'crashed' && details.reason !== 'killed') return
+    attemptReload()
   })
-  mainWindow.webContents.on('did-fail-load', () => {
-    if (autoReloads < MAX_AUTO_RELOADS) {
-      autoReloads++
-      mainWindow.webContents.reload()
-    }
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, _description, _url, isMainFrame) => {
+    // ERR_ABORTED 通常来自主动重载；子框架失败不应影响应用主页面。
+    if (errorCode === -3 || !isMainFrame) return
+    attemptReload()
   })
-  // 加载成功后重置计数，允许新一轮故障再次自愈
+  // 必须稳定运行一段时间才重置计数，否则"加载后立刻崩溃"会无限重载。
   mainWindow.webContents.on('did-finish-load', () => {
-    autoReloads = 0
+    if (resetAutoReloadsTimer) clearTimeout(resetAutoReloadsTimer)
+    resetAutoReloadsTimer = setTimeout(() => {
+      autoReloads = 0
+      resetAutoReloadsTimer = null
+    }, AUTO_RELOAD_RESET_DELAY_MS)
+  })
+  mainWindow.once('closed', () => {
+    if (resetAutoReloadsTimer) clearTimeout(resetAutoReloadsTimer)
   })
 
   // 关闭确认：有未保存内容时弹原生对话框（修复 beforeunload 静默阻止关闭的问题）
