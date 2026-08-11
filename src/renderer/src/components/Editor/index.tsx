@@ -25,6 +25,7 @@ import { isImeComposing } from '../../lib/keyboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { prism } from '@milkdown/plugin-prism'
+import { math } from '@milkdown/plugin-math'
 import {
   replaceAll,
   insert,
@@ -35,10 +36,6 @@ import {
   $prose,
 } from '@milkdown/kit/utils'
 import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
-
-/* 注意：plugin-math（KaTeX）与 plugin-diagram（Mermaid）体积很大，
- * 不在启动时静态导入，而是检测到公式/图表内容时动态加载，
- * 避免渲染进程启动内存峰值过高。 */
 
 /* ==================== ProseMirror 插件与语法扩展（已拆分至 plugins/） ==================== */
 
@@ -58,6 +55,11 @@ import {
 } from './plugins/footnote'
 import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from './plugins/frontmatter'
 import { tableColResizePlugin } from './plugins/tableColResize'
+import {
+  ensureMermaidRendered,
+  mermaidCodeBlockView,
+  subscribeMermaidRender,
+} from './plugins/mermaidCodeBlock'
 import {
   EditorOverlays,
   type CodePanelState,
@@ -174,118 +176,16 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     notifyRef.current = onNotify
     const [, bumpRender] = useState(0)
 
+    useEffect(
+      () =>
+        subscribeMermaidRender(() => {
+          richRenderRef.current?.()
+        }),
+      [],
+    )
+
     // 拼写检查排除（代码块/行内代码 spellcheck=false）与图片 draggable：
     // 改用 nodeAttrsPlugin（ProseMirror 装饰）实现，不再外部修改 DOM
-
-    /** 大插件懒加载状态（KaTeX / Mermaid）；Promise 供导出前等待就绪（B1） */
-    const lazyRef = useRef({
-      mathLoaded: false,
-      diagramLoaded: false,
-      mathPromise: null as Promise<void> | null,
-      diagramPromise: null as Promise<void> | null,
-    })
-
-    /** 检测到公式/图表内容时动态加载对应插件（避免启动内存峰值） */
-    const ensureLazyPlugins = (markdown: string) => {
-      const ed = editorRef.current
-      if (!ed || ed.status !== EditorStatus.Created) return
-      const st = lazyRef.current
-      if (!st.mathLoaded && !st.mathPromise && markdown.includes('$')) {
-        st.mathPromise = import('@milkdown/plugin-math')
-          .then(
-            (m) =>
-              new Promise<void>((resolve) => {
-                // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
-                setTimeout(() => {
-                  try {
-                    if (ed.status !== EditorStatus.Created) {
-                      resolve()
-                      return
-                    }
-                    ed.use(m.math)
-                    st.mathLoaded = true
-                  } catch {
-                    st.mathPromise = null
-                    notifyRef.current?.('公式渲染加载失败，将在下次操作时重试')
-                    resolve()
-                    return
-                  }
-                  // 重新解析当前文档，让已存在的公式生效
-                  setTimeout(() => {
-                    try {
-                      const md = ed.action(getMarkdown())
-                      ed.action(replaceAll(md))
-                    } catch {
-                      /* 编辑器销毁等异常不影响主流程 */
-                    } finally {
-                      try {
-                        richRenderRef.current?.()
-                      } catch {
-                        /* 预览刷新失败不应阻塞插件加载状态释放 */
-                      } finally {
-                        resolve()
-                      }
-                    }
-                  }, 50)
-                }, 0)
-              }),
-          )
-          .catch(() => {
-            st.mathPromise = null
-            notifyRef.current?.('公式渲染加载失败，将在下次操作时重试')
-          })
-      }
-      if (
-        !st.diagramLoaded &&
-        !st.diagramPromise &&
-        markdown.includes('```mermaid')
-      ) {
-        st.diagramPromise = import('@milkdown/plugin-diagram')
-          .then(
-            (m) =>
-              new Promise<void>((resolve) => {
-                setTimeout(() => {
-                  try {
-                    if (ed.status !== EditorStatus.Created) {
-                      resolve()
-                      return
-                    }
-                    ed.use(m.diagram)
-                    st.diagramLoaded = true
-                  } catch {
-                    st.diagramPromise = null
-                    notifyRef.current?.('图表渲染加载失败，将在下次操作时重试')
-                    resolve()
-                    return
-                  }
-                  setTimeout(() => {
-                    try {
-                      const md = ed.action(getMarkdown())
-                      ed.action(replaceAll(md))
-                    } catch {
-                      /* 同上 */
-                    } finally {
-                      // Mermaid SVG 为异步渲染，多等一拍再通知
-                      setTimeout(() => {
-                        try {
-                          richRenderRef.current?.()
-                        } catch {
-                          /* 同上 */
-                        } finally {
-                          resolve()
-                        }
-                      }, 120)
-                    }
-                  }, 50)
-                }, 0)
-              }),
-          )
-          .catch(() => {
-            st.diagramPromise = null
-            notifyRef.current?.('图表渲染加载失败，将在下次操作时重试')
-          })
-      }
-    }
 
     // 代码块悬浮层（语言输入 + 复制）
     const [codePanel, setCodePanel] = useState<CodePanelState | null>(null)
@@ -345,6 +245,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
             spellcheck: false,
+            nodeViews: {
+              ...prev.nodeViews,
+              code_block: mermaidCodeBlockView,
+            },
           }))
           // 注册脚注语法解析（RemarkPlugin 为 { plugin, options } 结构）
           ctx.get(remarkPluginsCtx).push({
@@ -358,14 +262,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           })
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             changeRef.current(markdown)
-            ensureLazyPlugins(markdown)
           })
-        })
-        .onStatusChange((status) => {
-          // 编辑器创建完成后，检查初始内容是否需要大插件
-          if (status === EditorStatus.Created) {
-            ensureLazyPlugins(initialRef.current)
-          }
         })
         // frontmatter 内 Enter 行为（须先于 commonmark 预设注册才能抢先其 Enter 绑定）
         .use(frontmatterKeymap)
@@ -375,7 +272,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use(listener)
         // 代码块语法高亮（保持轻量 pre>code 渲染）
         .use(prism)
-        // 脚注（轻量自建节点；KaTeX/Mermaid 大插件改为按需动态加载）
+        // KaTeX 必须在编辑器创建前注册；运行期 use() 不会执行插件初始化。
+        .use(math)
+        // 脚注（轻量自建节点）
         .use([
           footnoteRefSchema,
           footnoteDefSchema,
@@ -578,6 +477,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         setCodePanel(null)
         setTablePanel(null)
         lastPreRef.current = null
+        return
+      }
+      if (pre.classList.contains('mermaid-source')) {
+        setCodePanel(null)
+        setTablePanel(null)
         return
       }
       setTablePanel(null)
@@ -787,6 +691,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           clone
             .querySelectorAll('.code-line-numbers, .fold-toggle')
             .forEach((el) => el.remove())
+          clone
+            .querySelectorAll('.mermaid-toolbar, .mermaid-source')
+            .forEach((el) => el.remove())
           return clone.innerHTML
         },
         focus: () => {
@@ -802,31 +709,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         },
         isReady: () => ready() !== null,
 
-        /* ---------- 富内容就绪（B1：导出/预览前强制等待插件加载） ---------- */
+        /* ---------- 富内容就绪（导出/预览前等待图表 SVG） ---------- */
 
         ensureRichContent: async () => {
-          const ed = ready()
-          if (!ed) return
-          let md = ''
-          try {
-            md = ed.action(getMarkdown())
-          } catch {
-            return
-          }
-          ensureLazyPlugins(md)
-          const st = lazyRef.current
-          const waits: Promise<void>[] = []
-          if (md.includes('$') && st.mathPromise) waits.push(st.mathPromise)
-          if (md.includes('```mermaid') && st.diagramPromise) {
-            waits.push(st.diagramPromise)
-          }
-          if (waits.length === 0) return
-          // 最多等 4 秒，避免插件加载异常时永久阻塞导出
-          await Promise.race([
-            Promise.all(waits),
-            new Promise<void>((r) => setTimeout(r, 4000)),
-          ])
-          // 再等一帧，确保 DOM 已完成重排
+          await ensureMermaidRendered()
           await new Promise<void>((r) => requestAnimationFrame(() => r()))
         },
 

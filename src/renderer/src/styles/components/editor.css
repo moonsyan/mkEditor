@@ -553,16 +553,77 @@
 }
 
 /* ====== Mermaid 图表 ====== */
-.milkdown .diagram {
-  margin: 1.2rem 0;
-  padding: 1rem;
-  text-align: center;
-  background: var(--bg-quote);
+.milkdown .mermaid-block {
+  margin: 1.1rem 0;
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow-x: auto;
+  background: var(--bg-quote);
+  overflow: hidden;
 }
-.milkdown .diagram svg {
+.milkdown .mermaid-toolbar {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+.milkdown .mermaid-label {
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.milkdown .mermaid-source-toggle {
+  appearance: none;
+  border: 0;
+  padding: 3px 5px;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: .75rem;
+  cursor: pointer;
+}
+.milkdown .mermaid-source-toggle:hover,
+.milkdown .mermaid-source-toggle:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-1);
+  outline: none;
+}
+.milkdown .mermaid-preview {
+  min-height: 80px;
+  padding: 14px;
+  overflow-x: auto;
+  text-align: center;
+}
+.milkdown .mermaid-preview svg {
+  display: block;
   max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.milkdown .mermaid-status {
+  padding: 18px 10px;
+  color: var(--text-3);
+  font-size: .84em;
+  text-align: left;
+}
+.milkdown .mermaid-status.is-error {
+  color: #b06060;
+  white-space: pre-wrap;
+}
+.milkdown .mermaid-source {
+  display: none;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+.milkdown .mermaid-block.is-editing .mermaid-source {
+  display: block;
 }
 
 /* ====== 搜索匹配高亮 ====== */

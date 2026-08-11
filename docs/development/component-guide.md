@@ -92,11 +92,11 @@ interface SidebarProps {
 ### Editor — 编辑器（Milkdown）
 
 **路径**：`components/Editor/index.tsx`
-**插件目录**：`components/Editor/plugins/`（`frontmatter` / `footnote` / `sectionFold` / `tableColResize` / `bracketMatch` / `codeLineNumbers` / `customCodeFence` / `searchHighlight` / `blockContext` / `nodeAttrs`）
+**插件目录**：`components/Editor/plugins/`（`frontmatter` / `footnote` / `sectionFold` / `tableColResize` / `bracketMatch` / `codeLineNumbers` / `customCodeFence` / `mermaidCodeBlock` / `searchHighlight` / `blockContext` / `nodeAttrs`）
 
 **职责**：
 - 封装 Milkdown（commonmark + gfm + history + listener 插件）
-- 通过插件系统支持：Frontmatter 元数据、脚注、KaTeX 数学公式（动态加载）、Mermaid 图表（动态加载）、章节折叠、表格列宽拖拽、括号匹配高亮、代码块行号、自定义代码围栏、搜索高亮、块上下文标记
+- 通过插件系统支持：Frontmatter 元数据、脚注、KaTeX 数学公式、Mermaid 图表、章节折叠、表格列宽拖拽、括号匹配高亮、代码块行号、自定义代码围栏、搜索高亮、块上下文标记
 - 提供所见即所得编辑，内容变化通过回调上抛 Markdown
 - 通过 ref 暴露命令式接口，供 App 分发菜单操作
 - 输入法合成期间不拦截方向键，避免干扰中文候选词选择
@@ -122,6 +122,7 @@ interface EditorHandle {
 
 **设计要点**：
 - `useEditor` 只在挂载时执行一次，`onChange` 通过 ref 透传，避免重建编辑器丢光标
+- KaTeX 在实例创建前注册；Mermaid 使用 `mermaidCodeBlock` 节点视图保持标准代码围栏，可按需加载 SVG 渲染器、切换源码，并在导出前等待渲染结束
 - 切换文档用 `replaceAll` 宏而非卸载重建，保留撤销历史与实例
 - 调用 action 前检查 `EditorStatus.Created`，防止初始化未完成时抛异常
 - 编辑器插件统一放在 `plugins/` 子目录，每个插件是一个独立的 `.ts` 文件
