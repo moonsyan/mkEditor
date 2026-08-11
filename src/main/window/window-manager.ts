@@ -78,7 +78,12 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
 
   // 关闭确认：有未保存内容时弹原生对话框（修复 beforeunload 静默阻止关闭的问题）
   // 未保存状态由渲染端通过 WINDOW_SET_UNSAVED 同步到 webContents.__unsaved
+  let closeSaveInProgress = false
   mainWindow.on('close', (e) => {
+    if (closeSaveInProgress) {
+      e.preventDefault()
+      return
+    }
     const wc = mainWindow.webContents
     const unsaved = (wc as unknown as { __unsaved?: boolean }).__unsaved === true
     if (!unsaved) return // 无未保存，直接放行
@@ -92,6 +97,7 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
       detail: '关闭前要保存这些更改吗？',
     })
     if (choice === 0) {
+      closeSaveInProgress = true
       // 保存全部后关闭（destroy 绕过 beforeunload）；saveAll 返回保存失败的文件名清单。
       // 失败文件（外部冲突等）的未保存内容已由渲染端写入草稿兜底，
       // 此时再次确认告知用户；选"取消"则保留窗口手动处理
@@ -112,7 +118,10 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
                   `「${names.join('」「')}」已被外部修改，未覆盖保存。\n` +
                   '未保存的内容已保留，下次启动打开时会自动恢复为未保存状态。\n\n仍然要关闭吗？',
               })
-              if (proceed === 1) return // 取消：保持窗口打开
+              if (proceed === 1) {
+                closeSaveInProgress = false
+                return
+              }
             }
           }
           mainWindow.destroy()
@@ -126,7 +135,11 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
             message: '无法完成保存',
             detail: '无法确认未保存内容是否已写入草稿。继续关闭可能丢失最新修改。',
           })
-          if (proceed === 0) mainWindow.destroy()
+          if (proceed === 0) {
+            mainWindow.destroy()
+            return
+          }
+          closeSaveInProgress = false
         })
     } else if (choice === 1) {
       mainWindow.destroy()

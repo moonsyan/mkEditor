@@ -40,25 +40,27 @@ export function ThemeSwitcher({ currentTheme, onThemeChange }: ThemeSwitcherProp
           <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
         </svg>
       </button>
-      <div className={`theme-dd ${open ? 'show' : ''}`} role="menu">
-        <div className="theme-dd-label">选择主题</div>
-        {THEMES.map((t) => (
-          <button
-            type="button"
-            key={t.id}
-            className={`theme-opt ${currentTheme === t.id ? 'on' : ''}`}
-            role="menuitemradio"
-            aria-checked={currentTheme === t.id}
-            onClick={() => {
-              onThemeChange(t.id)
-              setOpen(false)
-            }}
-          >
-            <span className="t-swatch" style={{ background: t.color }} />
-            {t.name}
-          </button>
-        ))}
-      </div>
+      {open && (
+        <div className="theme-dd show" role="menu">
+          <div className="theme-dd-label">选择主题</div>
+          {THEMES.map((t) => (
+            <button
+              type="button"
+              key={t.id}
+              className={`theme-opt ${currentTheme === t.id ? 'on' : ''}`}
+              role="menuitemradio"
+              aria-checked={currentTheme === t.id}
+              onClick={() => {
+                onThemeChange(t.id)
+                setOpen(false)
+              }}
+            >
+              <span className="t-swatch" style={{ background: t.color }} />
+              {t.name}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

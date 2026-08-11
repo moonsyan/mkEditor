@@ -29,6 +29,8 @@ const SEARCH_CACHE_MAX_BYTES = 32 * 1024 * 1024
 const SEARCH_CACHE_FILE_MAX = 512 * 1024
 /** 剪贴板/拖入图片的最大体积，与图床上传限制保持一致 */
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+/** Base64 解码前的长度上限，避免超大 IPC 载荷先造成主进程内存峰值 */
+const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_SIZE * 4) / 3) + 4
 /** 工作区搜索查询长度上限，避免正则与逐行匹配消耗失控 */
 const MAX_SEARCH_QUERY_LENGTH = 256
 /** 单个文件的正则匹配时间上限，防止灾难性回溯阻塞主进程 */
@@ -398,6 +400,12 @@ export function registerIpcHandlers(): void {
         )
         if (!match) {
           return { ok: false, error: { code: 'UNSUPPORTED' } }
+        }
+        if (match[3].length > MAX_IMAGE_BASE64_LENGTH) {
+          return {
+            ok: false,
+            error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法保存' },
+          }
         }
         const ext = match[2].toLowerCase().replace('jpeg', 'jpg')
         const buffer = Buffer.from(match[3], 'base64')
@@ -983,6 +991,12 @@ export function registerIpcHandlers(): void {
           /^data:(image\/(png|jpe?g|gif|webp|bmp));base64,(.+)$/i,
         )
         if (!match) return { ok: false, error: { code: 'UNSUPPORTED' } }
+        if (match[3].length > MAX_IMAGE_BASE64_LENGTH) {
+          return {
+            ok: false,
+            error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法上传图床' },
+          }
+        }
         // 配置存于主进程 settings，避免 token 在渲染进程暴露
         const cfg = (await getSetting('imageHost')) as
           | { provider?: string; token?: string }
