@@ -59,6 +59,7 @@ class MermaidPreview {
   private renderTimer: ReturnType<typeof setTimeout> | undefined
   private renderPromise: Promise<void> | null = null
   private renderVersion = 0
+  private isEditingSource = false
 
   constructor(view: EditorView, getPos: () => number | undefined, source: string) {
     this.view = view
@@ -78,7 +79,8 @@ class MermaidPreview {
     button.className = 'mermaid-source-toggle'
     button.textContent = '编辑源码'
     button.setAttribute('aria-label', '编辑 Mermaid 源码')
-    button.addEventListener('click', this.handleFocusSource)
+    button.setAttribute('aria-pressed', 'false')
+    button.addEventListener('click', this.handleToggleSource)
     toolbar.append(label, button)
 
     const preview = document.createElement('div')
@@ -157,7 +159,7 @@ class MermaidPreview {
 
   destroy = () => {
     if (this.renderTimer) clearTimeout(this.renderTimer)
-    this.button.removeEventListener('click', this.handleFocusSource)
+    this.button.removeEventListener('click', this.handleToggleSource)
     activePreviews.delete(this)
     if (activePreviews.size === 0 && themeObserver) {
       themeObserver.disconnect()
@@ -167,7 +169,20 @@ class MermaidPreview {
 
   getSourcePosition = (): number | undefined => this.getPos()
 
-  private handleFocusSource = () => {
+  private handleToggleSource = () => {
+    this.isEditingSource = !this.isEditingSource
+    this.dom.classList.toggle('is-editing-source', this.isEditingSource)
+    this.button.textContent = this.isEditingSource ? '查看图表' : '编辑源码'
+    this.button.setAttribute('aria-pressed', String(this.isEditingSource))
+    this.button.setAttribute(
+      'aria-label',
+      this.isEditingSource ? '查看 Mermaid 图表' : '编辑 Mermaid 源码',
+    )
+    if (!this.isEditingSource) {
+      this.renderNow()
+      this.button.focus()
+      return
+    }
     const codePos = this.getPos()
     if (typeof codePos !== 'number') return
     const codeNode = this.view.state.doc.nodeAt(codePos)
@@ -197,6 +212,7 @@ const buildMermaidDecorations = (doc: ProseNode, blocks = getMermaidBlocks(doc))
     const node = doc.nodeAt(pos)
     if (!node) return
     const key = `mermaid-preview-${pos}`
+    decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: 'mermaid-source-block' }))
     decorations.push(
       Decoration.widget(
         pos,

@@ -615,6 +615,10 @@
   overflow-x: auto;
   text-align: center;
 }
+.milkdown .mermaid-block.is-editing-source .mermaid-preview,
+.milkdown .mermaid-block:not(.is-editing-source) + .mermaid-source-block {
+  display: none;
+}
 .milkdown .mermaid-preview svg {
   display: block;
   max-width: 100%;

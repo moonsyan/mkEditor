@@ -692,6 +692,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           clone
             .querySelectorAll('.mermaid-toolbar')
             .forEach((el) => el.remove())
+          clone
+            .querySelectorAll('.mermaid-block')
+            .forEach((el) => el.classList.remove('is-editing-source'))
           clone.querySelectorAll('pre[data-language]').forEach((el) => {
             if (el.getAttribute('data-language')?.trim().toLowerCase() !== 'mermaid') return
             el.remove()
