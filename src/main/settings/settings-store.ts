@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { readFile, writeFile, mkdir, rename, stat, copyFile } from 'fs/promises'
+import { readFile, writeFile, mkdir, open, rename, stat, copyFile, unlink } from 'fs/promises'
 import { dirname, join } from 'path'
 
 /**
@@ -15,7 +15,13 @@ import { dirname, join } from 'path'
 let cache: Record<string, unknown> | null = null
 
 export class SettingsStoreError extends Error {
-  constructor(public readonly code: 'INVALID_VALUE' | 'VALUE_TOO_LARGE' | 'FILE_TOO_LARGE') {
+  constructor(
+    public readonly code:
+      | 'INVALID_VALUE'
+      | 'VALUE_TOO_LARGE'
+      | 'FILE_TOO_LARGE'
+      | 'LOCK_TIMEOUT',
+  ) {
     super(code)
   }
 }
@@ -28,9 +34,60 @@ const MAX_VALUE_SIZE = 4 * 1024 * 1024
 const SESSION_MAX_FILES = 200
 /** drafts 保留条数上限（按最近保存时间） */
 const DRAFTS_MAX = 50
+/** 跨进程写锁等待上限，避免崩溃后残留锁永久阻塞设置保存。 */
+const SETTINGS_LOCK_MAX_RETRIES = 80
+const SETTINGS_LOCK_RETRY_DELAY_MS = 50
+const SETTINGS_LOCK_STALE_MS = 60_000
 
 function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json')
+}
+
+const wait = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, delayMs))
+
+/**
+ * 多窗口模式会启动多个 Electron 主进程。本地队列只能串行当前进程，
+ * 因此需要文件锁来保护跨进程的“读取 - 合并 - 写入”完整操作。
+ */
+async function acquireSettingsLock(): Promise<() => Promise<void>> {
+  const path = settingsPath()
+  const lockPath = `${path}.lock`
+  const token = `${process.pid}-${Date.now()}-${Math.random()}`
+  await mkdir(dirname(path), { recursive: true })
+
+  for (let retry = 0; retry < SETTINGS_LOCK_MAX_RETRIES; retry++) {
+    try {
+      const handle = await open(lockPath, 'wx')
+      try {
+        await handle.writeFile(token, 'utf-8')
+      } catch (err) {
+        await handle.close().catch(() => {})
+        await unlink(lockPath).catch(() => {})
+        throw err
+      }
+      await handle.close()
+      return async () => {
+        try {
+          if ((await readFile(lockPath, 'utf-8')) === token) {
+            await unlink(lockPath)
+          }
+        } catch {
+          /* 锁已被清理或替换时不影响主写入结果。 */
+        }
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      const lockStat = await stat(lockPath).catch(() => null)
+      if (lockStat && Date.now() - lockStat.mtimeMs > SETTINGS_LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => {})
+        continue
+      }
+      await wait(SETTINGS_LOCK_RETRY_DELAY_MS)
+    }
+  }
+
+  throw new SettingsStoreError('LOCK_TIMEOUT')
 }
 
 /** 损坏/超限时备份原文件，便于排查与恢复 */
@@ -78,27 +135,29 @@ function sanitize(key: string, value: unknown): unknown {
   return value
 }
 
-async function load(): Promise<Record<string, unknown>> {
-  if (cache) return cache
+/** 从磁盘读取最新快照。写入方必须在持有跨进程锁后调用。 */
+async function readSettingsFile(): Promise<Record<string, unknown>> {
   const path = settingsPath()
   try {
-    // 体积守卫：超限文件不加载，备份后自愈为空对象，避免启动卡顿/OOM
-    const st = await stat(path).catch(() => null)
-    if (st && st.size > MAX_FILE_SIZE) {
+    const fileStat = await stat(path).catch(() => null)
+    if (fileStat && fileStat.size > MAX_FILE_SIZE) {
       await backupCorrupt(path)
-      cache = {}
-      return cache
+      return {}
     }
     const raw = await readFile(path, 'utf-8')
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    // 读取端也清洗一次，兜底历史脏数据
     for (const key of Object.keys(parsed)) {
       parsed[key] = sanitize(key, parsed[key])
     }
-    cache = parsed
+    return parsed
   } catch {
-    cache = {}
+    return {}
   }
+}
+
+async function load(): Promise<Record<string, unknown>> {
+  if (cache) return cache
+  cache = await readSettingsFile()
   return cache
 }
 
@@ -115,7 +174,7 @@ export async function getSetting(key: string): Promise<unknown> {
 let writeQueue: Promise<void> = Promise.resolve()
 
 export function setSetting(key: string, value: unknown): Promise<void> {
-  const task = writeQueue.then(() => applySetSetting(key, value))
+  const task = writeQueue.then(() => applySettingUpdate(key, () => value))
   // 队列保活：单次写入失败不阻断后续写入；
   // 但返回给调用方的是未吞错的 task，IPC 层仍能感知磁盘写失败
   writeQueue = task.catch(() => undefined)
@@ -128,12 +187,12 @@ export function setSetting(key: string, value: unknown): Promise<void> {
  */
 export function upsertDraft(id: string, content: string): Promise<void> {
   const task = writeQueue.then(async () => {
-    const all = await load()
-    const current = all.drafts
-    const drafts: Record<string, unknown> =
-      current && typeof current === 'object' ? { ...current } : {}
-    drafts[id] = { content, savedAt: Date.now() }
-    await applySetSetting('drafts', drafts)
+    await applySettingUpdate('drafts', (current) => {
+      const drafts: Record<string, unknown> =
+        current && typeof current === 'object' ? { ...current } : {}
+      drafts[id] = { content, savedAt: Date.now() }
+      return drafts
+    })
   })
   writeQueue = task.catch(() => undefined)
   return task
@@ -142,20 +201,22 @@ export function upsertDraft(id: string, content: string): Promise<void> {
 /** 以原子方式删除单篇草稿，保留其他标签或窗口刚写入的草稿。 */
 export function deleteDraft(id: string): Promise<void> {
   const task = writeQueue.then(async () => {
-    const all = await load()
-    const current = all.drafts
-    if (!current || typeof current !== 'object' || !(id in current)) return
-    const drafts: Record<string, unknown> = { ...current }
-    delete drafts[id]
-    await applySetSetting('drafts', drafts)
+    await applySettingUpdate('drafts', (current) => {
+      if (!current || typeof current !== 'object' || !(id in current)) return current
+      const drafts: Record<string, unknown> = { ...current }
+      delete drafts[id]
+      return drafts
+    })
   })
   writeQueue = task.catch(() => undefined)
   return task
 }
 
-async function applySetSetting(key: string, value: unknown): Promise<void> {
-  const all = await load()
-  const clean = sanitize(key, value)
+type SettingUpdater = (current: unknown) => unknown
+
+async function writeSettingUpdate(key: string, update: SettingUpdater): Promise<void> {
+  const all = await readSettingsFile()
+  const clean = sanitize(key, update(all[key]))
   // 写入前检查单项和完整快照体积，避免下次启动将超限设置判为损坏。
   let serializedValue: string
   let serializedSettings: string
@@ -176,9 +237,23 @@ async function applySetSetting(key: string, value: unknown): Promise<void> {
   const path = settingsPath()
   await mkdir(dirname(path), { recursive: true })
   // 先写临时文件再替换，避免写一半损坏
-  const tmp = `${path}.tmp`
-  await writeFile(tmp, serializedSettings, 'utf-8')
-  await rename(tmp, path)
+  const tmp = `${path}.${process.pid}-${Date.now()}-${Math.random()}.tmp`
+  try {
+    await writeFile(tmp, serializedSettings, 'utf-8')
+    await rename(tmp, path)
+  } catch (err) {
+    await unlink(tmp).catch(() => {})
+    throw err
+  }
   // 仅在磁盘落盘成功后更新缓存，避免写失败时内存与文件状态不一致。
   cache = next
+}
+
+async function applySettingUpdate(key: string, update: SettingUpdater): Promise<void> {
+  const release = await acquireSettingsLock()
+  try {
+    await writeSettingUpdate(key, update)
+  } finally {
+    await release()
+  }
 }
