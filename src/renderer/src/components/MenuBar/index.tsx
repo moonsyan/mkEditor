@@ -179,10 +179,8 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
           key={key}
           className="menu-entry"
           onMouseEnter={(event) => {
-            if (openKey && openKey !== key) {
-              const trigger = event.currentTarget.querySelector('button')
-              if (trigger) openMenu(key, trigger)
-            }
+            const trigger = event.currentTarget.querySelector('button')
+            if (trigger) openMenu(key, trigger)
           }}
         >
           <button
