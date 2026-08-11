@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ShortcutMap } from '../../data/shortcuts'
+import { isImeComposing } from '../../lib/keyboard'
 import { NAV_ITEMS } from './constants'
 import { AppearancePanel } from './AppearancePanel'
 import { EditorPanel } from './EditorPanel'
@@ -111,6 +112,7 @@ export function SettingsDialog({
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handler)

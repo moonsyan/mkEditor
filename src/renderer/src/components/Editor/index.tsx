@@ -262,6 +262,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     useEffect(() => {
       if (!fullscreenCode) return
       const h = (e: KeyboardEvent) => {
+        if (isImeComposing(e)) return
         if (e.key === 'Escape') {
           e.preventDefault()
           setFullscreenCode(null)

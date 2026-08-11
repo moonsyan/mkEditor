@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { isImeComposing } from '../../lib/keyboard'
 
 interface ImageItem {
   path: string
@@ -57,6 +58,7 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
   useEffect(() => {
     if (!open) return
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       if (e.key === 'Escape') {
         if (preview) setPreview(null)
         else onClose()

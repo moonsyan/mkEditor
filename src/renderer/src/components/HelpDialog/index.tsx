@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import type { ShortcutMap } from '../../data/shortcuts'
+import { isImeComposing } from '../../lib/keyboard'
 
 export type HelpView = 'shortcuts' | 'syntax' | 'about' | 'stats' | null
 
@@ -182,6 +183,7 @@ export function HelpDialog({ view, onClose, stats, shortcuts }: HelpDialogProps)
   useEffect(() => {
     if (!view) return
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handler)
