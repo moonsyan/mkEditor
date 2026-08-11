@@ -836,12 +836,15 @@ export function registerIpcHandlers(): void {
       return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
     }
     const images: { path: string; name: string; size: number }[] = []
+    // 未保存文档的粘贴图片会保存到用户数据目录，图片管理也应当可见。
+    const imageDirs = [...dirs, join(app.getPath('userData'), 'images')]
     const scanned = new Set<string>()
-    for (const dir of dirs) {
+    for (const dir of imageDirs) {
       if (scanned.has(dir)) continue
       scanned.add(dir)
       try {
         const entries = await readdir(dir, { withFileTypes: true })
+        allowImageDirectory(dir)
         for (const e of entries) {
           if (!e.isFile()) continue
           if (!/\.(png|jpe?g|gif|webp|bmp)$/i.test(e.name)) continue

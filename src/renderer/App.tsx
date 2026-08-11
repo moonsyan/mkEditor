@@ -2144,7 +2144,7 @@ img{max-width:100%}
     }
   }, [previewMode])
 
-  /** 图片管理扫描目录：当前文档旁 attachments → 工作区 attachments */
+  /** 图片管理扫描目录：当前文档旁 attachments → 工作区 attachments → 应用数据目录 */
   const imageDirs = useMemo(() => {
     const dirs: string[] = []
     if (activeFile?.path) {

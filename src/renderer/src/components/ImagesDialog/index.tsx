@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { isImeComposing } from '../../lib/keyboard'
+import { toMdimgUrl } from '../../lib/image-path'
 
 interface ImageItem {
   path: string
@@ -10,7 +11,7 @@ interface ImageItem {
 interface ImagesDialogProps {
   open: boolean
   onClose: () => void
-  /** 扫描目录列表（文档旁 attachments / 工作区 attachments / 用户数据目录） */
+  /** 扫描目录列表（文档旁 attachments / 工作区 attachments；主进程会追加用户数据目录） */
   dirs: string[]
   /** 删除后回调（用于提示） */
   onNotify?: (msg: string) => void
@@ -124,7 +125,7 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
                     title="点击预览"
                     aria-label={`预览图片：${img.name}`}
                   >
-                    <img src={`mdimg:///${img.path.replace(/\\/g, '/')}`} alt={img.name} />
+                    <img src={toMdimgUrl(img.path)} alt={img.name} />
                   </button>
                   <div className="image-meta">
                     <span className="image-name" title={img.name}>
@@ -159,7 +160,7 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
         {preview && (
           <div className="image-preview-overlay" onClick={() => setPreview(null)}>
             <img
-              src={`mdimg:///${preview.path.replace(/\\/g, '/')}`}
+              src={toMdimgUrl(preview.path)}
               alt={preview.name}
               onClick={(e) => e.stopPropagation()}
             />
