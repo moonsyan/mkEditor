@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isMermaidLanguage, shouldRenderMermaidUpdate } from './mermaidCodeBlock'
+import { isMermaidLanguage } from './mermaidCodeBlock'
 
 describe('isMermaidLanguage', () => {
   it('识别大小写与空白不同的 Mermaid 代码块语言', () => {
@@ -11,10 +11,5 @@ describe('isMermaidLanguage', () => {
   it('不把其他代码块语言当作 Mermaid', () => {
     expect(isMermaidLanguage('markdown')).toBe(false)
     expect(isMermaidLanguage(undefined)).toBe(false)
-  })
-
-  it('编辑源码期间延后渲染，避免输入时重绘预览', () => {
-    expect(shouldRenderMermaidUpdate(true)).toBe(false)
-    expect(shouldRenderMermaidUpdate(false)).toBe(true)
   })
 })

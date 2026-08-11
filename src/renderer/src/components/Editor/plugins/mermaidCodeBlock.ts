@@ -1,32 +1,28 @@
-import { TextSelection } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, TextSelection, type Transaction } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import type { EditorView, NodeView, ViewMutationRecord } from '@milkdown/kit/prose/view'
+import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+import type { EditorView } from '@milkdown/kit/prose/view'
 
-type GetPos = () => number | undefined
-
-const MERMAID_RENDER_DELAY = 180
+const MERMAID_RENDER_DELAY = 420
 const MERMAID_RENDER_TIMEOUT = 4000
 let diagramSequence = 0
 let mermaidPromise: Promise<typeof import('mermaid').default> | null = null
-const activeViews = new Set<MermaidCodeBlockView>()
+const activePreviews = new Set<MermaidPreview>()
 const renderListeners = new Set<() => void>()
 let themeObserver: MutationObserver | null = null
 
-const observeThemeChanges = () => {
-  if (themeObserver || typeof MutationObserver === 'undefined') return
-  themeObserver = new MutationObserver(() => {
-    activeViews.forEach((view) => view.rerender())
-  })
-  themeObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ['data-theme'],
-  })
+type MermaidBlock = {
+  pos: number
+  language: string
+}
+
+type MermaidPreviewState = {
+  decorations: DecorationSet
+  blocks: MermaidBlock[]
 }
 
 export const isMermaidLanguage = (language: unknown): boolean =>
   typeof language === 'string' && language.trim().toLowerCase() === 'mermaid'
-
-export const shouldRenderMermaidUpdate = (editingSource: boolean): boolean => !editingSource
 
 const getMermaid = () => {
   if (!mermaidPromise) {
@@ -40,59 +36,50 @@ const getErrorMessage = (error: unknown): string => {
   return '请检查 Mermaid 语法'
 }
 
-class MermaidCodeBlockView implements NodeView {
-  dom: HTMLElement
-  contentDOM?: HTMLElement
+const observeThemeChanges = () => {
+  if (themeObserver || typeof MutationObserver === 'undefined') return
+  themeObserver = new MutationObserver(() => {
+    activePreviews.forEach((preview) => preview.renderNow())
+  })
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  })
+}
 
-  private readonly isMermaid: boolean
+class MermaidPreview {
+  readonly dom: HTMLElement
+
+  private readonly preview: HTMLElement
+  private readonly status: HTMLElement
+  private readonly button: HTMLButtonElement
+  private readonly getPos: () => number | undefined
   private readonly view: EditorView
-  private readonly getPos: GetPos
-  private readonly preview: HTMLElement | null
-  private readonly status: HTMLElement | null
-  private readonly toggle: HTMLButtonElement | null
-  private readonly sourceInput: HTMLTextAreaElement | null
+  private source = ''
   private renderTimer: ReturnType<typeof setTimeout> | undefined
   private renderPromise: Promise<void> | null = null
   private renderVersion = 0
-  private lastSource = ''
-  private editing = false
 
-  constructor(node: ProseNode, view: EditorView, getPos: GetPos) {
-    this.isMermaid = isMermaidLanguage(node.attrs.language)
+  constructor(view: EditorView, getPos: () => number | undefined, source: string) {
     this.view = view
     this.getPos = getPos
-
-    if (!this.isMermaid) {
-      const pre = document.createElement('pre')
-      const language = node.attrs.language as string
-      if (language) pre.dataset.language = language
-      const code = document.createElement('code')
-      pre.append(code)
-      this.dom = pre
-      this.contentDOM = code
-      this.preview = null
-      this.status = null
-      this.toggle = null
-      this.sourceInput = null
-      return
-    }
+    this.source = source
 
     const container = document.createElement('section')
     container.className = 'mermaid-block'
-    container.dataset.language = 'mermaid'
-
+    container.contentEditable = 'false'
     const toolbar = document.createElement('div')
     toolbar.className = 'mermaid-toolbar'
-    toolbar.contentEditable = 'false'
     const label = document.createElement('span')
     label.className = 'mermaid-label'
     label.textContent = 'Mermaid'
-    const toggle = document.createElement('button')
-    toggle.type = 'button'
-    toggle.className = 'mermaid-source-toggle'
-    toggle.setAttribute('aria-expanded', 'false')
-    toggle.textContent = '编辑源码'
-    toolbar.append(label, toggle)
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'mermaid-source-toggle'
+    button.textContent = '编辑源码'
+    button.setAttribute('aria-label', '编辑 Mermaid 源码')
+    button.addEventListener('click', this.handleFocusSource)
+    toolbar.append(label, button)
 
     const preview = document.createElement('div')
     preview.className = 'mermaid-preview'
@@ -101,164 +88,46 @@ class MermaidCodeBlockView implements NodeView {
     status.className = 'mermaid-status'
     status.textContent = '正在加载图表…'
     preview.append(status)
-
-    const source = document.createElement('textarea')
-    source.className = 'mermaid-source'
-    source.spellcheck = false
-    source.value = node.textContent
-    source.setAttribute('aria-label', 'Mermaid 图表源码')
-    source.addEventListener('input', this.handleSourceInput)
-    container.append(toolbar, preview, source)
+    container.append(toolbar, preview)
 
     this.dom = container
     this.preview = preview
     this.status = status
-    this.toggle = toggle
-    this.sourceInput = source
-    this.toggle.addEventListener('click', this.handleToggleSource)
-    activeViews.add(this)
+    this.button = button
+    activePreviews.add(this)
     observeThemeChanges()
-    this.scheduleRender(node.textContent, true)
+    this.renderNow()
   }
 
-  update(node: ProseNode): boolean {
-    if (node.type.name !== 'code_block') return false
-    if (this.isMermaid !== isMermaidLanguage(node.attrs.language)) return false
-    if (!this.isMermaid) {
-      const language = node.attrs.language as string
-      if (language) this.dom.dataset.language = language
-      else delete this.dom.dataset.language
-      return true
-    }
-    const source = node.textContent
-    if (this.sourceInput && this.sourceInput.value !== source) {
-      this.sourceInput.value = source
-    }
-    if (!shouldRenderMermaidUpdate(this.editing)) {
-      this.captureSource(source)
-      return true
-    }
-    this.scheduleRender(source)
-    return true
-  }
-
-  stopEvent(event: Event): boolean {
-    return event.target instanceof Element && Boolean(event.target.closest('.mermaid-toolbar, .mermaid-source'))
-  }
-
-  ignoreMutation(mutation: ViewMutationRecord): boolean {
-    if (!this.isMermaid || mutation.type === 'selection') return false
-    const target = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement
-    return Boolean(target?.closest('.mermaid-preview, .mermaid-toolbar, .mermaid-source'))
-  }
-
-  destroy(): void {
-    if (this.renderTimer) clearTimeout(this.renderTimer)
-    if (this.toggle) this.toggle.removeEventListener('click', this.handleToggleSource)
-    if (this.sourceInput) this.sourceInput.removeEventListener('input', this.handleSourceInput)
-    activeViews.delete(this)
-    if (activeViews.size === 0 && themeObserver) {
-      themeObserver.disconnect()
-      themeObserver = null
-    }
-  }
-
-  ensureRendered = (): Promise<void> => {
-    if (!this.isMermaid) return Promise.resolve()
-    if (this.editing) {
-      this.render(this.lastSource)
-      return this.renderPromise ?? Promise.resolve()
-    }
-    if (this.renderTimer) {
-      clearTimeout(this.renderTimer)
-      this.renderTimer = undefined
-      this.render(this.lastSource)
-    }
-    return this.renderPromise ?? Promise.resolve()
-  }
-
-  rerender = () => {
-    if (!this.isMermaid || this.editing) return
-    this.scheduleRender(this.lastSource, true)
-  }
-
-  private handleToggleSource = () => {
-    if (!this.isMermaid || !this.toggle) return
-    this.editing = !this.editing
-    this.dom.classList.toggle('is-editing', this.editing)
-    this.toggle.setAttribute('aria-expanded', String(this.editing))
-    this.toggle.textContent = this.editing ? '收起源码' : '编辑源码'
-    if (!this.editing) {
-      this.scheduleRender(this.lastSource, true)
-      this.focusEditorAtSource()
-      return
-    }
-    if (this.renderTimer) {
-      clearTimeout(this.renderTimer)
-      this.renderTimer = undefined
-    }
-    // 使正在进行的旧渲染失效，避免打开源码后回写过时 SVG。
+  updateSource(source: string) {
+    if (source === this.source) return
+    this.source = source
     this.renderVersion += 1
-    requestAnimationFrame(() => this.sourceInput?.focus())
-  }
-
-  private handleSourceInput = () => {
-    if (!this.sourceInput) return
-    const pos = this.getPos()
-    if (typeof pos !== 'number') return
-    const node = this.view.state.doc.nodeAt(pos)
-    if (!node || node.type.name !== 'code_block') return
-    const from = pos + 1
-    const to = pos + node.nodeSize - 1
-    this.view.dispatch(this.view.state.tr.insertText(this.sourceInput.value, from, to))
-  }
-
-  private focusEditorAtSource() {
-    requestAnimationFrame(() => {
-      const pos = this.getPos()
-      if (typeof pos !== 'number') return
-      this.view.dispatch(
-        this.view.state.tr
-          .setSelection(TextSelection.create(this.view.state.doc, pos + 1))
-          .scrollIntoView(),
-      )
-      this.view.focus()
-    })
-  }
-
-  private scheduleRender(source: string, immediate = false) {
-    this.captureSource(source)
     if (this.renderTimer) clearTimeout(this.renderTimer)
-    if (immediate) {
-      this.render(source)
-      return
-    }
-    this.status?.replaceChildren(document.createTextNode('正在更新图表…'))
+    // 编辑源码时维持既有 SVG，停止输入后再更新，避免干扰光标与视觉闪烁。
     this.renderTimer = setTimeout(() => {
       this.renderTimer = undefined
-      this.render(source)
+      this.renderNow()
     }, MERMAID_RENDER_DELAY)
   }
 
-  private captureSource(source: string) {
-    this.lastSource = source
-    this.renderVersion += 1
-  }
-
-  private render(source: string) {
-    const preview = this.preview
-    const status = this.status
-    if (!preview || !status) return
-    const version = this.renderVersion
-    if (!source.trim()) {
-      preview.replaceChildren(status)
-      status.textContent = '输入 Mermaid 图表源码'
-      this.renderPromise = Promise.resolve()
-      return
+  renderNow = (): Promise<void> => {
+    if (this.renderTimer) {
+      clearTimeout(this.renderTimer)
+      this.renderTimer = undefined
     }
-    preview.replaceChildren(status)
-    status.classList.remove('is-error')
-    status.textContent = '正在渲染图表…'
+    this.renderVersion += 1
+    const version = this.renderVersion
+    const source = this.source
+    if (!source.trim()) {
+      this.preview.replaceChildren(this.status)
+      this.status.textContent = '输入 Mermaid 图表源码'
+      this.renderPromise = Promise.resolve()
+      return this.renderPromise
+    }
+    this.preview.replaceChildren(this.status)
+    this.status.classList.remove('is-error')
+    this.status.textContent = '正在渲染图表…'
     this.renderPromise = getMermaid()
       .then(async (mermaid) => {
         mermaid.initialize({
@@ -268,32 +137,146 @@ class MermaidCodeBlockView implements NodeView {
         })
         const id = `markdownsoft-mermaid-${diagramSequence++}`
         const { svg, bindFunctions } = await mermaid.render(id, source)
-        if (version !== this.renderVersion || preview !== this.preview) return
+        if (version !== this.renderVersion) return
         // Mermaid 在 strict 模式下生成 SVG，避免把未经处理的 Markdown 直接写入 DOM。
-        preview.innerHTML = svg
-        bindFunctions?.(preview)
+        this.preview.innerHTML = svg
+        bindFunctions?.(this.preview)
       })
       .catch((error: unknown) => {
-        if (version !== this.renderVersion || preview !== this.preview) return
-        preview.replaceChildren(status)
-        status.textContent = `图表语法错误：${getErrorMessage(error)}`
-        status.classList.add('is-error')
+        if (version !== this.renderVersion) return
+        this.preview.replaceChildren(this.status)
+        this.status.textContent = `图表语法错误：${getErrorMessage(error)}`
+        this.status.classList.add('is-error')
       })
       .finally(() => {
-        if (version !== this.renderVersion || status !== this.status) return
+        if (version !== this.renderVersion) return
         renderListeners.forEach((listener) => listener())
       })
+    return this.renderPromise
+  }
+
+  destroy = () => {
+    if (this.renderTimer) clearTimeout(this.renderTimer)
+    this.button.removeEventListener('click', this.handleFocusSource)
+    activePreviews.delete(this)
+    if (activePreviews.size === 0 && themeObserver) {
+      themeObserver.disconnect()
+      themeObserver = null
+    }
+  }
+
+  getSourcePosition = (): number | undefined => this.getPos()
+
+  private handleFocusSource = () => {
+    const codePos = this.getPos()
+    if (typeof codePos !== 'number') return
+    const codeNode = this.view.state.doc.nodeAt(codePos)
+    if (!codeNode || codeNode.type.name !== 'code_block') return
+    this.view.dispatch(
+      this.view.state.tr
+        .setSelection(TextSelection.create(this.view.state.doc, codePos + 1))
+        .scrollIntoView(),
+    )
+    this.view.focus()
   }
 }
 
-export const mermaidCodeBlockView = (
-  node: ProseNode,
-  view: EditorView,
-  getPos: GetPos,
-): NodeView => new MermaidCodeBlockView(node, view, getPos)
+const getMermaidBlocks = (doc: ProseNode): MermaidBlock[] => {
+  const blocks: MermaidBlock[] = []
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'code_block' || !isMermaidLanguage(node.attrs.language)) return
+    blocks.push({ pos, language: node.attrs.language.trim().toLowerCase() })
+    return false
+  })
+  return blocks
+}
+
+const buildMermaidDecorations = (doc: ProseNode, blocks = getMermaidBlocks(doc)): DecorationSet => {
+  const decorations: Decoration[] = []
+  blocks.forEach(({ pos }) => {
+    const node = doc.nodeAt(pos)
+    if (!node) return
+    const key = `mermaid-preview-${pos}`
+    decorations.push(
+      Decoration.widget(
+        pos,
+        (view, getPos) => new MermaidPreview(view, getPos, node.textContent).dom,
+        {
+          key,
+          side: -1,
+          ignoreSelection: true,
+          stopEvent: (event) => event.target instanceof Element && Boolean(event.target.closest('.mermaid-block')),
+          destroy: (dom) => {
+            const preview = Array.from(activePreviews).find((item) => item.dom === dom)
+            preview?.destroy()
+          },
+        },
+      ),
+    )
+  })
+  return DecorationSet.create(doc, decorations)
+}
+
+const mapBlocks = (blocks: MermaidBlock[], tr: Transaction): MermaidBlock[] =>
+  blocks.flatMap((block) => {
+    const mapped = tr.mapping.mapResult(block.pos, -1)
+    if (mapped.deleted) return []
+    return [{ ...block, pos: mapped.pos }]
+  })
+
+const haveSameBlocks = (left: MermaidBlock[], right: MermaidBlock[]): boolean =>
+  left.length === right.length &&
+  left.every((block, index) => block.pos === right[index].pos && block.language === right[index].language)
+
+export const mermaidPreviewKey = new PluginKey('mermaid-preview')
+
+export const mermaidPreviewPlugin = new Plugin({
+  key: mermaidPreviewKey,
+  state: {
+    init: (_config, state): MermaidPreviewState => {
+      const blocks = getMermaidBlocks(state.doc)
+      return { decorations: buildMermaidDecorations(state.doc, blocks), blocks }
+    },
+    apply: (tr, previous, _oldState, state) => {
+      const previousState = previous as MermaidPreviewState
+      if (!tr.docChanged) {
+        return {
+          decorations: previousState.decorations.map(tr.mapping, tr.doc),
+          blocks: mapBlocks(previousState.blocks, tr),
+        }
+      }
+      const blocks = getMermaidBlocks(state.doc)
+      const mappedBlocks = mapBlocks(previousState.blocks, tr)
+      if (haveSameBlocks(mappedBlocks, blocks)) {
+        // Mermaid 源码输入不会改变代码块的结构，必须复用预览 DOM，避免光标被重建打断。
+        return { decorations: previousState.decorations.map(tr.mapping, tr.doc), blocks }
+      }
+      return { decorations: buildMermaidDecorations(state.doc, blocks), blocks }
+    },
+  },
+  props: {
+    decorations: (state) =>
+      (mermaidPreviewKey.getState(state) as MermaidPreviewState | undefined)?.decorations,
+  },
+  view: () => ({
+    update: (view, previousState) => {
+      if (previousState.doc.eq(view.state.doc)) return
+      activePreviews.forEach((preview) => {
+        const pos = preview.getSourcePosition()
+        if (typeof pos !== 'number') return
+        const node = view.state.doc.nodeAt(pos)
+        if (!node || !isMermaidLanguage(node.attrs.language)) return
+        preview.updateSource(node.textContent)
+      })
+    },
+    destroy: () => {
+      activePreviews.forEach((preview) => preview.destroy())
+    },
+  }),
+})
 
 export const ensureMermaidRendered = async (): Promise<void> => {
-  const renders = Array.from(activeViews, (view) => view.ensureRendered())
+  const renders = Array.from(activePreviews, (preview) => preview.renderNow())
   if (renders.length === 0) return
   await Promise.race([
     Promise.all(renders).then(() => undefined),

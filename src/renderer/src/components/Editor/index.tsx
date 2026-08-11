@@ -57,7 +57,7 @@ import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from '.
 import { tableColResizePlugin } from './plugins/tableColResize'
 import {
   ensureMermaidRendered,
-  mermaidCodeBlockView,
+  mermaidPreviewPlugin,
   subscribeMermaidRender,
 } from './plugins/mermaidCodeBlock'
 import {
@@ -245,10 +245,6 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
             spellcheck: false,
-            nodeViews: {
-              ...prev.nodeViews,
-              code_block: mermaidCodeBlockView,
-            },
           }))
           // 注册脚注语法解析（RemarkPlugin 为 { plugin, options } 结构）
           ctx.get(remarkPluginsCtx).push({
@@ -290,6 +286,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use($prose(() => searchPlugin))
         // 代码块 spellcheck 排除 + 图片 draggable（装饰方式，避免 DOM 变异乒乓）
         .use($prose(() => nodeAttrsPlugin))
+        // Mermaid 预览使用装饰组件，源码始终保留为 Milkdown 原生代码块。
+        .use($prose(() => mermaidPreviewPlugin))
         // 代码块行号（开关由 codeLineNumbers prop 控制，装饰 widget 实现）
         .use($prose(() => lineNumPlugin))
         // 块级上下文标记（光标所在块高亮）
@@ -692,8 +690,12 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             .querySelectorAll('.code-line-numbers, .fold-toggle')
             .forEach((el) => el.remove())
           clone
-            .querySelectorAll('.mermaid-toolbar, .mermaid-source')
+            .querySelectorAll('.mermaid-toolbar')
             .forEach((el) => el.remove())
+          clone.querySelectorAll('pre[data-language]').forEach((el) => {
+            if (el.getAttribute('data-language')?.trim().toLowerCase() !== 'mermaid') return
+            el.remove()
+          })
           return clone.innerHTML
         },
         focus: () => {
