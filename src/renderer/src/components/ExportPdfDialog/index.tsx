@@ -76,13 +76,15 @@ export function ExportPdfDialog({
             <span className="settings-label">纸张尺寸</span>
             <div className="seg">
               {PAGE_SIZES.map((opt) => (
-                <div
+                <button
+                  type="button"
                   key={opt.id}
                   className={`seg-item ${pageSize === opt.id ? 'on' : ''}`}
+                  aria-pressed={pageSize === opt.id}
                   onClick={() => setPageSize(opt.id)}
                 >
                   {opt.label}
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -90,46 +92,53 @@ export function ExportPdfDialog({
             <span className="settings-label">页边距</span>
             <div className="seg">
               {MARGIN_OPTIONS.map((opt) => (
-                <div
+                <button
+                  type="button"
                   key={opt.id}
                   className={`seg-item ${margins === opt.id ? 'on' : ''}`}
+                  aria-pressed={margins === opt.id}
                   onClick={() => setMargins(opt.id)}
                 >
                   {opt.label}
-                </div>
+                </button>
               ))}
             </div>
           </div>
-          <div
+          <button
+            type="button"
             className="settings-row settings-row-toggle"
+            aria-pressed={headerFooter}
             onClick={() => setHeaderFooter((v) => !v)}
           >
             <span className="settings-label">
               页眉页脚
               <span className="settings-hint">页眉显示文档标题，页脚显示页码</span>
             </span>
-            <div className={`switch ${headerFooter ? 'on' : ''}`} />
-          </div>
-          <div
+            <span className={`switch ${headerFooter ? 'on' : ''}`} />
+          </button>
+          <button
+            type="button"
             className="settings-row settings-row-toggle"
+            aria-pressed={toc}
             onClick={() => setToc((v) => !v)}
           >
             <span className="settings-label">
               目录页
               <span className="settings-hint">首页生成可跳转目录（H1–H3，标题≥2 个时生效）</span>
             </span>
-            <div className={`switch ${toc ? 'on' : ''}`} />
-          </div>
+            <span className={`switch ${toc ? 'on' : ''}`} />
+          </button>
           <div className="pdf-dialog-actions">
-            <div className="sc-btn" onClick={onClose}>
+            <button type="button" className="sc-btn" onClick={onClose}>
               取消
-            </div>
-            <div
+            </button>
+            <button
+              type="button"
               className="sc-btn pdf-export-btn"
               onClick={() => onExport({ pageSize, margins, headerFooter, toc })}
             >
               导出
-            </div>
+            </button>
           </div>
         </div>
       </div>

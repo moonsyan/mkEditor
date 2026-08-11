@@ -322,6 +322,19 @@
 /* 开关行整行可点击（扩大命中区，避免小开关难点） */
 .settings-row-toggle { cursor: pointer; }
 .settings-row-toggle:hover .settings-label { color: var(--text-1); }
+button.settings-row-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+button.settings-row-toggle:focus-visible,
+button.seg-item:focus-visible,
+button.sc-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 /* 字号分段选择 */
 .seg {
@@ -336,6 +349,11 @@
   color: var(--text-3);
   cursor: pointer;
   transition: all var(--dur) var(--ease);
+}
+button.seg-item {
+  border: 0;
+  background: transparent;
+  font-family: inherit;
 }
 .seg-item:hover {
   background: var(--bg-hover);
@@ -415,6 +433,15 @@
   padding: 3px 9px;
   cursor: pointer;
   transition: all var(--dur) var(--ease);
+}
+button.sc-btn {
+  background: transparent;
+  font-family: inherit;
+}
+button.sc-btn.pdf-export-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 .sc-btn:hover {
   color: var(--accent);

@@ -41,27 +41,27 @@ export function EditorPanel({
   return (
     <>
       <div className="settings-section-title">编辑</div>
-      <div className="settings-row settings-row-toggle" onClick={() => onAutosaveChange(!autosave)}>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={autosave} onClick={() => onAutosaveChange(!autosave)}>
         <span className="settings-label">
           自动保存
           <span className="settings-hint">磁盘文件每 30 秒自动写回</span>
         </span>
-        <div className={`switch ${autosave ? 'on' : ''}`} />
-      </div>
-      <div className="settings-row settings-row-toggle" onClick={() => onTypewriterChange(!typewriter)}>
+        <span className={`switch ${autosave ? 'on' : ''}`} />
+      </button>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={typewriter} onClick={() => onTypewriterChange(!typewriter)}>
         <span className="settings-label">
           打字机模式
           <span className="settings-hint">光标所在行始终保持屏幕居中</span>
         </span>
-        <div className={`switch ${typewriter ? 'on' : ''}`} />
-      </div>
-      <div className="settings-row settings-row-toggle" onClick={() => onSpellcheckChange(!spellcheck)}>
+        <span className={`switch ${typewriter ? 'on' : ''}`} />
+      </button>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={spellcheck} onClick={() => onSpellcheckChange(!spellcheck)}>
         <span className="settings-label">
           拼写检查（多语言词典）
           <span className="settings-hint">仅检查正文，代码块与行内代码自动排除；中文不在词典范围</span>
         </span>
-        <div className={`switch ${spellcheck ? 'on' : ''}`} />
-      </div>
+        <span className={`switch ${spellcheck ? 'on' : ''}`} />
+      </button>
       {spellcheck && (
         <div className="settings-row">
           <span className="settings-label">拼写检查语言</span>
@@ -79,44 +79,48 @@ export function EditorPanel({
           </select>
         </div>
       )}
-      <div className="settings-row settings-row-toggle" onClick={() => onMultiWindowChange(!multiWindow)}>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={multiWindow} onClick={() => onMultiWindowChange(!multiWindow)}>
         <span className="settings-label">
           多窗口模式
           <span className="settings-hint">允许同时打开多个窗口（重启后生效）</span>
         </span>
-        <div className={`switch ${multiWindow ? 'on' : ''}`} />
-      </div>
-      <div className="settings-row settings-row-toggle" onClick={() => onBlankClickToEndChange(!blankClickToEnd)}>
+        <span className={`switch ${multiWindow ? 'on' : ''}`} />
+      </button>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={blankClickToEnd} onClick={() => onBlankClickToEndChange(!blankClickToEnd)}>
         <span className="settings-label">
           点击空白区跳到文末
           <span className="settings-hint">点击正文下方空白区域时光标定位到文档末尾（Typora 同款行为）</span>
         </span>
-        <div className={`switch ${blankClickToEnd ? 'on' : ''}`} />
-      </div>
-      <div className="settings-row settings-row-toggle" onClick={() => onCodeLineNumbersChange(!codeLineNumbers)}>
+        <span className={`switch ${blankClickToEnd ? 'on' : ''}`} />
+      </button>
+      <button type="button" className="settings-row settings-row-toggle" aria-pressed={codeLineNumbers} onClick={() => onCodeLineNumbersChange(!codeLineNumbers)}>
         <span className="settings-label">
           代码块行号
           <span className="settings-hint">在代码块左侧显示行号（导出 HTML/PDF 时一并包含）</span>
         </span>
-        <div className={`switch ${codeLineNumbers ? 'on' : ''}`} />
-      </div>
+        <span className={`switch ${codeLineNumbers ? 'on' : ''}`} />
+      </button>
 
       <div className="settings-section-title">图床（粘贴/拖入图片）</div>
       <div className="settings-row">
         <span className="settings-label">图片存储位置</span>
         <div className="seg">
-          <div
+          <button
+            type="button"
             className={`seg-item ${imageHost.provider === 'local' ? 'on' : ''}`}
+            aria-pressed={imageHost.provider === 'local'}
             onClick={() => onImageHostChange({ ...imageHost, provider: 'local' })}
           >
             本地附件
-          </div>
-          <div
+          </button>
+          <button
+            type="button"
             className={`seg-item ${imageHost.provider === 'smms' ? 'on' : ''}`}
+            aria-pressed={imageHost.provider === 'smms'}
             onClick={() => onImageHostChange({ ...imageHost, provider: 'smms' })}
           >
             SM.MS 图床
-          </div>
+          </button>
         </div>
       </div>
       {imageHost.provider === 'smms' && (
