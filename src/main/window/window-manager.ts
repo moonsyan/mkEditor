@@ -117,7 +117,17 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
           }
           mainWindow.destroy()
         })
-        .catch(() => mainWindow.destroy())
+        .catch(() => {
+          const proceed = dialog.showMessageBoxSync(mainWindow, {
+            type: 'error',
+            buttons: ['仍然关闭', '取消'],
+            defaultId: 1,
+            cancelId: 1,
+            message: '无法完成保存',
+            detail: '无法确认未保存内容是否已写入草稿。继续关闭可能丢失最新修改。',
+          })
+          if (proceed === 0) mainWindow.destroy()
+        })
     } else if (choice === 1) {
       mainWindow.destroy()
     }

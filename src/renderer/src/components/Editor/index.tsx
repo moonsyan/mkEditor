@@ -12,7 +12,6 @@ import {
 import type { CmdKey } from '@milkdown/kit/core'
 import { Selection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
-import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
 import {
@@ -43,7 +42,7 @@ import { Milkdown, MilkdownProvider, useEditor } from '@milkdown/react'
 
 /* ==================== ProseMirror 插件与语法扩展（已拆分至 plugins/） ==================== */
 
-import { searchKey, searchState, buildSearchRegex, collectHits, searchPlugin } from './plugins/searchHighlight'
+import { searchPlugin } from './plugins/searchHighlight'
 import { nodeAttrsPlugin } from './plugins/nodeAttrs'
 import { lineNumKey, setLineNumbersEnabled, lineNumPlugin } from './plugins/codeLineNumbers'
 import { blockContextPlugin } from './plugins/blockContext'
@@ -59,6 +58,14 @@ import {
 } from './plugins/footnote'
 import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from './plugins/frontmatter'
 import { tableColResizePlugin } from './plugins/tableColResize'
+import {
+  EditorOverlays,
+  type CodePanelState,
+  type FullscreenCodeState,
+  type TablePanelState,
+} from './EditorOverlays'
+import { createSearchController } from './searchController'
+import { useImageInsertion, type EditorImageHints } from './useImageInsertion'
 
 /* ==================== 组件 ==================== */
 
@@ -113,11 +120,7 @@ interface EditorProps {
   /** 内容变化回调（返回最新 Markdown） */
   onChange: (markdown: string) => void
   /** 图片保存位置提示（当前文档路径 / 工作区路径 / 图床配置） */
-  imageHints?: {
-    docPath?: string
-    workspacePath?: string
-    imageHost?: { provider: 'local' | 'smms'; token: string }
-  }
+  imageHints?: EditorImageHints
   /** 光标位置变化回调（行/列 + 当前标题 + 标题索引 + 选中字数） */
   onCursorChange?: (
     line: number,
@@ -135,30 +138,6 @@ interface EditorProps {
   /** 轻提示回调（图床上传失败降级等场景） */
   onNotify?: (message: string) => void
 }
-
-/** 代码块悬浮层状态（语言输入 + 复制，悬停才出现） */
-interface CodePanelState {
-  pre: HTMLElement
-  top: number
-  left: number
-  language: string
-}
-
-/** 表格悬浮工具栏状态（行列增删，悬停才出现） */
-interface TablePanelState {
-  table: HTMLElement
-  top: number
-  left: number
-}
-
-/** 代码块全屏预览状态 */
-interface FullscreenCodeState {
-  language: string
-  text: string
-}
-
-/** 与主进程写入及图床上传保持一致，避免 Data URL 转换导致渲染进程内存峰值过高 */
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024
 
 /**
  * Milkdown 编辑器主体
@@ -519,80 +498,14 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /* ==================== 图片粘贴 / 拖入 ==================== */
 
-    /** 插入串行队列：多张图片按顺序依次保存并插入，避免并行时顺序随机 */
-    const imageQueueRef = useRef<Promise<void>>(Promise.resolve())
-
-    /** 保存图片并插入 Markdown 图片节点（优先图床，未配置/失败时降级本地） */
-    const insertImageFile = (file: File) => {
-      imageQueueRef.current = imageQueueRef.current
-        .then(() => insertImageFileTask(file))
-        .catch(() => {})
-    }
-
-    const insertImageFileTask = async (file: File) => {
-      if (!window.desktopAPI) return
-      if (file.size > MAX_IMAGE_SIZE) {
-        notifyRef.current?.('图片超过 20MB，无法插入')
-        return
-      }
-      const dataUrl = await new Promise<string | null>((resolve) => {
-        const reader = new FileReader()
-        reader.onload = () =>
-          resolve(typeof reader.result === 'string' ? reader.result : null)
-        reader.onerror = () => resolve(null)
-        reader.readAsDataURL(file)
-      })
-      if (!dataUrl) return
-      // 图床路径：配置了 SM.MS 且 token 非空时先尝试上传
-      const host = imageHintsRef.current?.imageHost
-      if (host?.provider === 'smms' && host.token) {
-        const up = await window.desktopAPI.document.uploadImage(dataUrl)
-        if (up.ok && up.data?.url) {
-          const alt = file.name.replace(/\.[^.]+$/, '')
-          editorRef.current?.action(insert(`![${alt}](${up.data.url})`))
-          bumpRender((n) => n + 1)
-          return
-        }
-        // 上传失败：提示后降级本地附件
-        notifyRef.current?.('图床上传失败，已改为保存到本地')
-      }
-      const res = await window.desktopAPI.document.saveImage(
-        dataUrl,
-        imageHintsRef.current,
-      )
-      if (!res.ok || !res.data) return
-      // 统一转为 mdimg 协议 URL（dev/生产环境均可渲染）
-      const url = `mdimg:///${res.data.path.replace(/\\/g, '/')}`
-      editorRef.current?.action(insert(`![${res.data.name}](${url})`))
-      bumpRender((n) => n + 1)
-    }
-
-    /** 粘贴：含图片时保存并插入，否则交给 ProseMirror 默认文本粘贴 */
-    const handlePaste = (e: React.ClipboardEvent) => {
-      const items = Array.from(e.clipboardData?.items ?? [])
-      const file = items.find((i) => i.type.startsWith('image/'))?.getAsFile()
-      if (!file) return
-      e.preventDefault()
-      insertImageFile(file)
-    }
-
-    /** 拖入图片文件 */
-    const handleDrop = (e: React.DragEvent) => {
-      const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
-        f.type.startsWith('image/'),
-      )
-      if (files.length === 0) return
-      e.preventDefault()
-      files.forEach(insertImageFile)
-    }
-
-    const handleDragOver = (e: React.DragEvent) => {
-      if (
-        Array.from(e.dataTransfer?.items ?? []).some((i) => i.kind === 'file')
-      ) {
-        e.preventDefault()
-      }
-    }
+    const { handlePaste, handleDrop, handleDragOver } = useImageInsertion({
+      imageHintsRef,
+      insertMarkdown: (markdown) => {
+        editorRef.current?.action(insert(markdown))
+        bumpRender((count) => count + 1)
+      },
+      notify: (message) => notifyRef.current?.(message),
+    })
 
     /* ==================== 代码块悬浮层 ==================== */
 
@@ -774,6 +687,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       /** 编辑器就绪检查（创建完成前调用 action 会抛异常） */
       const ready = (): MilkdownCore | null =>
         editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+      const searchController = createSearchController(() => {
+        const editor = ready()
+        return editor ? editor.ctx.get(editorViewCtx) : null
+      })
 
       return {
         replaceContent: (markdown) => {
@@ -874,118 +791,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
         /* ---------- 搜索 ---------- */
 
-        startSearch: (query, useRegex, caseSensitive, wholeWord = false) => {
-          const ed = ready()
-          if (!ed) return { count: 0, current: -1 }
-          const view = ed.ctx.get(editorViewCtx)
-          searchState.lastQuery = query
-          searchState.lastUseRegex = useRegex
-          searchState.lastCaseSensitive = caseSensitive
-          searchState.lastWholeWord = wholeWord
-          const re = buildSearchRegex(query, useRegex, caseSensitive, wholeWord)
-          if (!re) {
-            searchState.hits = []
-            searchState.current = -1
-            view.dispatch(view.state.tr.setMeta(searchKey, DecorationSet.empty))
-            return { count: 0, current: -1 }
-          }
-          searchState.hits = collectHits(view.state.doc, re)
-          // 定位到光标后的第一个匹配（没有则回绕到首个）
-          const selPos = view.state.selection.from
-          searchState.current = searchState.hits.findIndex((h) => h.from >= selPos)
-          if (searchState.current === -1 && searchState.hits.length > 0) searchState.current = 0
-          const decos = searchState.hits.map((h, i) =>
-            Decoration.inline(h.from, h.to, {
-              class: i === searchState.current ? 'search-hit current' : 'search-hit',
-            }),
-          )
-          view.dispatch(
-            view.state.tr.setMeta(searchKey, DecorationSet.create(view.state.doc, decos)),
-          )
-          return { count: searchState.hits.length, current: searchState.current }
-        },
-
-        searchNext: (backwards) => {
-          const ed = ready()
-          if (!ed || searchState.hits.length === 0) return searchState.current
-          const view = ed.ctx.get(editorViewCtx)
-          searchState.current = backwards
-            ? searchState.current <= 0
-              ? searchState.hits.length - 1
-              : searchState.current - 1
-            : (searchState.current + 1) % searchState.hits.length
-          const decos = searchState.hits.map((h, i) =>
-            Decoration.inline(h.from, h.to, {
-              class: i === searchState.current ? 'search-hit current' : 'search-hit',
-            }),
-          )
-          const hit = searchState.hits[searchState.current]
-          view.dispatch(
-            view.state.tr
-              .setMeta(searchKey, DecorationSet.create(view.state.doc, decos))
-              .setSelection(TextSelection.create(view.state.doc, hit.from))
-              .scrollIntoView(),
-          )
-          return searchState.current
-        },
-
-        replaceCurrent: (replacement) => {
-          const ed = ready()
-          const hit = searchState.hits[searchState.current]
-          if (!ed || !hit) return { count: searchState.hits.length, current: searchState.current }
-          const view = ed.ctx.get(editorViewCtx)
-          view.dispatch(
-            view.state.tr.insertText(replacement, hit.from, hit.to).scrollIntoView(),
-          )
-          // 替换后重新搜索（复用 startSearch 逻辑）
-          const re = buildSearchRegex(
-            searchState.lastQuery,
-            searchState.lastUseRegex,
-            searchState.lastCaseSensitive,
-            searchState.lastWholeWord,
-          )
-          if (!re) return { count: 0, current: -1 }
-          searchState.hits = collectHits(view.state.doc, re)
-          const selPos = view.state.selection.from
-          searchState.current = searchState.hits.findIndex((h) => h.from >= selPos)
-          if (searchState.current === -1 && searchState.hits.length > 0) searchState.current = 0
-          const decos = searchState.hits.map((h, i) =>
-            Decoration.inline(h.from, h.to, {
-              class: i === searchState.current ? 'search-hit current' : 'search-hit',
-            }),
-          )
-          view.dispatch(
-            view.state.tr.setMeta(searchKey, DecorationSet.create(view.state.doc, decos)),
-          )
-          return { count: searchState.hits.length, current: searchState.current }
-        },
-
-        replaceAllMatches: (replacement) => {
-          const ed = ready()
-          if (!ed || searchState.hits.length === 0) return 0
-          const view = ed.ctx.get(editorViewCtx)
-          let tr = view.state.tr
-          // 从后往前替换，保证位置不回漂
-          for (let i = searchState.hits.length - 1; i >= 0; i--) {
-            const h = searchState.hits[i]
-            tr = tr.insertText(replacement, h.from, h.to)
-          }
-          view.dispatch(tr.scrollIntoView())
-          const n = searchState.hits.length
-          searchState.hits = []
-          searchState.current = -1
-          view.dispatch(view.state.tr.setMeta(searchKey, DecorationSet.empty))
-          return n
-        },
-
-        endSearch: () => {
-          searchState.hits = []
-          searchState.current = -1
-          const ed = ready()
-          if (!ed) return
-          const view = ed.ctx.get(editorViewCtx)
-          view.dispatch(view.state.tr.setMeta(searchKey, DecorationSet.empty))
-        },
+        startSearch: searchController.start,
+        searchNext: searchController.next,
+        replaceCurrent: searchController.replaceCurrent,
+        replaceAllMatches: searchController.replaceAll,
+        endSearch: searchController.end,
       }
     })
 
@@ -1010,137 +820,32 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           >
             <Milkdown />
           </div>
-          {/* 代码块悬浮层：语言输入框 + 复制按钮（悬停才出现） */}
-          {codePanel && (
-            <div
-              className="code-panel"
-              style={{ top: codePanel.top, left: codePanel.left }}
-              onMouseOver={(e) => e.stopPropagation()}
-              contentEditable={false}
-            >
-              <input
-                className="code-lang-input"
-                placeholder="语言"
-                value={langInput}
-                spellCheck={false}
-                onChange={(e) => setLangInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    applyLanguage(langInput)
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault()
-                    setCodePanel(null)
-                  }
-                }}
-                onBlur={() => {
-                  if (codePanel && langInput !== codePanel.language) {
-                    applyLanguage(langInput)
-                  }
-                }}
-                title="输入语言后回车生效（如 python）"
-              />
-              <div
-                className={`code-copy`}
-                onClick={() => {
-                  if (!codePanel) return
-                  setFullscreenCode({
-                    language: codePanel.language,
-                    text: getCodeText(codePanel.pre),
-                  })
-                }}
-                title="全屏预览代码"
-              >
-                <svg viewBox="0 0 24 24">
-                  <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-                </svg>
-              </div>
-              <div
-                className={`code-copy ${copied ? 'copied' : ''}`}
-                onClick={handleCopy}
-                title={copied ? '已复制' : '复制代码'}
-              >
-                {copied ? (
-                  <svg viewBox="0 0 24 24">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24">
-                    <rect x="9" y="9" width="13" height="13" rx="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>
-                )}
-              </div>
-            </div>
-          )}
-          {/* 表格悬浮工具栏：行列增删（悬停才出现） */}
-          {tablePanel && (
-            <div
-              className="table-panel"
-              style={{ top: tablePanel.top, left: tablePanel.left }}
-              onMouseOver={(e) => e.stopPropagation()}
-              contentEditable={false}
-            >
-              <div className="table-act" onClick={() => runTableAction('addRow')} title="在光标所在行下方加行">
-                +行
-              </div>
-              <div className="table-act" onClick={() => runTableAction('addCol')} title="在光标所在列右侧加列">
-                +列
-              </div>
-              <div className="table-act" onClick={() => runTableAction('delRow')} title="删除光标所在行">
-                −行
-              </div>
-              <div className="table-act" onClick={() => runTableAction('delCol')} title="删除光标所在列">
-                −列
-              </div>
-              <div className="table-act danger" onClick={() => runTableAction('delTable')} title="删除整个表格">
-                删表
-              </div>
-              <span className="table-act-sep" />
-              <div className="table-act" onClick={() => runTableAction('alignLeft')} title="当前列左对齐">
-                左
-              </div>
-              <div className="table-act" onClick={() => runTableAction('alignCenter')} title="当前列居中">
-                中
-              </div>
-              <div className="table-act" onClick={() => runTableAction('alignRight')} title="当前列右对齐">
-                右
-              </div>
-            </div>
-          )}
+          <EditorOverlays
+            codePanel={codePanel}
+            tablePanel={tablePanel}
+            fullscreenCode={fullscreenCode}
+            language={langInput}
+            copied={copied}
+            onLanguageChange={setLangInput}
+            onApplyLanguage={applyLanguage}
+            onCloseCodePanel={() => setCodePanel(null)}
+            onOpenFullscreen={() => {
+              if (!codePanel) return
+              setFullscreenCode({
+                language: codePanel.language,
+                text: getCodeText(codePanel.pre),
+              })
+            }}
+            onCopyCode={handleCopy}
+            onTableAction={runTableAction}
+            onCloseFullscreen={() => setFullscreenCode(null)}
+            onCopyFullscreen={() => {
+              if (!fullscreenCode) return
+              navigator.clipboard.writeText(fullscreenCode.text).catch(() => {})
+            }}
+          />
         </div>
 
-        {/* 代码块全屏预览（只读 + 复制，Esc 关闭） */}
-        {fullscreenCode && (
-          <div
-            className="code-fullscreen-overlay"
-            onClick={() => setFullscreenCode(null)}
-          >
-            <div className="code-fullscreen" onClick={(e) => e.stopPropagation()}>
-              <div className="code-fullscreen-head">
-                <span className="code-fullscreen-lang">
-                  {fullscreenCode.language || 'text'}
-                </span>
-                <div className="code-fullscreen-actions">
-                  <div
-                    className="sc-btn"
-                    onClick={() => {
-                      navigator.clipboard.writeText(fullscreenCode.text).catch(() => {})
-                    }}
-                  >
-                    复制
-                  </div>
-                  <div className="sc-btn" onClick={() => setFullscreenCode(null)}>
-                    关闭（Esc）
-                  </div>
-                </div>
-              </div>
-              <pre className="code-fullscreen-pre">
-                <code>{fullscreenCode.text}</code>
-              </pre>
-            </div>
-          </div>
-        )}
       </div>
     )
   },

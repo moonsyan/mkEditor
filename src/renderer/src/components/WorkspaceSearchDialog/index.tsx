@@ -108,6 +108,7 @@ export function WorkspaceSearchDialog({
     setLoading(true)
     setSearched(true)
     setError('')
+    setTruncated(false)
     try {
       const res = await window.desktopAPI.workspace.search(
         workspacePath,
@@ -121,14 +122,21 @@ export function WorkspaceSearchDialog({
         setTruncated(res.data.truncated)
       } else {
         setMatches([])
+        setTruncated(false)
         if (res.error?.code === 'INVALID_REGEX') {
           setError('正则表达式不合法，请检查后重试')
+        } else if (res.error?.code === 'REGEX_TIMEOUT') {
+          setError(res.error.message ?? '正则表达式匹配超时，请简化表达式')
         } else if (res.error?.code === 'QUERY_TOO_LONG') {
           setError(res.error.message ?? '搜索关键词不能超过 256 个字符')
         }
       }
     } catch {
-      if (seq === searchSeqRef.current) setMatches([])
+      if (seq === searchSeqRef.current) {
+        setMatches([])
+        setTruncated(false)
+        setError('搜索失败，请稍后重试')
+      }
     } finally {
       if (seq === searchSeqRef.current) setLoading(false)
     }

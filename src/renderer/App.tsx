@@ -23,7 +23,6 @@ import { StartScreen } from './src/components/StartScreen'
 import { DEFAULT_SHORTCUTS, mergeShortcuts, comboFromEvent } from './src/data/shortcuts'
 import type { ShortcutMap } from './src/data/shortcuts'
 import { DEMO_FILES, DEMO_TREE, DEFAULT_FILE_ID } from './src/data/demo-files'
-import { loadDrafts, saveDrafts } from './src/lib/drafts'
 import type { DraftMap } from './src/lib/drafts'
 import { rollStatsDate, EMPTY_STATS } from './src/lib/stats'
 import { injectToc } from './src/lib/pdf'
@@ -39,6 +38,12 @@ import { isImeComposing } from './src/lib/keyboard'
 import { usePersistedSetting } from './src/hooks/usePersistedSetting'
 import { useWritingStats } from './src/hooks/useWritingStats'
 import { useRecentFiles } from './src/hooks/useRecentFiles'
+import { useEditorViewState } from './src/hooks/useEditorViewState'
+import { useDraftPersistence } from './src/hooks/useDraftPersistence'
+import {
+  useDocumentSessionPersistence,
+  type SessionData,
+} from './src/hooks/useDocumentSessionPersistence'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
@@ -58,14 +63,6 @@ import {
   deleteSelectedCellsCommand,
 } from '@milkdown/kit/preset/gfm'
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
-
-/** 会话数据（重启后恢复上次打开的文件） */
-interface SessionData {
-  activeFileId?: string
-  files?: { id: string; name: string; path?: string }[]
-  /** 上次打开的工作区文件夹路径 */
-  workspacePath?: string
-}
 
 /** 每套主题对应的标题栏覆盖层颜色（Windows 系统窗口按钮区域） */
 const TITLEBAR_COLORS: Record<string, { bg: string; symbol: string }> = {
@@ -101,6 +98,8 @@ const INITIAL_SAVED: Record<string, boolean> = Object.fromEntries(
   Object.values(DEMO_FILES).map((f) => [f.id, true]),
 )
 
+const DEMO_FILE_IDS = new Set(Object.keys(DEMO_FILES))
+
 let untitledCounter = 1
 
 /** HTML 特殊字符转义（导出 HTML 的 title 来自文件名，可能含 & < >） */
@@ -118,26 +117,42 @@ export default function App(): JSX.Element {
   const [activeFileId, setActiveFileId] = useState(DEFAULT_FILE_ID)
   const [docTitle, setDocTitle] = useState(DEMO_FILES[DEFAULT_FILE_ID].name)
 
-  const [theme, setTheme] = useState('default')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-  const [focusMode, setFocusMode] = useState(false)
-  const [typewriter, setTypewriter] = useState(false)
+  const {
+    theme,
+    setTheme,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    focusMode,
+    setFocusMode,
+    typewriter,
+    setTypewriter,
+    previewMode,
+    setPreviewMode,
+    settingsOpen,
+    setSettingsOpen,
+    helpView,
+    setHelpView,
+    imagesOpen,
+    setImagesOpen,
+    autosave,
+    setAutosave,
+    spellcheck,
+    setSpellcheck,
+    multiWindow,
+    setMultiWindow,
+    fontSize,
+    setFontSize,
+    contentWidth,
+    setContentWidth,
+    lineHeight,
+    setLineHeight,
+    contentFont,
+    setContentFont,
+  } = useEditorViewState()
   const [focusOutlineTick, setFocusOutlineTick] = useState(0)
   const [searchMode, setSearchMode] = useState<'none' | 'find' | 'replace'>('none')
   const [searchCount, setSearchCount] = useState(0)
   const [searchCurrent, setSearchCurrent] = useState(-1)
-  /** 分栏预览 */
-  const [previewMode, setPreviewMode] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const [helpView, setHelpView] = useState<HelpView>(null)
-  const [imagesOpen, setImagesOpen] = useState(false)
-  const [autosave, setAutosave] = useState(true)
-  const [spellcheck, setSpellcheck] = useState(false)
-  const [multiWindow, setMultiWindow] = useState(false)
-  const [fontSize, setFontSize] = useState<FontSize>(16)
-  const [contentWidth, setContentWidth] = useState<ContentWidth>(900)
-  const [lineHeight, setLineHeight] = useState<LineHeight>(1.85)
-  const [contentFont, setContentFont] = useState<ContentFont>('default')
 
   /** 编辑区缩放（0.7–1.8，Ctrl+滚轮 / Ctrl+= / Ctrl+-） */
   const [zoom, setZoom] = useState(1)
@@ -703,26 +718,22 @@ export default function App(): JSX.Element {
     [],
   )
 
-  /** 保存成功后清除对应草稿（声明在自动保存之前，供其依赖） */
-  const clearDraft = useCallback(async (id: string) => {
-    try {
-      const drafts = await loadDrafts()
-      if (drafts[id]) {
-        delete drafts[id]
-        await saveDrafts(drafts)
-      }
-    } catch {
-      /* 草稿清理失败不影响主流程 */
-    }
-  }, [])
+  const { clearDraft, draftPendingRef, saveDraft } = useDraftPersistence({
+    activeFileId,
+    content: activeContent,
+    readyRef: settingsReadyRef,
+  })
 
   // 用 ref 镜像最新状态，供定时器读取（避免闭包捕获旧值）
   const autoSaveRef = useRef({ contents, openFiles, savedMap, autosave, fileMtime })
   autoSaveRef.current = { contents, openFiles, savedMap, autosave, fileMtime }
+  const autoSaveInFlightRef = useRef(false)
 
   useEffect(() => {
-    // 每 30 秒将已落盘的未保存文档自动写回（演示文件无路径，不参与）
-    const timer = setInterval(async () => {
+    // 每 30 秒将已落盘的未保存文档自动写回（演示文件无路径，不参与）。
+    // 写入尚未结束时跳过本轮，避免并发保存使用过期 mtime 造成误冲突或旧内容覆盖。
+    const runAutoSave = async () => {
+      if (autoSaveInFlightRef.current) return
       if (!window.desktopAPI) return
       const {
         contents: cs,
@@ -732,91 +743,46 @@ export default function App(): JSX.Element {
         fileMtime: mt,
       } = autoSaveRef.current
       if (!enabled) return
-      for (const f of fs) {
-        if (!f.path || sm[f.id] !== false) continue
-        const content = cs[f.id] ?? ''
-        // 带冲突检测：外部修改过的文件不自动覆盖；GBK 文件写回原编码（含字符降级保护）
-        const result = await saveWithEncodingFallback(f.path, content, mt[f.id], f.id)
-        if (result.ok && result.data) {
-          INITIAL_OR_SAVED.current[f.id] = content
-          setSavedMap((prev) => ({ ...prev, [f.id]: true }))
-          setFileMtime((prev) => ({ ...prev, [f.id]: result.data!.modifiedTime }))
-          void clearDraft(f.id)
-        } else if (result.error?.code === 'CONFLICT') {
-          setToast(`自动保存已跳过：${f.name} 已被外部修改`)
+      autoSaveInFlightRef.current = true
+      try {
+        for (const f of fs) {
+          if (!f.path || sm[f.id] !== false) continue
+          const content = cs[f.id] ?? ''
+          // 带冲突检测：外部修改过的文件不自动覆盖；GBK 文件写回原编码（含字符降级保护）
+          const result = await saveWithEncodingFallback(f.path, content, mt[f.id], f.id)
+          if (result.ok && result.data) {
+            INITIAL_OR_SAVED.current[f.id] = content
+            setSavedMap((prev) => ({ ...prev, [f.id]: true }))
+            setFileMtime((prev) => ({ ...prev, [f.id]: result.data!.modifiedTime }))
+            void clearDraft(f.id)
+            continue
+          }
+          if (result.error?.code === 'CONFLICT') {
+            setToast(`自动保存已跳过：${f.name} 已被外部修改`)
+          }
         }
+      } catch {
+        setToast('自动保存失败，请手动保存')
+      } finally {
+        autoSaveInFlightRef.current = false
       }
+    }
+    const timer = setInterval(() => {
+      void runAutoSave()
     }, 30000)
     return () => clearInterval(timer)
   }, [clearDraft, saveWithEncodingFallback])
 
   /* ==================== 会话与草稿持久化 ==================== */
 
-  // 会话持久化：记录当前打开的非演示文件、激活文档与工作区，重启后恢复
-  useEffect(() => {
-    // fresh 窗口不写入会话，避免覆盖主窗口的会话
-    if (FRESH_MODE) return
-    if (!settingsReadyRef.current) return
-    // 去重 + 上限，防止历史数据或异常累积导致会话膨胀
-    const seen = new Set<string>()
-    const files = openFiles
-      .filter((f) => !DEMO_FILES[f.id] && f.id && !seen.has(f.id) && seen.add(f.id))
-      .slice(0, 200)
-      .map((f) => ({ id: f.id, name: f.name, path: f.path }))
-    const data: SessionData = {
-      // 全部关闭时 activeFileId 已悬空，写入 undefined 让下次启动回退到默认样例文档
-      activeFileId: openFiles.some((f) => f.id === activeFileId) ? activeFileId : undefined,
-      workspacePath: workspace?.path,
-      files,
-    }
-    window.desktopAPI?.settings.set('session', data).catch(() => {})
-  }, [openFiles, activeFileId, workspace])
-
-  // 草稿持久化：内容变化 1 秒后写入（崩溃/重启可恢复）
-  // 待写草稿镜像：防抖期间切换标签时补写，避免旧标签最后一次改动丢失
-  const draftPendingRef = useRef<{ id: string; content: string } | null>(null)
-  // 最新激活标签 id 镜像：effect 清理时判断是"切标签"还是"内容变化"
-  const activeFileIdMirrorRef = useRef(activeFileId)
-  activeFileIdMirrorRef.current = activeFileId
-
-  /** 立即落盘待写草稿（切标签/退出防抖窗口时调用） */
-  const flushPendingDraft = useCallback(() => {
-    const pending = draftPendingRef.current
-    if (!pending) return
-    draftPendingRef.current = null
-    loadDrafts()
-      .then((drafts) => {
-        if (drafts[pending.id]?.content === pending.content) return
-        drafts[pending.id] = { content: pending.content, savedAt: Date.now() }
-        return saveDrafts(drafts)
-      })
-      .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    if (!settingsReadyRef.current) return
-    draftPendingRef.current = { id: activeFileId, content: activeContent }
-    let fired = false
-    const timer = setTimeout(() => {
-      fired = true
-      draftPendingRef.current = null
-      loadDrafts()
-        .then((drafts) => {
-          if (drafts[activeFileId]?.content === activeContent) return
-          drafts[activeFileId] = { content: activeContent, savedAt: Date.now() }
-          return saveDrafts(drafts)
-        })
-        .catch(() => {})
-    }, 1000)
-    return () => {
-      clearTimeout(timer)
-      // 定时器未触发且已切换到别的标签：立即补写旧标签内容，
-      // 否则"打字后 1 秒内切标签"会丢掉最后一次改动的草稿
-      if (!fired && activeFileIdMirrorRef.current !== activeFileId) {
-        flushPendingDraft()
-      }
-    }
-  }, [activeContent, activeFileId, flushPendingDraft])
+  useDocumentSessionPersistence({
+    activeFileId,
+    demoFileIds: DEMO_FILE_IDS,
+    freshMode: FRESH_MODE,
+    openFiles,
+    readyRef: settingsReadyRef,
+    workspace,
+  })
 
   /** 轻提示自动消失 */
   useEffect(() => {
@@ -1306,18 +1272,14 @@ export default function App(): JSX.Element {
         failed.push(f.name)
         // 兜底：写入草稿（串行 await，确保 destroy 前全部落盘）
         try {
-          const drafts = await loadDrafts()
-          if (drafts[f.id]?.content !== content) {
-            drafts[f.id] = { content, savedAt: Date.now() }
-            await saveDrafts(drafts)
-          }
+          await saveDraft(f.id, content)
         } catch {
           /* 草稿写入失败仅影响兜底能力，不阻断关闭流程 */
         }
       }
     }
     return failed
-  }, [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, clearDraft])
+  }, [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, clearDraft, saveDraft])
 
   // 未保存状态同步到主进程（关闭时弹原生确认框，避免静默阻止关闭）
   const hasUnsaved = useMemo(() => Object.values(savedMap).some((s) => !s), [savedMap])

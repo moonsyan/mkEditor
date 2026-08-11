@@ -5,7 +5,8 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "npm run typecheck && electron-vite build",
     "test": "vitest run",
     "preview": "electron-vite preview",
     "build:win": "electron-vite build && electron-builder --win",

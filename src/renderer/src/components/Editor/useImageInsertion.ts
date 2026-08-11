@@ -1,0 +1,110 @@
+import { useCallback, useRef } from 'react'
+import type { MutableRefObject } from 'react'
+
+export interface EditorImageHints {
+  docPath?: string
+  workspacePath?: string
+  imageHost?: { provider: 'local' | 'smms'; token: string }
+}
+
+interface UseImageInsertionOptions {
+  imageHintsRef: MutableRefObject<EditorImageHints | undefined>
+  insertMarkdown: (markdown: string) => void
+  notify: (message: string) => void
+}
+
+const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+
+const readAsDataUrl = (file: File): Promise<string | null> =>
+  new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+
+/**
+ * 串行保存粘贴或拖入的图片，保证 Markdown 中的插入顺序与用户选择顺序一致。
+ */
+export function useImageInsertion({
+  imageHintsRef,
+  insertMarkdown,
+  notify,
+}: UseImageInsertionOptions): {
+  handlePaste: (event: React.ClipboardEvent) => void
+  handleDrop: (event: React.DragEvent) => void
+  handleDragOver: (event: React.DragEvent) => void
+} {
+  const imageQueueRef = useRef<Promise<void>>(Promise.resolve())
+
+  const insertImageFileTask = useCallback(
+    async (file: File) => {
+      if (!window.desktopAPI) return
+      if (file.size > MAX_IMAGE_SIZE) {
+        notify('图片超过 20MB，无法插入')
+        return
+      }
+
+      const dataUrl = await readAsDataUrl(file)
+      if (!dataUrl) return
+
+      const host = imageHintsRef.current?.imageHost
+      if (host?.provider === 'smms' && host.token) {
+        const upload = await window.desktopAPI.document.uploadImage(dataUrl)
+        if (upload.ok && upload.data?.url) {
+          const alt = file.name.replace(/\.[^.]+$/, '')
+          insertMarkdown(`![${alt}](${upload.data.url})`)
+          return
+        }
+        notify('图床上传失败，已改为保存到本地')
+      }
+
+      const result = await window.desktopAPI.document.saveImage(dataUrl, imageHintsRef.current)
+      if (!result.ok || !result.data) return
+      const url = `mdimg:///${result.data.path.replace(/\\/g, '/')}`
+      insertMarkdown(`![${result.data.name}](${url})`)
+    },
+    [imageHintsRef, insertMarkdown, notify],
+  )
+
+  const insertImageFile = useCallback(
+    (file: File) => {
+      imageQueueRef.current = imageQueueRef.current
+        .then(() => insertImageFileTask(file))
+        .catch(() => {})
+    },
+    [insertImageFileTask],
+  )
+
+  const handlePaste = useCallback(
+    (event: React.ClipboardEvent) => {
+      const items = Array.from(event.clipboardData?.items ?? [])
+      const file = items.find((item) => item.type.startsWith('image/'))?.getAsFile()
+      if (!file) return
+      event.preventDefault()
+      insertImageFile(file)
+    },
+    [insertImageFile],
+  )
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
+        file.type.startsWith('image/'),
+      )
+      if (files.length === 0) return
+      event.preventDefault()
+      files.forEach(insertImageFile)
+    },
+    [insertImageFile],
+  )
+
+  const handleDragOver = useCallback((event: React.DragEvent) => {
+    const hasFile = Array.from(event.dataTransfer?.items ?? []).some(
+      (item) => item.kind === 'file',
+    )
+    if (hasFile) event.preventDefault()
+  }, [])
+
+  return { handlePaste, handleDrop, handleDragOver }
+}

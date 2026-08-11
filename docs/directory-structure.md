@@ -1,5 +1,9 @@
 # 目录结构
 
+> 2026-08-11：会话与草稿 Hook 位于 `src/renderer/src/hooks/`；编辑器图片与搜索模块位于 `src/renderer/src/components/Editor/`，并与 `plugins/` 中的 ProseMirror 插件分层。
+>
+> `hooks/` 新增 `useDocumentSessionPersistence.ts`、`useDraftPersistence.ts`、`useEditorViewState.ts`；`Editor/` 新增 `useImageInsertion.ts`、`searchController.ts` 与 `EditorOverlays.tsx`。
+
 > 更新基线：2026-08-11。以下是当前实际目录，不包含历史目标架构中的 `features/`、`core/`、`ports/` 或 Zustand slice。
 
 ```text

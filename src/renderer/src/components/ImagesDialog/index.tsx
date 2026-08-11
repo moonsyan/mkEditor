@@ -32,10 +32,21 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
   const loadImages = useCallback(async () => {
     if (!window.desktopAPI) return
     setLoading(true)
-    const res = await window.desktopAPI.workspace.listImages(dirs)
-    if (res.ok && res.data) setImages(res.data.images)
-    setLoading(false)
-  }, [dirs])
+    try {
+      const res = await window.desktopAPI.workspace.listImages(dirs)
+      if (res.ok && res.data) {
+        setImages(res.data.images)
+        return
+      }
+      setImages([])
+      onNotify?.('加载图片失败')
+    } catch {
+      setImages([])
+      onNotify?.('加载图片失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [dirs, onNotify])
 
   // 打开时加载
   useEffect(() => {

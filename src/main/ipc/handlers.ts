@@ -4,6 +4,7 @@ import type { Dirent } from 'fs'
 import { join, dirname, basename, sep, extname } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { Worker } from 'worker_threads'
 import iconv from 'iconv-lite'
 import { CHANNELS } from '../../shared/ipc/channels'
 import { getSetting, setSetting } from '../settings/settings-store'
@@ -18,16 +19,115 @@ const execFileAsync = promisify(execFile)
  */
 const searchLineCache = new Map<
   string,
-  { mtimeMs: number; size: number; lines: string[] }
+  { mtimeMs: number; size: number; lines: string[]; bytes: number }
 >()
 /** 缓存条目上限：超出时淘汰最早插入的条目（Map 保持插入顺序） */
 const SEARCH_CACHE_MAX = 1000
+/** 搜索行缓存总大小上限，防止大量中等大小 Markdown 长期占用主进程内存 */
+const SEARCH_CACHE_MAX_BYTES = 32 * 1024 * 1024
 /** 单文件超过该体积不入缓存，控制最坏内存占用（1000 × 512KB） */
 const SEARCH_CACHE_FILE_MAX = 512 * 1024
 /** 剪贴板/拖入图片的最大体积，与图床上传限制保持一致 */
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024
 /** 工作区搜索查询长度上限，避免正则与逐行匹配消耗失控 */
 const MAX_SEARCH_QUERY_LENGTH = 256
+/** 单个文件的正则匹配时间上限，防止灾难性回溯阻塞主进程 */
+const MAX_REGEX_FILE_TIME_MS = 500
+
+let searchLineCacheBytes = 0
+
+const WORKSPACE_REGEX_WORKER_SOURCE = `
+const { parentPort } = require('worker_threads')
+
+parentPort.on('message', ({ content, query, caseSensitive, limit }) => {
+  try {
+    const regex = new RegExp(query, caseSensitive ? '' : 'i')
+    const matches = []
+    const lines = content.split(/\\r?\\n/)
+    for (let index = 0; index < lines.length; index++) {
+      regex.lastIndex = 0
+      if (!regex.test(lines[index])) continue
+      matches.push({ line: index + 1, preview: lines[index].trim().slice(0, 120) })
+      if (matches.length >= limit) break
+    }
+    parentPort.postMessage({ ok: true, matches })
+  } catch (error) {
+    parentPort.postMessage({ ok: false, error: String(error) })
+  }
+})
+`
+
+interface WorkspaceRegexMatch {
+  line: number
+  preview: string
+}
+
+function searchRegexInWorker(
+  worker: Worker,
+  content: string,
+  query: string,
+  caseSensitive: boolean,
+  limit: number,
+): Promise<WorkspaceRegexMatch[]> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer)
+      worker.removeListener('message', handleMessage)
+      worker.removeListener('error', handleError)
+    }
+    const handleMessage = (result: {
+      ok?: boolean
+      matches?: WorkspaceRegexMatch[]
+      error?: string
+    }) => {
+      cleanup()
+      if (!result.ok) {
+        reject(new Error(result.error ?? 'REGEX_WORKER_ERROR'))
+        return
+      }
+      resolve(result.matches ?? [])
+    }
+    const handleError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      void worker.terminate()
+      reject(new Error('REGEX_TIMEOUT'))
+    }, MAX_REGEX_FILE_TIME_MS)
+
+    worker.once('message', handleMessage)
+    worker.once('error', handleError)
+    worker.postMessage({ content, query, caseSensitive, limit })
+  })
+}
+
+function cacheSearchLines(
+  path: string,
+  entry: { mtimeMs: number; size: number; lines: string[] },
+): void {
+  if (entry.size > SEARCH_CACHE_FILE_MAX || entry.size > SEARCH_CACHE_MAX_BYTES) return
+  const existing = searchLineCache.get(path)
+  if (existing) {
+    searchLineCacheBytes -= existing.bytes
+    searchLineCache.delete(path)
+  }
+
+  while (
+    searchLineCache.size >= SEARCH_CACHE_MAX ||
+    searchLineCacheBytes + entry.size > SEARCH_CACHE_MAX_BYTES
+  ) {
+    const oldest = searchLineCache.keys().next().value
+    if (oldest === undefined) break
+    const removed = searchLineCache.get(oldest)
+    if (removed) searchLineCacheBytes -= removed.bytes
+    searchLineCache.delete(oldest)
+  }
+
+  searchLineCache.set(path, { ...entry, bytes: entry.size })
+  searchLineCacheBytes += entry.size
+}
 
 /**
  * 自动探测编码读取文本（低优14）：先按 UTF-8 严格解码，
@@ -505,20 +605,22 @@ export function registerIpcHandlers(): void {
       const stem = extMatch ? base.slice(0, -ext.length) : base
       let name = base
       let target = join(args.dir, name)
-      let n = 2
-      while (n <= 1000) {
+      let available = false
+      for (let index = 1; index <= 1000; index++) {
+        name = index === 1 ? base : `${stem} ${index}${ext}`
+        target = join(args.dir, name)
         try {
           await stat(target)
-          name = `${stem} ${n}${ext}`
-          target = join(args.dir, name)
-          n++
         } catch {
-          break // 不存在，可用
+          available = true
+          break
         }
       }
+      if (!available) return { ok: false, error: { code: 'NAME_EXHAUSTED' } }
       try {
         const title = name.replace(/\.(md|markdown)$/i, '')
-        await writeFile(target, `# ${title}\n\n`, 'utf-8')
+        // 排他创建，防止检查后被其他进程抢先创建时覆盖对方文件。
+        await writeFile(target, `# ${title}\n\n`, { encoding: 'utf-8', flag: 'wx' })
         return { ok: true, data: { path: target, name } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -607,7 +709,10 @@ export function registerIpcHandlers(): void {
   // 列出指定目录下的图片文件（图片管理面板）
   ipcMain.handle(CHANNELS.FILE_LIST_IMAGES, async (_event, dirs: string[]) => {
     const images: { path: string; name: string; size: number }[] = []
+    const scanned = new Set<string>()
     for (const dir of dirs) {
+      if (scanned.has(dir)) continue
+      scanned.add(dir)
       try {
         const entries = await readdir(dir, { withFileTypes: true })
         for (const e of entries) {
@@ -656,10 +761,9 @@ export function registerIpcHandlers(): void {
           }
         }
         // 正则模式：先验证表达式合法性，非法时直接报错由渲染端提示
-        let re: RegExp | null = null
         if (args.regex) {
           try {
-            re = new RegExp(q, args.caseSensitive ? '' : 'i')
+            new RegExp(q, args.caseSensitive ? '' : 'i')
           } catch {
             return {
               ok: false,
@@ -681,34 +785,49 @@ export function registerIpcHandlers(): void {
         const needle = args.caseSensitive ? q : q.toLowerCase()
         const matches: { path: string; line: number; preview: string }[] = []
         let truncated = false
-        // 规模守卫：最多扫 500 个文件、单文件 2MB、总命中 200 条
-        for (const p of paths.slice(0, 500)) {
-          const st = await stat(p).catch(() => null)
-          if (!st || st.size > 2 * 1024 * 1024) continue
-          // 索引缓存：mtime 与 size 均未变时复用已拆分的行，避免重复读盘解码
-          let lines: string[]
-          const cached = searchLineCache.get(p)
-          if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-            lines = cached.lines
-          } else {
-            const { content } = await readTextAutoEncoding(p)
-            // 兼容 CRLF：行尾残留 \r 会导致正则的行尾锚点（$）永不命中
-            lines = content.split(/\r?\n/)
-            if (st.size <= SEARCH_CACHE_FILE_MAX) {
-              if (searchLineCache.size >= SEARCH_CACHE_MAX) {
-                const oldest = searchLineCache.keys().next().value
-                if (oldest !== undefined) searchLineCache.delete(oldest)
+        const regexWorker = args.regex
+          ? new Worker(WORKSPACE_REGEX_WORKER_SOURCE, { eval: true })
+          : null
+        try {
+          // 规模守卫：最多扫 500 个文件、单文件 2MB、总命中 200 条
+          for (const p of paths.slice(0, 500)) {
+            const st = await stat(p).catch(() => null)
+            if (!st || st.size > 2 * 1024 * 1024) continue
+
+            if (regexWorker) {
+              const { content } = await readTextAutoEncoding(p)
+              const regexMatches = await searchRegexInWorker(
+                regexWorker,
+                content,
+                q,
+                Boolean(args.caseSensitive),
+                200 - matches.length,
+              )
+              for (const match of regexMatches) {
+                matches.push({ path: p, ...match })
               }
-              searchLineCache.set(p, { mtimeMs: st.mtimeMs, size: st.size, lines })
+              if (matches.length >= 200) {
+                truncated = true
+                break
+              }
+              continue
             }
-          }
-          for (let i = 0; i < lines.length; i++) {
-            const hit = re
-              ? re.test(lines[i])
-              : (args.caseSensitive ? lines[i] : lines[i].toLowerCase()).includes(
-                  needle,
-                )
-            if (hit) {
+
+            // 索引缓存：mtime 与 size 均未变时复用已拆分的行，避免重复读盘解码
+            let lines: string[]
+            const cached = searchLineCache.get(p)
+            if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+              lines = cached.lines
+            } else {
+              const { content } = await readTextAutoEncoding(p)
+              lines = content.split(/\r?\n/)
+              if (st.size <= SEARCH_CACHE_FILE_MAX) {
+                cacheSearchLines(p, { mtimeMs: st.mtimeMs, size: st.size, lines })
+              }
+            }
+            for (let i = 0; i < lines.length; i++) {
+              const candidate = args.caseSensitive ? lines[i] : lines[i].toLowerCase()
+              if (!candidate.includes(needle)) continue
               matches.push({
                 path: p,
                 line: i + 1,
@@ -719,10 +838,23 @@ export function registerIpcHandlers(): void {
                 break
               }
             }
+            if (truncated) break
           }
-          if (truncated) break
+          return { ok: true, data: { matches, truncated } }
+        } catch (err) {
+          if (err instanceof Error && err.message === 'REGEX_TIMEOUT') {
+            return {
+              ok: false,
+              error: {
+                code: 'REGEX_TIMEOUT',
+                message: '正则表达式匹配超时，请简化表达式',
+              },
+            }
+          }
+          throw err
+        } finally {
+          void regexWorker?.terminate()
         }
-        return { ok: true, data: { matches, truncated } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
       }

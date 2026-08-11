@@ -1,5 +1,18 @@
 # 组件指南
 
+> 2026-08-11 更新：`App.tsx` 的视图偏好、会话写入与草稿防抖已分别交给 Hook；`Editor/index.tsx` 只保留 Milkdown 生命周期、DOM 事件委托和命令编排。
+
+## 本轮拆分
+
+- `hooks/useEditorViewState.ts`：编辑器外观、视图和设置弹窗状态。
+- `hooks/useDocumentSessionPersistence.ts`：仅持久化真实文件标签、激活文档和工作区；新窗口不会覆盖主窗口会话。
+- `hooks/useDraftPersistence.ts`：草稿延迟写入，并在标签切换时补写最后一次输入。
+- `components/Editor/useImageInsertion.ts`：图片大小校验、图床降级、本地写入与串行插入队列。
+- `components/Editor/searchController.ts`：搜索高亮、跳转、替换当前项、全部替换和清理。
+- `components/Editor/EditorOverlays.tsx`：代码块和表格悬浮工具，以及全屏代码预览的视图层。
+
+代码块采用紧凑排版：正文行高为 `1.55`，无语言标识时不预留标题区；启用语言标识或行号后，标题区、行号和代码正文使用同一垂直基线。
+
 > 更新基线：2026-08-11。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
 
 ## 组件架构
@@ -201,7 +214,7 @@ interface SearchBarProps {
 }
 ```
 
-> 搜索引擎实现在 Editor 组件（startSearch / searchNext / replaceCurrent / replaceAllMatches / endSearch），基于 PluginKey + DecorationSet，SearchBar 只负责 UI。
+> 搜索状态与高亮插件位于 `Editor/plugins/searchHighlight.ts`，命令控制器位于 `Editor/searchController.ts`；`EditorHandle` 转发 startSearch / searchNext / replaceCurrent / replaceAllMatches / endSearch，SearchBar 只负责 UI。
 
 ---
 
@@ -312,6 +325,18 @@ interface HelpDialogProps {
 ```typescript
 usePersistedSetting<T>(key: string, value: T, readyRef: Ref<boolean>, debounceMs?: number): void
 ```
+
+### useDocumentSessionPersistence
+
+**路径**：`hooks/useDocumentSessionPersistence.ts`
+
+写入当前真实文件标签、激活文档和工作区。写入前去重并限制为 200 项，`#fresh` 新窗口不会改写主窗口会话。
+
+### useDraftPersistence
+
+**路径**：`hooks/useDraftPersistence.ts`
+
+当前文档内容在 1 秒后写入草稿；若用户在防抖期间切换标签，会立即补写旧标签最后一次输入。它同时提供关闭窗口前的强制草稿写入，保存、重命名、删除或确认关闭后由调用方清理对应草稿。
 
 ### useRecentFiles
 
