@@ -197,8 +197,19 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
               new Promise<void>((resolve) => {
                 // 延后到下一个事件循环，避免在 dispatch 期间重建编辑器状态
                 setTimeout(() => {
-                  ed.use(m.math)
-                  st.mathLoaded = true
+                  try {
+                    if (ed.status !== EditorStatus.Created) {
+                      resolve()
+                      return
+                    }
+                    ed.use(m.math)
+                    st.mathLoaded = true
+                  } catch {
+                    st.mathPromise = null
+                    notifyRef.current?.('公式渲染加载失败，将在下次操作时重试')
+                    resolve()
+                    return
+                  }
                   // 重新解析当前文档，让已存在的公式生效
                   setTimeout(() => {
                     try {
@@ -206,14 +217,23 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
                       ed.action(replaceAll(md))
                     } catch {
                       /* 编辑器销毁等异常不影响主流程 */
+                    } finally {
+                      try {
+                        richRenderRef.current?.()
+                      } catch {
+                        /* 预览刷新失败不应阻塞插件加载状态释放 */
+                      } finally {
+                        resolve()
+                      }
                     }
-                    richRenderRef.current?.()
-                    resolve()
                   }, 50)
                 }, 0)
               }),
           )
-          .catch(() => {})
+          .catch(() => {
+            st.mathPromise = null
+            notifyRef.current?.('公式渲染加载失败，将在下次操作时重试')
+          })
       }
       if (
         !st.diagramLoaded &&
@@ -225,25 +245,45 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             (m) =>
               new Promise<void>((resolve) => {
                 setTimeout(() => {
-                  ed.use(m.diagram)
-                  st.diagramLoaded = true
+                  try {
+                    if (ed.status !== EditorStatus.Created) {
+                      resolve()
+                      return
+                    }
+                    ed.use(m.diagram)
+                    st.diagramLoaded = true
+                  } catch {
+                    st.diagramPromise = null
+                    notifyRef.current?.('图表渲染加载失败，将在下次操作时重试')
+                    resolve()
+                    return
+                  }
                   setTimeout(() => {
                     try {
                       const md = ed.action(getMarkdown())
                       ed.action(replaceAll(md))
                     } catch {
                       /* 同上 */
+                    } finally {
+                      // Mermaid SVG 为异步渲染，多等一拍再通知
+                      setTimeout(() => {
+                        try {
+                          richRenderRef.current?.()
+                        } catch {
+                          /* 同上 */
+                        } finally {
+                          resolve()
+                        }
+                      }, 120)
                     }
-                    // Mermaid SVG 为异步渲染，多等一拍再通知
-                    setTimeout(() => {
-                      richRenderRef.current?.()
-                      resolve()
-                    }, 120)
                   }, 50)
                 }, 0)
               }),
           )
-          .catch(() => {})
+          .catch(() => {
+            st.diagramPromise = null
+            notifyRef.current?.('图表渲染加载失败，将在下次操作时重试')
+          })
       }
     }
 
