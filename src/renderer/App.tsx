@@ -1279,18 +1279,45 @@ export default function App(): JSX.Element {
     }
     const { path, name } = result.data
     const newId = `file-${path}`
-    const targetAlreadyOpen =
-      newId !== oldId && openFilesRef.current.some((file) => file.id === newId)
+    const targetFile =
+      newId !== oldId
+        ? openFilesRef.current.find((file) => file.id === newId)
+        : undefined
+    const targetAlreadyOpen = Boolean(targetFile)
+    const retainUnsavedTarget = Boolean(targetFile && savedMap[newId] === false)
+    const retainedTargetId = retainUnsavedTarget ? `untitled-${untitledCounter++}` : ''
+    const retainedTargetName = retainUnsavedTarget
+      ? `${targetFile!.name.replace(/\.(md|markdown)$/i, '')} 未保存副本.md`
+      : ''
+    const retainedTargetContent = retainUnsavedTarget ? contents[newId] ?? '' : ''
+    const retainedTargetBaseline = retainUnsavedTarget
+      ? INITIAL_OR_SAVED.current[newId] ?? ''
+      : ''
     const modifiedTime = result.data.modifiedTime || Date.now()
 
     // 文件身份以磁盘路径为准。另存为后若仍沿用 untitled-/旧路径 ID，
     // 从工作区再次打开同一文件会生成重复标签，重命名和移动也无法命中它。
+    if (retainUnsavedTarget) {
+      // 保存对话框只感知磁盘文件，无法得知另一个已打开标签中的未保存内容。
+      // 目标路径被覆盖后，把该标签转为无路径副本，避免内容被静默丢弃。
+      INITIAL_OR_SAVED.current[retainedTargetId] = retainedTargetBaseline
+    }
     INITIAL_OR_SAVED.current[newId] = content
     if (newId !== oldId) delete INITIAL_OR_SAVED.current[oldId]
     const nextOpenFiles = (() => {
       const current = openFilesRef.current
       if (newId === oldId) {
         return current.map((file) => (file.id === oldId ? { ...file, path, name } : file))
+      }
+      if (targetAlreadyOpen && retainUnsavedTarget) {
+        return current.flatMap((file) => {
+          if (file.id === oldId) return []
+          if (file.id !== newId) return [file]
+          return [
+            { id: newId, name, path },
+            { ...file, id: retainedTargetId, name: retainedTargetName, path: undefined, preview: false },
+          ]
+        })
       }
       if (targetAlreadyOpen) return current.filter((file) => file.id !== oldId)
       return current.map((file) =>
@@ -1303,11 +1330,13 @@ export default function App(): JSX.Element {
     setContents((prev) => {
       const next = { ...prev, [newId]: content }
       if (newId !== oldId) delete next[oldId]
+      if (retainUnsavedTarget) next[retainedTargetId] = retainedTargetContent
       return next
     })
     setSavedMap((prev) => {
       const next = { ...prev, [newId]: true }
       if (newId !== oldId) delete next[oldId]
+      if (retainUnsavedTarget) next[retainedTargetId] = false
       return next
     })
     // 优先用主进程返回的真实落盘 mtime，缺失时降级用当前时间（下次保存用于冲突检测）
@@ -1328,8 +1357,13 @@ export default function App(): JSX.Element {
     setDocTitle(name)
     void clearDraft(oldId)
     if (newId !== oldId) void clearDraft(newId)
+    if (retainUnsavedTarget) {
+      void saveDraft(retainedTargetId, retainedTargetContent).catch(() => {})
+      setToast('已覆盖目标文件，原未保存内容已保留为副本')
+      return
+    }
     if (targetAlreadyOpen) setToast('已覆盖并切换到已打开的同名文件')
-  }, [activeFileId, contents, clearDraft])
+  }, [activeFileId, contents, savedMap, clearDraft, saveDraft])
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)

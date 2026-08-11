@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { isImeComposing } from '../../lib/keyboard'
 import { toMdimgUrl } from '../../lib/image-path'
 
@@ -31,13 +31,17 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [preview, setPreview] = useState<ImageItem | null>(null)
+  const loadSeqRef = useRef(0)
 
   const loadImages = useCallback(async () => {
     if (!window.desktopAPI) return
+    const seq = ++loadSeqRef.current
     setLoading(true)
     setTruncated(false)
+    setPreview(null)
     try {
       const res = await window.desktopAPI.workspace.listImages(dirs)
+      if (seq !== loadSeqRef.current) return
       if (res.ok && res.data) {
         setImages(res.data.images)
         setTruncated(res.data.truncated)
@@ -47,17 +51,27 @@ export function ImagesDialog({ open, onClose, dirs, onNotify }: ImagesDialogProp
       setTruncated(false)
       onNotify?.('加载图片失败')
     } catch {
+      if (seq !== loadSeqRef.current) return
       setImages([])
       setTruncated(false)
       onNotify?.('加载图片失败')
     } finally {
-      setLoading(false)
+      if (seq === loadSeqRef.current) setLoading(false)
     }
   }, [dirs, onNotify])
 
-  // 打开时加载
+  // 关闭或切换图片来源时作废旧请求，避免异步结果覆盖当前面板。
   useEffect(() => {
-    if (open) void loadImages()
+    if (!open) {
+      loadSeqRef.current += 1
+      setLoading(false)
+      setPreview(null)
+      return
+    }
+    void loadImages()
+    return () => {
+      loadSeqRef.current += 1
+    }
   }, [open, loadImages])
 
   // Esc 关闭（先关预览再关面板）

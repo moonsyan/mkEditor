@@ -83,8 +83,22 @@ export function WorkspaceSearchDialog({
   const searchSeqRef = useRef(0)
 
   useEffect(() => {
-    if (open) inputRef.current?.focus()
-  }, [open])
+    // 关闭或切换工作区时作废进行中的请求，避免旧搜索结果重新显示。
+    searchSeqRef.current += 1
+    if (!open) {
+      setLoading(false)
+      setMatches([])
+      setTruncated(false)
+      setError('')
+      setSearched(false)
+      return
+    }
+    setMatches([])
+    setTruncated(false)
+    setError('')
+    setSearched(false)
+    inputRef.current?.focus()
+  }, [open, workspacePath])
 
   // Esc 关闭
   useEffect(() => {
