@@ -7,6 +7,7 @@
 ```bash
 npm ci
 npm run dev
+npm run test
 npm run build
 npm run preview
 npm run build:win
@@ -32,7 +33,8 @@ PowerShell 环境若因执行策略拒绝 `npm.ps1`，使用 `npm.cmd run build`
 2. 文件保存必须保持 mtime 冲突检测和编码错误处理。
 3. 图片导入单张上限为 20MB；工作区搜索关键词上限为 256 个字符。
 4. 主题修改至少检查 default、dark、ocean、rose 四套主题。
-5. 运行 `npm run build`；修改交互、文件或编辑器功能时，再运行 `npm run dev` 完成冒烟验证。
+5. 修改标签、保存状态或快捷键时，先运行 `npm run test`；再运行 `npm run build`。
+6. 修改交互、文件或编辑器功能时，运行 `npm run dev` 完成冒烟验证；覆盖打开、编辑、切换、关闭、恢复原文和中文输入法候选词操作。
 
 ## 不应直接修改的内容
 

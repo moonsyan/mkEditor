@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test": "vitest run",
     "preview": "electron-vite preview",
     "build:win": "electron-vite build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
@@ -79,6 +80,7 @@
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   }
 }

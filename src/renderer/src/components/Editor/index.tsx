@@ -22,6 +22,7 @@ import {
   setAlignCommand,
 } from '@milkdown/kit/preset/gfm'
 import { deleteRow, deleteColumn, deleteTable } from '@milkdown/kit/prose/tables'
+import { isImeComposing } from '../../lib/keyboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { prism } from '@milkdown/plugin-prism'
@@ -497,6 +498,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /** 编辑区键盘拦截：方向键退出代码块 */
     const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (isImeComposing(e.nativeEvent)) return
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       if (e.key === 'ArrowDown' && exitCodeBlock('down')) e.preventDefault()
       else if (e.key === 'ArrowUp' && exitCodeBlock('up')) e.preventDefault()

@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react'
 import type { DemoFolder } from '../../data/demo-files'
 import type { FolderTreeNode } from '../../../../preload/api'
+import { parseOutline, type OutlineNode } from '../../lib/outline'
 
 /** 打开中的文档（含真实文件的磁盘路径） */
 export interface OpenFile {
@@ -89,29 +90,6 @@ function FileIcon(): JSX.Element {
   )
 }
 
-/* ==================== 大纲模型 ==================== */
-
-interface OutlineNode {
-  idx: number
-  level: number
-  text: string
-  children: OutlineNode[]
-}
-
-/** 按标题层级构建大纲树（h2 挂在最近的 h1 下，以此类推） */
-function buildOutlineTree(headings: { level: number; text: string }[]): OutlineNode[] {
-  const root: OutlineNode[] = []
-  const stack: OutlineNode[] = []
-  headings.forEach((h, idx) => {
-    const node: OutlineNode = { idx, level: h.level, text: h.text, children: [] }
-    while (stack.length && stack[stack.length - 1].level >= h.level) stack.pop()
-    if (stack.length) stack[stack.length - 1].children.push(node)
-    else root.push(node)
-    stack.push(node)
-  })
-  return root
-}
-
 export function Sidebar({
   demoTree,
   demoFileNames,
@@ -130,6 +108,7 @@ export function Sidebar({
   onMoveFile,
   onOpenInNewWindow,
 }: SidebarProps): JSX.Element {
+  const deferredContent = useDeferredValue(content)
   const [activeTab, setActiveTab] = useState<'files' | 'outline'>('files')
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
   const [collapsedHeadings, setCollapsedHeadings] = useState<Set<number>>(new Set())
@@ -223,22 +202,11 @@ export function Sidebar({
 
   /* ==================== 大纲数据 ==================== */
 
-  // 从 Markdown 提取标题（跳过代码块内的 #，与编辑器实际渲染保持一致）
-  const outlineTree = useMemo<OutlineNode[]>(() => {
-    const headings: { level: number; text: string }[] = []
-    let inFence = false
-    for (const line of content.split('\n')) {
-      if (/^\s*```/.test(line)) {
-        inFence = !inFence
-        continue
-      }
-      if (inFence) continue
-      // 支持引用块内标题（`> # x`，可多层），与编辑器解析及 DOM 顺序对齐
-      const match = line.match(/^\s*(?:>\s*)*(#{1,4})\s+(.+)$/)
-      if (match) headings.push({ level: match[1].length, text: match[2] })
-    }
-    return buildOutlineTree(headings)
-  }, [content])
+  // 长文档输入时延后刷新大纲，保持编辑器输入优先。
+  const outlineTree = useMemo<OutlineNode[]>(
+    () => parseOutline(deferredContent),
+    [deferredContent],
+  )
 
   const toggleHeading = (idx: number) => {
     setCollapsedHeadings((prev) => {

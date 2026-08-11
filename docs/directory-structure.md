@@ -18,7 +18,7 @@ src/
     src/
       components/             编辑器、侧栏、菜单、对话框等 UI
       hooks/                  可复用 React 状态逻辑
-      lib/                    草稿、图片路径、PDF、统计等纯工具
+      lib/                    草稿、标签状态、键盘、图片路径、PDF、统计等纯工具及其单元测试
       data/                   演示文件与默认快捷键
       styles/                 全局、主题与组件 CSS
   shared/ipc/channels.ts      跨进程 IPC 常量
@@ -32,5 +32,6 @@ resources/                    图标等发布资源
 - React 组件目录使用 PascalCase，入口为 `index.tsx`；其专属样式放在 `styles/components/`。
 - 编辑器扩展放在 `components/Editor/plugins/`，并由 `Editor/index.tsx` 集中注册。
 - 可复用 React 生命周期逻辑放 `hooks/`；不依赖 React 的转换与数据逻辑放 `lib/`。
+- `lib/` 中的 `*.test.ts` 使用 Vitest 运行；标签打开、编辑、切换、关闭与恢复原文，以及大纲解析的长文档路径必须优先在此覆盖。
 - 新 IPC 通道先写入 `shared/ipc/channels.ts`，再同步实现 main handler、preload API 和 `api.d.ts`。
 - `out/`、`release/`、`node_modules/` 是生成目录，不提交也不作为源码修改位置。

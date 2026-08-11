@@ -28,6 +28,14 @@ import type { DraftMap } from './src/lib/drafts'
 import { rollStatsDate, EMPTY_STATS } from './src/lib/stats'
 import { injectToc } from './src/lib/pdf'
 import { toEditorImages, toStoredImages } from './src/lib/image-path'
+import {
+  findDiscardablePreview,
+  getNeighborTabId,
+  isDocumentDirty,
+  pinPreviewOpenFile,
+  requiresCloseConfirmation,
+} from './src/lib/document-tabs'
+import { isImeComposing } from './src/lib/keyboard'
 import { usePersistedSetting } from './src/hooks/usePersistedSetting'
 import { useWritingStats } from './src/hooks/useWritingStats'
 import { useRecentFiles } from './src/hooks/useRecentFiles'
@@ -884,12 +892,8 @@ export default function App(): JSX.Element {
   const pinPreviewTab = useCallback((fileId: string) => {
     const previewFile = openFilesRef.current.find((file) => file.id === fileId)
     if (!previewFile?.preview) return
-    openFilesRef.current = openFilesRef.current.map((file) =>
-      file.id === fileId ? { ...file, preview: false } : file,
-    )
-    setOpenFiles((prev) =>
-      prev.map((file) => (file.id === fileId ? { ...file, preview: false } : file)),
-    )
+    openFilesRef.current = pinPreviewOpenFile(openFilesRef.current, fileId)
+    setOpenFiles((prev) => pinPreviewOpenFile(prev, fileId))
   }, [])
 
   const handleEditorChange = useCallback((md: string) => {
@@ -916,11 +920,11 @@ export default function App(): JSX.Element {
     }
     setContents((prev) => ({ ...prev, [fileId]: stored }))
     setSavedMap((prev) => {
-      const isSaved = stored === INITIAL_OR_SAVED.current[fileId]
+      const isSaved = !isDocumentDirty(stored, INITIAL_OR_SAVED.current[fileId] ?? '')
       if (prev[fileId] === isSaved) return prev
       return { ...prev, [fileId]: isSaved }
     })
-    if (stored !== INITIAL_OR_SAVED.current[fileId]) {
+    if (isDocumentDirty(stored, INITIAL_OR_SAVED.current[fileId] ?? '')) {
       // 预览标签一旦被编辑就自动固定，下一次侧栏单击不会替换它。
       pinPreviewTab(fileId)
     }
@@ -938,9 +942,7 @@ export default function App(): JSX.Element {
 
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
   const discardPreviewTab = useCallback((nextFileId: string) => {
-    const previous = openFilesRef.current.find(
-      (file) => file.preview && file.id !== nextFileId,
-    )
+    const previous = findDiscardablePreview(openFilesRef.current, nextFileId)
     if (!previous) return
     openFilesRef.current = openFilesRef.current.filter((file) => file.id !== previous.id)
     setOpenFiles((prev) => prev.filter((file) => file.id !== previous.id))
@@ -1654,11 +1656,12 @@ img{max-width:100%}
       const list = openFiles
       const idx = list.findIndex((f) => f.id === id)
       if (idx === -1) return
-      const neighbor = list[idx + 1] ?? list[idx - 1] ?? null
-      if (savedMap[id] === false) {
+      const neighborId = getNeighborTabId(list, id)
+      if (requiresCloseConfirmation(savedMap, id)) {
         const name = list[idx]?.name ?? '未命名文档'
         if (!window.confirm(`「${name}」有未保存的修改，确定关闭该标签页吗？`)) return
       }
+      openFilesRef.current = openFilesRef.current.filter((file) => file.id !== id)
       setOpenFiles((prev) => prev.filter((f) => f.id !== id))
       setContents((prev) => {
         const next = { ...prev }
@@ -1676,7 +1679,7 @@ img{max-width:100%}
       void clearDraft(id)
       if (activeFileId === id) {
         // 关掉最后一个标签页后不再自动新建空白文档：进入"开始"界面（左侧文件夹树保留）
-        if (neighbor) switchFile(neighbor.id)
+        if (neighborId) switchFile(neighborId)
       }
     },
     [openFiles, savedMap, activeFileId, switchFile, clearDraft],
@@ -2094,6 +2097,18 @@ img{max-width:100%}
   const handleAction = useCallback(
     (action: string) => {
       const ed = editorRef.current
+      const shouldFocusEditor = ![
+        'find',
+        'replace',
+        'wsSearch',
+        'images',
+        'exportPdf',
+        'shortcuts',
+        'markdown',
+        'about',
+        'stats',
+        'settings',
+      ].includes(action)
       switch (action) {
         // 文件
         case 'new': handleNew(); break
@@ -2168,7 +2183,7 @@ img{max-width:100%}
           }
           break
       }
-      ed?.focus()
+      if (shouldFocusEditor) ed?.focus()
     },
     [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleExportHtml, handleExportPdf, handleExportMarkdown, handleExportPandoc, openOutlinePanel, centerCaret],
   )
@@ -2177,6 +2192,7 @@ img{max-width:100%}
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (isImeComposing(e)) return
       const combo = comboFromEvent(e)
       if (!combo) return
       const action = shortcutLookupRef.current[combo]
