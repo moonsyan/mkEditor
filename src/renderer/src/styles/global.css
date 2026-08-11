@@ -117,6 +117,10 @@ html[data-platform='darwin'] .topbar {
 }
 .act-btn:hover { background: var(--bg-hover); color: var(--text-1); }
 .act-btn.active { color: var(--accent); background: var(--accent-bg); }
+.act-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .act-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ====== Workspace ====== */
@@ -248,6 +252,11 @@ html[data-platform='darwin'] .topbar {
   transition: left 250ms var(--ease), opacity 150ms;
 }
 .sidebar-toggle:hover { opacity: 1; }
+.sidebar-toggle:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .sidebar-toggle svg { width: 10px; height: 10px; stroke: var(--text-3); fill: none; stroke-width: 2.5; transition: transform 200ms var(--ease); }
 .sidebar-toggle.flipped { left: 0; }
 .sidebar-toggle.flipped svg { transform: rotate(180deg); }

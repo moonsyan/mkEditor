@@ -2460,13 +2460,15 @@ img{max-width:100%}
             <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" /></svg>
           </button>
           <ThemeSwitcher currentTheme={theme} onThemeChange={setTheme} />
-          <div
+          <button
+            type="button"
             className={`act-btn ${settingsOpen ? 'active' : ''}`}
             onClick={() => setSettingsOpen(true)}
+            aria-label="打开设置"
             title="设置"
           >
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></svg>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -2500,12 +2502,16 @@ img{max-width:100%}
             onOpenInNewWindow={handleOpenInNewWindow}
           />
         )}
-        <div
+        <button
+          type="button"
           className={`sidebar-toggle ${sidebarCollapsed ? 'flipped' : ''}`}
           onClick={() => setSidebarCollapsed((v) => !v)}
+          aria-label={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+          aria-pressed={!sidebarCollapsed}
+          title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
         >
           <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
-        </div>
+        </button>
         {/* 侧栏宽度拖拽条 */}
         {!sidebarCollapsed && (
           <div className="sidebar-resizer" onMouseDown={startSidebarResize} />
