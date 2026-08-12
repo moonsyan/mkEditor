@@ -32,7 +32,7 @@ jobs:
         run: npm run build
 
       - name: Package (NSIS)
-        run: npx electron-builder --win --config package.json
+        run: npx electron-builder --win --config package.json --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -40,7 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MarkdownSoft-win
-          path: release/${{ github.event.repository.default_branch }}/MarkdownSoft-Setup-*.exe
+          path: release/*/MarkdownSoft-Setup-*.exe
           retention-days: 7
 
   # ── macOS ────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ jobs:
         run: npm run build
 
       - name: Package (DMG)
-        run: npx electron-builder --mac --config package.json
+        run: npx electron-builder --mac --config package.json --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -69,7 +69,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MarkdownSoft-mac
-          path: release/${{ github.event.repository.default_branch }}/**/*.dmg
+          path: release/*/*.dmg
           retention-days: 7
 
   # ── Linux ────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ jobs:
         run: npm run build
 
       - name: Package (AppImage)
-        run: npx electron-builder --linux --config package.json
+        run: npx electron-builder --linux --config package.json --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -103,7 +103,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MarkdownSoft-linux
-          path: release/${{ github.event.repository.default_branch }}/**/*.AppImage
+          path: release/*/*.AppImage
           retention-days: 7
 
   # ── 创建 Release（等三个平台都构建完成）────────────────────────────────
@@ -120,9 +120,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.exe
-          files: artifacts/**/*.dmg
-          files: artifacts/**/*.AppImage
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
           draft: true          # 先创建草稿， review 后再发布
           generate_release_notes: true
         env:
