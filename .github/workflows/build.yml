@@ -31,7 +31,7 @@ jobs:
         run: npm run build
 
       - name: Package (NSIS)
-        run: npx electron-builder --win --config package.json --publish never
+        run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -59,7 +59,7 @@ jobs:
         run: npm run build
 
       - name: Package (DMG)
-        run: npx electron-builder --mac --config package.json --publish never
+        run: npx electron-builder --mac --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -92,7 +92,7 @@ jobs:
         run: npm run build
 
       - name: Package (AppImage)
-        run: npx electron-builder --linux --config package.json --publish never
+        run: npx electron-builder --linux --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
