@@ -1,0 +1,22 @@
+/* ====== Ocean Theme (海雾) ====== */
+[data-theme="ocean"] {
+  --bg-app: #EFF4F9;
+  --bg-surface: #FFFFFF;
+  --bg-sidebar: #E6ECF3;
+  --bg-hover: rgba(0,80,170,.04);
+  --bg-active: rgba(0,80,170,.07);
+  --bg-menu: #FFFFFF;
+  --bg-code: #EDF2F7;
+  --bg-quote: #F5F8FC;
+  --text-1: #1A2A3A;
+  --text-2: #4A6070;
+  --text-3: #8A9AAA;
+  --text-4: #C0CAD4;
+  --accent: #2B6CB0;
+  --accent-h: #1E5A9E;
+  --accent-bg: rgba(43,108,176,.07);
+  --border: rgba(0,60,120,.08);
+  --border-m: rgba(0,60,120,.1);
+  --shadow-m: 0 8px 32px rgba(0,60,120,.08);
+  --shadow-s: 0 1px 3px rgba(0,60,120,.04);
+}

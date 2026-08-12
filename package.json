@@ -1,0 +1,86 @@
+{
+  "name": "markdown-soft-v3",
+  "version": "0.0.1",
+  "description": "A minimal, elegant Markdown editor for desktop",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "test": "vitest run",
+    "preview": "electron-vite preview",
+    "build:win": "electron-vite build && electron-builder --win",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:linux": "electron-vite build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.markdownsoft.v3",
+    "productName": "MarkdownSoft",
+    "directories": {
+      "output": "release/${version}",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "resources/icon.png"
+    ],
+    "win": {
+      "icon": "resources/icon.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "MarkdownSoft-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "icon": "resources/icon.png",
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "icon": "resources/icon.png",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://example.com/updates"
+    }
+  },
+  "dependencies": {
+    "@milkdown/kit": "^7.22.0",
+    "@milkdown/plugin-math": "^7.5.9",
+    "@milkdown/plugin-prism": "^7.22.0",
+    "@milkdown/react": "^7.22.0",
+    "electron-updater": "^6.8.9",
+    "iconv-lite": "^0.7.3",
+    "katex": "^0.18.2",
+    "mdast-util-footnote": "^1.1.1",
+    "mdast-util-frontmatter": "^2.0.1",
+    "mermaid": "^11.16.1",
+    "micromark-extension-footnote": "^1.0.2",
+    "micromark-extension-frontmatter": "^2.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
+  }
+}

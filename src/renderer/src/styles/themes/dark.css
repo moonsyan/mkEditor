@@ -1,0 +1,22 @@
+/* ====== Dark Theme (墨夜) ====== */
+[data-theme="dark"] {
+  --bg-app: #171614;
+  --bg-surface: #1C1B19;
+  --bg-sidebar: #1A1918;
+  --bg-hover: rgba(255,255,255,.04);
+  --bg-active: rgba(255,255,255,.07);
+  --bg-menu: #222120;
+  --bg-code: #222120;
+  --bg-quote: #1E1D1B;
+  --text-1: #E6E2DC;
+  --text-2: #A09B93;
+  --text-3: #6B675F;
+  --text-4: #3E3C38;
+  --accent: #C4B89E;
+  --accent-h: #D4C8AE;
+  --accent-bg: rgba(196,184,158,.1);
+  --border: rgba(255,255,255,.06);
+  --border-m: rgba(255,255,255,.08);
+  --shadow-m: 0 8px 32px rgba(0,0,0,.4);
+  --shadow-s: 0 1px 3px rgba(0,0,0,.2);
+}

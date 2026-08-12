@@ -1,0 +1,266 @@
+/* ====== Sidebar ====== */
+.sidebar {
+  width: var(--sidebar-w);
+  /* 跟随编辑区缩放同步（字体/图标/间距整体缩放） */
+  zoom: var(--editor-zoom, 1);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: width 250ms var(--ease), background var(--dur) var(--ease);
+  overflow: hidden;
+}
+.sidebar.collapsed { width: 0; border-right: none; }
+
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sidebar-tab {
+  flex: 1;
+  padding: 9px 0;
+  font-size: .72rem;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-bottom: 2px solid transparent;
+}
+.sidebar-tab:hover { color: var(--text-2); background: var(--bg-hover); }
+.sidebar-tab.active { color: var(--text-1); border-bottom-color: var(--accent); }
+
+.sidebar-body { flex: 1; overflow-y: auto; overflow-x: hidden; }
+.sidebar-body::-webkit-scrollbar { width: 4px; }
+.sidebar-body::-webkit-scrollbar-thumb { background: var(--text-4); border-radius: 2px; }
+
+.panel { padding: 8px 0; }
+.panel.active { display: block; }
+
+/* ====== 文件树行 ====== */
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  padding-right: 10px;
+  font-size: .78rem;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 80ms;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+.tree-row:hover { background: var(--bg-hover); color: var(--text-1); }
+.tree-row.active { background: var(--accent-bg); color: var(--accent); font-weight: 500; }
+
+/* 拖拽移动（U5）：拖动经过合法目标文件夹时的高亮 */
+.tree-row.drop-target {
+  background: var(--accent-bg);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+/* 拖动中的源节点降低存在感 */
+.tree-row:active { opacity: .85; }
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 层级引导线：每个祖先层级一条竖线 */
+.tree-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-m);
+  pointer-events: none;
+}
+
+/* 展开/收起箭头 */
+.tree-chevron {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  stroke: var(--text-3);
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms var(--ease);
+}
+.tree-chevron.open { transform: rotate(90deg); }
+
+/* 文件行箭头占位（与文件夹箭头对齐，形成层级缩进差） */
+.tree-chevron-slot {
+  width: 11px;
+  flex-shrink: 0;
+}
+
+/* 图标 */
+.tree-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tree-icon-folder { stroke: var(--accent); opacity: .85; }
+.tree-icon-file { stroke: var(--text-3); }
+.tree-row.active .tree-icon-file { stroke: var(--accent); }
+
+/* 分组小标题（外部文件等） */
+.tree-section-label {
+  font-weight: 600;
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text-4);
+  padding: 10px 12px 4px;
+}
+
+/* 空文件夹提示 */
+.tree-empty {
+  padding: 18px 14px;
+  font-size: .74rem;
+  color: var(--text-4);
+  line-height: 1.7;
+}
+
+/* 内联重命名输入框 */
+.tree-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: .76rem;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+}
+
+/* 右键上下文菜单 */
+.tree-ctx-menu {
+  position: fixed;
+  z-index: 700;
+  min-width: 140px;
+  padding: 4px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+  animation: ddIn 120ms var(--ease);
+}
+.tree-ctx-item {
+  padding: 6px 12px;
+  font-size: .76rem;
+  color: var(--text-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 80ms;
+}
+.tree-ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.tree-ctx-item.danger { color: #b06060; }
+.tree-ctx-item.danger:hover { background: rgba(176, 96, 96, .1); color: #a04c4c; }
+.tree-ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 6px;
+}
+
+/* ====== 大纲 ====== */
+.outline-root { padding: 2px 6px 12px; }
+
+.outline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: .78rem;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: background 80ms;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.outline-row:hover { background: var(--bg-hover); color: var(--text-1); }
+.outline-row:active { background: var(--bg-active); }
+/* 光标所在章节跟随高亮 */
+.outline-row.active {
+  background: var(--bg-active);
+  color: var(--accent);
+}
+
+.outline-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outline-h1 { font-weight: 600; font-size: .8rem; color: var(--text-1); }
+.outline-h2 { font-weight: 500; }
+.outline-h3 { font-size: .75rem; }
+.outline-h4 { font-size: .73rem; color: var(--text-3); }
+
+/* 折叠箭头 */
+.outline-caret {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+.outline-caret svg {
+  width: 9px;
+  height: 9px;
+  stroke: var(--text-3);
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 160ms var(--ease);
+}
+.outline-caret.open svg { transform: rotate(90deg); }
+.outline-caret:not(.outline-caret-empty):hover { background: var(--bg-active); }
+.outline-caret:not(.outline-caret-empty):hover svg { stroke: var(--text-1); }
+
+/* 子层级容器：左侧引导线（每嵌套一层多一条线） */
+.outline-sub {
+  margin-left: 14px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-m);
+}
+
+.outline-empty {
+  padding: 20px 12px;
+  font-size: .78rem;
+  color: var(--text-4);
+  text-align: center;
+}
+
+/* 已打开文件标记（未激活时显示小圆点） */
+.tree-open-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .6;
+  margin-left: 5px;
+  flex-shrink: 0;
+}

@@ -1,0 +1,22 @@
+/* ====== Rose Theme (玫砂) ====== */
+[data-theme="rose"] {
+  --bg-app: #FBF5F3;
+  --bg-surface: #FFFFFF;
+  --bg-sidebar: #F5EDED;
+  --bg-hover: rgba(160,80,80,.04);
+  --bg-active: rgba(160,80,80,.07);
+  --bg-menu: #FFFFFF;
+  --bg-code: #F8F0EE;
+  --bg-quote: #FDF6F4;
+  --text-1: #2D1F1F;
+  --text-2: #6B4F4F;
+  --text-3: #A88E8E;
+  --text-4: #D4C0C0;
+  --accent: #B06060;
+  --accent-h: #984848;
+  --accent-bg: rgba(176,96,96,.07);
+  --border: rgba(120,60,60,.07);
+  --border-m: rgba(120,60,60,.09);
+  --shadow-m: 0 8px 32px rgba(120,60,60,.07);
+  --shadow-s: 0 1px 3px rgba(120,60,60,.03);
+}

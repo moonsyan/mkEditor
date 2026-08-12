@@ -1,0 +1,12 @@
+/* ====== Theme Variables ====== */
+/* 所有主题共享的非颜色变量 */
+:root {
+  --radius: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --dur: 160ms;
+  --sidebar-w: 260px;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
