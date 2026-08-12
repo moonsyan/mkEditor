@@ -37,6 +37,7 @@ import {
 } from './src/lib/document-tabs'
 import { isEditableShortcutTarget, isImeComposing } from './src/lib/keyboard'
 import { shouldRestoreEditorFocus } from './src/lib/editor-focus'
+import { isCurrentEditorChange } from './src/lib/editor-sync'
 import { usePersistedSetting } from './src/hooks/usePersistedSetting'
 import { useWritingStats } from './src/hooks/useWritingStats'
 import { useRecentFiles } from './src/hooks/useRecentFiles'
@@ -67,7 +68,12 @@ import {
 import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
 import { resolveWikiTarget } from './src/lib/wiki-resolver'
 import { collectMdFiles } from './src/lib/wiki-resolver'
-import { parseFrontmatterYaml, replaceFrontmatter, extractFrontmatterRaw } from './src/lib/frontmatter-parser'
+import {
+  parseFrontmatterYaml,
+  setFrontmatterProperty,
+  deleteFrontmatterProperty,
+  extractFrontmatterRaw,
+} from './src/lib/frontmatter-parser'
 import { FrontmatterProperties } from './src/components/Editor/FrontmatterProperties'
 
 /** 每套主题对应的标题栏覆盖层颜色（Windows 系统窗口按钮区域） */
@@ -221,6 +227,20 @@ export default function App(): JSX.Element {
   /** 组合键 → 动作 反查表（keydown 中读 ref，避免频繁重建监听） */
   const shortcutLookupRef = useRef<Record<string, string>>({})
 
+  useEffect(() => {
+    if (!focusMode) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return
+      if (event.key !== 'Escape') return
+      if (searchMode !== 'none' || settingsOpen || helpView || imagesOpen || pdfOptsOpen || wsSearchOpen) {
+        return
+      }
+      setFocusMode(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [focusMode, searchMode, settingsOpen, helpView, imagesOpen, pdfOptsOpen, wsSearchOpen, setFocusMode])
+
   // 无打开文件（已全部关闭）时内容视为空，避免状态栏/大纲沿用上一份文档的残留内容
   const activeContent = openFiles.length > 0 ? (contents[activeFileId] ?? '') : ''
   // 大文档连续输入时，状态栏统计让出渲染优先级；文件 ID 与内容作为一个值延后，
@@ -274,6 +294,8 @@ export default function App(): JSX.Element {
   openFilesRef.current = openFiles
   /** 同一路径的文件树单击/双击只共享一次读取请求，避免慢磁盘下出现重复标签。 */
   const openingWorkspaceFilesRef = useRef(new Map<string, Promise<boolean>>())
+  /** 最后一次文件选择意图；较早的慢读取完成后不得反向抢占当前文件。 */
+  const latestWorkspaceSelectionRef = useRef('')
   const workspacePathRef = useRef<string | undefined>(undefined)
   workspacePathRef.current = workspace?.path
 
@@ -952,12 +974,6 @@ export default function App(): JSX.Element {
 
   // 记录每个文件"最后一次保存时"的内容，用于脏检查
   const INITIAL_OR_SAVED = useRef<Record<string, string>>({ ...INITIAL_CONTENTS })
-  /** 程序替换编辑器内容时的同步策略，区分首次加载与切换已有标签。 */
-  const editorSyncRef = useRef<{
-    fileId: string
-    mode: 'ignore' | 'initialize'
-  } | null>(null)
-
   /** 将预览标签升级为固定标签，并同步 React 状态与供同步回调读取的镜像。 */
   const pinPreviewTab = useCallback((fileId: string) => {
     const previewFile = openFilesRef.current.find((file) => file.id === fileId)
@@ -972,24 +988,11 @@ export default function App(): JSX.Element {
     const fileId = activeFileIdRef.current
     // 全部标签页关闭后编辑器处于隐藏态，丢弃此期间的任何回调，避免写入已移除的文件
     if (!openFilesRef.current.some((f) => f.id === fileId)) return
+    // Milkdown listener 的防抖回调可能晚于文档切换到达。旧回调不能按当前文件 ID 写入，
+    // 否则会把上一个文件的内容混入当前文件，随后撤销还可能继续放大这个错误。
+    if (!isCurrentEditorChange(md, editorRef.current?.getMarkdown() ?? null)) return
     // 存储前把 mdimg 绝对路径回写为相对路径（保证 .md 可移植）
     const stored = toStoredImages(md, dirOfFile(fileId))
-    const sync = editorSyncRef.current
-    if (sync?.fileId === fileId) {
-      editorSyncRef.current = null
-      if (sync.mode === 'initialize') {
-        // Milkdown 会规范化部分 Markdown。以规范化结果作为首次加载基线，
-        // 避免用户尚未编辑就被误判为“未保存”。
-        INITIAL_OR_SAVED.current[fileId] = stored
-        setContents((prev) =>
-          prev[fileId] === stored ? prev : { ...prev, [fileId]: stored },
-        )
-        setSavedMap((prev) =>
-          prev[fileId] === true ? prev : { ...prev, [fileId]: true },
-        )
-      }
-      return
-    }
     if (contentsRef.current[fileId] !== stored) {
       contentsRef.current = { ...contentsRef.current, [fileId]: stored }
     }
@@ -1009,12 +1012,26 @@ export default function App(): JSX.Element {
 
   /** 用于打开/切换文件的统一替换入口，避免程序性更新被当作用户输入。 */
   const replaceEditorContent = useCallback(
-    (fileId: string, content: string, mode: 'ignore' | 'initialize' = 'ignore') => {
+    (
+      fileId: string,
+      content: string,
+      mode: 'ignore' | 'initialize' | 'update' = 'ignore',
+    ) => {
       if (!editorRef.current?.isReady()) return
-      editorSyncRef.current = { fileId, mode }
+      if (mode === 'update') {
+        const stored = toStoredImages(content, dirOfFile(fileId))
+        contentsRef.current = { ...contentsRef.current, [fileId]: stored }
+        setContents((prev) => ({ ...prev, [fileId]: stored }))
+        const isSaved = !isDocumentDirty(
+          stored,
+          INITIAL_OR_SAVED.current[fileId] ?? '',
+        )
+        setSavedMap((prev) => ({ ...prev, [fileId]: isSaved }))
+        if (!isSaved) pinPreviewTab(fileId)
+      }
       editorRef.current.replaceContent(toEditorImages(content, dirOfFile(fileId)))
     },
-    [dirOfFile],
+    [dirOfFile, pinPreviewTab],
   )
 
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
@@ -1090,6 +1107,7 @@ export default function App(): JSX.Element {
   const switchFile = useCallback(
     (id: string) => {
       if (id === activeFileId) return
+      latestWorkspaceSelectionRef.current = ''
       // 防御：目标不在打开列表中不切换，避免激活文件悬空的幽灵状态
       if (!openFiles.some((f) => f.id === id)) return
       // 先让标题输入框失焦：确保标题编辑保存到旧文件，不会串到新文件
@@ -1160,6 +1178,7 @@ export default function App(): JSX.Element {
 
   const handleOpen = useCallback(async () => {
     if (!window.desktopAPI) return
+    latestWorkspaceSelectionRef.current = ''
     const result = await window.desktopAPI.document.open()
     if (!result.ok || !result.data) {
       if (result.error?.code === 'TOO_LARGE') {
@@ -1223,6 +1242,7 @@ export default function App(): JSX.Element {
   /** 点击工作区/外部磁盘文件：首次打开时读盘，之后直接切换；返回是否成功（工作区搜索带入等场景需感知失败） */
   const handleSelectWorkspaceFile = useCallback(
     async (path: string, pinned = true): Promise<boolean> => {
+      latestWorkspaceSelectionRef.current = path
       const id = `file-${path}`
       const existed = openFilesRef.current.find((file) => file.id === id)
       if (existed) {
@@ -1249,6 +1269,7 @@ export default function App(): JSX.Element {
           }
           return false
         }
+        if (latestWorkspaceSelectionRef.current !== path) return false
         // 异步读取期间，其他入口可能已先打开同一文件；此时复用已有标签。
         const openedMeanwhile = openFilesRef.current.find((file) => file.id === id)
         if (openedMeanwhile) {
@@ -2656,20 +2677,16 @@ img{max-width:100%}
                 show={true}
                 onToggle={() => setShowFrontmatterProps((v) => !v)}
                 onUpdateProperty={(key, value) => {
-                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? ''), [key]: value }
-                  const newMarkdown = replaceFrontmatter(activeContent, props)
-                  editorRef.current?.replaceContent(newMarkdown)
+                  const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                  replaceEditorContent(activeFileId, newMarkdown, 'update')
                 }}
                 onDeleteProperty={(key) => {
-                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? '') }
-                  delete props[key]
-                  const newMarkdown = replaceFrontmatter(activeContent, props)
-                  editorRef.current?.replaceContent(newMarkdown)
+                  const newMarkdown = deleteFrontmatterProperty(activeContent, key)
+                  replaceEditorContent(activeFileId, newMarkdown, 'update')
                 }}
                 onAddProperty={(key, value) => {
-                  const props = { ...parseFrontmatterYaml(extractFrontmatterRaw(activeContent)?.text ?? ''), [key]: value }
-                  const newMarkdown = replaceFrontmatter(activeContent, props)
-                  editorRef.current?.replaceContent(newMarkdown)
+                  const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                  replaceEditorContent(activeFileId, newMarkdown, 'update')
                 }}
               />
             )}

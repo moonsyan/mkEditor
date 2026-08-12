@@ -219,11 +219,20 @@ export const wikiAutocompletePlugin = $prose(() => {
           const $pos = sel.$from
           const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset)
           const bracketIdx = textBefore.lastIndexOf('[[')
-          if (bracketIdx < 0) return null
+          if (bracketIdx < 0) {
+            if (prev) return null
+            return prev
+          }
 
           const query = textBefore.slice(bracketIdx + 2)
-          if (query.includes(']]')) return null
-          if (query.length > 200) return null
+          if (query.includes(']]')) {
+            if (prev) return null
+            return prev
+          }
+          if (query.length > 200) {
+            if (prev) return null
+            return prev
+          }
 
           let inCodeOrFM = false
           for (let d = $pos.depth; d >= 0; d--) {
@@ -233,9 +242,19 @@ export const wikiAutocompletePlugin = $prose(() => {
               break
             }
           }
-          if (inCodeOrFM) return null
+          if (inCodeOrFM) {
+            if (prev) return null
+            return prev
+          }
 
-          return prev // 保持旧状态，由 view 层上报坐标
+          const from = sel.from - query.length - 2
+          const to = sel.from
+          return {
+            query,
+            from,
+            to,
+            coords: prev?.coords ?? { top: 0, left: 0, bottom: 0 },
+          }
         }
 
         return prev

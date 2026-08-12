@@ -24,22 +24,22 @@ function makeTree(files: string[]): FolderTreeNode[] {
     const result: FolderTreeNode[] = []
     // 子目录
     const subdirs = new Set<string>()
-    for (const [d] of byDir) {
+    byDir.forEach((_, d) => {
       if (d.startsWith(dir + '/') || (dir === '' && d.includes('/'))) {
         const topDir = dir ? d.slice(dir.length + 1).split('/')[0] : d.split('/')[0]
         if (!d.includes('/', dir ? dir.length + 1 : 0)) {
           subdirs.add(dir ? `${dir}/${topDir}` : topDir)
         }
       }
-    }
-    for (const sd of subdirs) {
+    })
+    Array.from(subdirs).forEach((sd) => {
       const name = sd.split('/').pop()!
       result.push({
         name,
         path: sd,
         children: build(sd),
       })
-    }
+    })
     // 当前目录的文件
     if (byDir.has(dir)) {
       for (const f of byDir.get(dir)!) {

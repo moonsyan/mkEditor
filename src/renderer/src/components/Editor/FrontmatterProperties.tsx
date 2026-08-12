@@ -39,9 +39,9 @@ export function FrontmatterProperties({
 
   const commitEdit = useCallback(
     (key: string) => {
-      const trimmed = editBuffer.trim()
-      if (trimmed && trimmed !== (properties?.[key] ?? '')) {
-        onUpdateProperty(key, trimmed)
+      const nextValue = editBuffer
+      if (nextValue !== (properties?.[key] ?? '')) {
+        onUpdateProperty(key, nextValue)
       }
       setEditingField(null)
       setEditBuffer('')
@@ -51,7 +51,7 @@ export function FrontmatterProperties({
 
   const commitAdd = useCallback(() => {
     const key = newKey.trim()
-    const val = newVal.trim()
+    const val = newVal
     if (key) {
       onAddProperty(key, val)
     }

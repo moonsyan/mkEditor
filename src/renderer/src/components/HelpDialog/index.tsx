@@ -62,6 +62,7 @@ const SHORTCUT_GROUPS: { title: string; items: [string, string, string?][] }[] =
     items: [
       ['Ctrl+J', '切换侧栏', 'toggleSidebar'],
       ['F11', '专注模式', 'focusMode'],
+      ['Esc', '退出专注模式'],
       ['Ctrl+Shift+L', '大纲面板', 'outline'],
       ['Ctrl+滚轮', '缩放编辑区'],
     ],

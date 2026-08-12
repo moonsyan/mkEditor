@@ -87,6 +87,8 @@ import { useImageInsertion, type EditorImageHints } from './useImageInsertion'
 export interface EditorHandle {
   /** 整体替换文档内容（切换文件时使用） */
   replaceContent: (markdown: string) => void
+  /** 获取当前编辑器状态对应的 Markdown；编辑器未就绪时返回 null */
+  getMarkdown: () => string | null
   /** 在光标处插入 Markdown 片段 */
   insertMd: (markdown: string) => void
   /** 执行 Milkdown 命令（如粗体、标题、表格） */
@@ -332,6 +334,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             options: {},
           })
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+            // listener 的 markdownUpdated 带有 200ms 防抖，App 会把该快照与
+            // 当前 EditorState 再核对，避免旧文件内容串入新文件。
             changeRef.current(markdown)
           })
         })
@@ -729,6 +733,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           convertWikiTextInDoc(view)
           // 清空折叠状态（兜底：replaceAll 解析失败时也把旧文档的折叠映射清除）
           view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
+        },
+        getMarkdown: () => {
+          const ed = ready()
+          return ed ? ed.action(getMarkdown()) : null
         },
         insertMd: (markdown) => {
           ready()?.action(insert(markdown))

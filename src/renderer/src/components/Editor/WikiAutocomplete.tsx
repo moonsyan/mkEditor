@@ -52,6 +52,33 @@ export function WikiAutocomplete({
     [suggestions, onSelect],
   )
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setActiveIndex((current) => Math.min(suggestions.length - 1, current + 1))
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveIndex((current) => Math.max(0, current - 1))
+        return
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        handleSelect(activeIndex)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeIndex, handleSelect, onClose, suggestions.length])
+
   if (suggestions.length === 0) return null
 
   return (

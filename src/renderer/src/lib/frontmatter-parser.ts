@@ -70,6 +70,37 @@ export function formatFrontmatterYaml(props: Record<string, string>): string {
     .join('\n')
 }
 
+function getLineBreak(text: string): '\r\n' | '\n' {
+  return text.includes('\r\n') ? '\r\n' : '\n'
+}
+
+function formatFrontmatterLine(key: string, value: string): string {
+  const needsQuotes =
+    /[:\n#"']/.test(value) ||
+    value.startsWith(' ') ||
+    value.endsWith(' ') ||
+    value.startsWith('- ') ||
+    value.startsWith('[') ||
+    value.startsWith('{')
+
+  if (needsQuotes) {
+    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    return `${key}: "${escaped}"`
+  }
+  return `${key}: ${value}`
+}
+
+function findFrontmatterKeyIndex(lines: string[], key: string): number {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line || line.startsWith('#')) continue
+    const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line)
+    if (!match) continue
+    if (match[1] === key) return i
+  }
+  return -1
+}
+
 /**
  * 从 Markdown 内容中提取 frontmatter 原始文本。
  * 返回 { text, start, end } 或 null。
@@ -77,13 +108,13 @@ export function formatFrontmatterYaml(props: Record<string, string>): string {
 export function extractFrontmatterRaw(
   markdown: string,
 ): { text: string; start: number; end: number } | null {
-  if (!markdown.startsWith('---')) return null
-  const endIdx = markdown.indexOf('\n---', 3)
-  if (endIdx < 0) return null
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(markdown)
+  if (!match) return null
+  const trailerLength = match[2]?.length ?? 0
   return {
-    text: markdown.slice(4, endIdx),
+    text: match[1],
     start: 0,
-    end: endIdx + 4,
+    end: match.index + match[0].length - trailerLength,
   }
 }
 
@@ -108,8 +139,61 @@ export function replaceFrontmatter(
   // 空属性：移除 frontmatter
   if (existing) {
     const rest = markdown.slice(existing.end)
-    return rest.startsWith('\n') ? rest.slice(1) : rest
+    if (rest.startsWith('\r\n')) return rest.slice(2)
+    if (rest.startsWith('\n')) return rest.slice(1)
+    return rest
   }
 
   return markdown
+}
+
+/**
+ * 更新 frontmatter 中的单个属性，尽量保留其余原始 YAML 行与注释。
+ */
+export function setFrontmatterProperty(
+  markdown: string,
+  key: string,
+  value: string,
+): string {
+  const existing = extractFrontmatterRaw(markdown)
+  const lineBreak = getLineBreak(markdown)
+  const nextLine = formatFrontmatterLine(key, value)
+
+  if (!existing) {
+    return `---${lineBreak}${nextLine}${lineBreak}---${lineBreak}${lineBreak}${markdown}`
+  }
+
+  const lines = existing.text.split(/\r?\n/)
+  const index = findFrontmatterKeyIndex(lines, key)
+  if (index >= 0) {
+    lines[index] = nextLine
+  } else {
+    lines.push(nextLine)
+  }
+  const replacement = `---${lineBreak}${lines.join(lineBreak)}${lineBreak}---`
+  return replacement + markdown.slice(existing.end)
+}
+
+/**
+ * 删除 frontmatter 中的单个属性，尽量保留其余原始 YAML 行与注释。
+ */
+export function deleteFrontmatterProperty(markdown: string, key: string): string {
+  const existing = extractFrontmatterRaw(markdown)
+  if (!existing) return markdown
+
+  const lineBreak = getLineBreak(markdown)
+  const lines = existing.text.split(/\r?\n/)
+  const index = findFrontmatterKeyIndex(lines, key)
+  if (index < 0) return markdown
+
+  lines.splice(index, 1)
+  if (lines.length === 0) {
+    const rest = markdown.slice(existing.end)
+    if (rest.startsWith('\r\n')) return rest.slice(2)
+    if (rest.startsWith('\n')) return rest.slice(1)
+    return rest
+  }
+
+  const replacement = `---${lineBreak}${lines.join(lineBreak)}${lineBreak}---`
+  return replacement + markdown.slice(existing.end)
 }
