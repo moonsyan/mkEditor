@@ -1,6 +1,6 @@
 # 架构说明
 
-> 更新基线：2026-08-11。当前应用未使用 Zustand；会话状态由 `App.tsx`、React state 与 `useRef` 镜像管理。
+> 更新基线：2026-08-12。当前应用未使用 Zustand；会话状态由 `App.tsx`、React state 与 `useRef` 镜像管理。
 
 ## 进程边界
 
@@ -38,6 +38,8 @@ Main (Electron/Node.js/文件系统/窗口)
 - `App.tsx`：打开文件、活动标签、脏状态、mtime、顶层弹窗与工作区快照。
 - 组件内部：输入框、展开状态等短生命周期 UI 状态。
 - 主进程：设置缓存、窗口状态与对系统资源的访问。
+
+文档切换复用 Milkdown 实例，但通过 `replaceAll(markdown, true)` 重建 `EditorState`，清空跨文档撤销历史。Milkdown 内容回调带有防抖，`App.tsx` 接收回调前必须用当前编辑器 Markdown 校验内容归属，防止旧文件快照写入新文件。
 
 ## 重构边界
 

@@ -1,6 +1,6 @@
 # 组件指南
 
-> 2026-08-11 更新：`App.tsx` 的视图偏好、会话写入与草稿防抖已分别交给 Hook；`Editor/index.tsx` 只保留 Milkdown 生命周期、DOM 事件委托和命令编排。
+> 2026-08-12 更新：`App.tsx` 的视图偏好、会话写入与草稿防抖已分别交给 Hook；`Editor/index.tsx` 只保留 Milkdown 生命周期、DOM 事件委托和命令编排。编辑器扩展与数据安全约束见 [编辑器扩展指南](./editor-extensions.md)，已修复问题见 [排障与缺陷记录](./troubleshooting.md)。
 
 ## 本轮拆分
 
@@ -13,7 +13,7 @@
 
 代码块采用紧凑排版：正文行高为 `1.55`，无语言标识时不预留标题区；启用语言标识或行号后，标题区、行号和代码正文使用同一垂直基线。
 
-> 更新基线：2026-08-11。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
+> 更新基线：2026-08-12。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
 
 > `App.tsx` 仍包含文档工作流与应用壳装配。继续重构时应先抽取工作区文件操作和动作分发 Hook，不应为了缩短文件而拆散保存、草稿、mtime 冲突与预览标签的同一业务链路。
 
@@ -28,7 +28,7 @@
 components/
 ├── Sidebar/        侧栏（文件树 + 大纲）
 ├── Editor/         Milkdown 编辑器（含命令式接口 + plugins/ 子插件）
-│   └── plugins/    编辑器插件（frontmatter / footnote / sectionFold 等）
+│   └── plugins/    编辑器插件（frontmatter / wikiLink / footnote / sectionFold 等）
 ├── TabBar/         多标签页栏（拖拽排序）
 ├── MenuBar/        菜单栏（数据驱动）
 ├── StatusBar/      状态栏
@@ -47,10 +47,13 @@ src/renderer/src/hooks/
 └── useWritingStats.ts      写作统计 hook
 
 src/renderer/src/lib/
-├── drafts.ts      草稿读写（崩溃恢复）
-├── image-path.ts  图片路径处理（mdimg:// 协议）
-├── pdf.ts         PDF 导出（主进程调用）
-└── stats.ts       写作统计数据模型与日期工具
+├── drafts.ts              草稿读写（崩溃恢复）
+├── editor-sync.ts         编辑器防抖回调归属校验
+├── frontmatter-parser.ts  YAML 属性提取与最小写回
+├── image-path.ts          图片路径处理（mdimg:// 协议）
+├── pdf.ts                 PDF 导出（主进程调用）
+├── stats.ts               写作统计数据模型与日期工具
+└── wiki-resolver.ts       工作区 Wiki 链接目标解析
 
 src/renderer/src/data/
 └── demo-files.ts   演示文件树数据源（正式版换成 Main 进程读目录）
@@ -92,11 +95,11 @@ interface SidebarProps {
 ### Editor — 编辑器（Milkdown）
 
 **路径**：`components/Editor/index.tsx`
-**插件目录**：`components/Editor/plugins/`（`frontmatter` / `footnote` / `sectionFold` / `tableColResize` / `bracketMatch` / `codeLineNumbers` / `customCodeFence` / `mermaidCodeBlock` / `searchHighlight` / `blockContext` / `nodeAttrs`）
+**插件目录**：`components/Editor/plugins/`（`frontmatter` / `wikiLink` / `footnote` / `sectionFold` / `tableColResize` / `bracketMatch` / `codeLineNumbers` / `customCodeFence` / `mermaidCodeBlock` / `searchHighlight` / `blockContext` / `nodeAttrs`）
 
 **职责**：
 - 封装 Milkdown（commonmark + gfm + history + listener 插件）
-- 通过插件系统支持：Frontmatter 元数据、脚注、KaTeX 数学公式、Mermaid 图表、章节折叠、表格列宽拖拽、括号匹配高亮、代码块行号、自定义代码围栏、搜索高亮、块上下文标记
+- 通过插件系统支持：Frontmatter 元数据与属性面板、Wiki 链接、脚注、KaTeX 数学公式、Mermaid 图表、章节折叠、表格列宽拖拽、括号匹配高亮、代码块行号、自定义代码围栏、搜索高亮、块上下文标记
 - 提供所见即所得编辑，内容变化通过回调上抛 Markdown
 - 通过 ref 暴露命令式接口，供 App 分发菜单操作
 - 输入法合成期间不拦截方向键，避免干扰中文候选词选择
@@ -113,6 +116,7 @@ interface EditorProps {
 ```typescript
 interface EditorHandle {
   replaceContent(md: string): void    // 整体替换（切换文件）
+  getMarkdown(): string | null        // 当前编辑器状态序列化结果
   insertMd(md: string): void          // 光标处插入片段
   runCommand(key: CmdKey<T>, payload?: T): boolean  // 执行命令（粗体/标题/表格…）
   getHtml(): string                   // 导出 HTML 用
@@ -123,7 +127,7 @@ interface EditorHandle {
 **设计要点**：
 - `useEditor` 只在挂载时执行一次，`onChange` 通过 ref 透传，避免重建编辑器丢光标
 - KaTeX 在实例创建前注册；Mermaid 使用 `mermaidCodeBlock` 节点视图保持标准代码围栏，可按需加载 SVG 渲染器、切换源码，并在导出前等待渲染结束
-- 切换文档用 `replaceAll` 宏而非卸载重建，保留撤销历史与实例
+- 切换文档复用同一编辑器实例，但调用 `replaceAll(markdown, true)` 重建 `EditorState`，清空跨文档撤销历史；切换后重新转换 Wiki 文本并清空章节折叠状态
 - 调用 action 前检查 `EditorStatus.Created`，防止初始化未完成时抛异常
 - 编辑器插件统一放在 `plugins/` 子目录，每个插件是一个独立的 `.ts` 文件
 
@@ -368,9 +372,12 @@ const { writingStats, setWritingStats } = useWritingStats(wordCount, activeFileI
 `src/renderer/src/lib/` 存放与编辑器核心逻辑相关的工具模块：
 
 - **`drafts.ts`**：草稿读写（崩溃/退出后恢复未保存内容）
+- **`editor-sync.ts`**：校验 Milkdown 防抖回调仍属于当前编辑器状态
+- **`frontmatter-parser.ts`**：提取简单 YAML 属性并按行更新，保留复杂结构与换行
 - **`image-path.ts`**：图片路径处理，支持 `mdimg://` 本地协议
 - **`pdf.ts`**：PDF 导出逻辑（调用主进程 printToPDF）
 - **`stats.ts`**：写作统计的数据模型与日期工具（`todayStr`、`rollStatsDate`）
+- **`wiki-resolver.ts`**：在当前工作区内解析 Wiki 链接目标
 
 ---
 

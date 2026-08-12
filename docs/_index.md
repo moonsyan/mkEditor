@@ -1,6 +1,6 @@
 # MarkdownSoft 文档索引
 
-> 更新基线：2026-08-11。本文档以仓库已落地的代码为准；计划性内容会明确标注，不再与当前实现混写。
+> 更新基线：2026-08-12。本文档以仓库已落地的代码为准；计划性内容会明确标注，不再与当前实现混写。
 
 MarkdownSoft 是一个本地优先的桌面 Markdown 编辑器。应用使用 Electron 43、React 18、TypeScript 严格模式和 Milkdown 7 构建，支持 Windows、macOS 与 Linux。
 
