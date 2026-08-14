@@ -6,8 +6,22 @@ import { analyzeDecorationChange } from './decoOptimize'
 
 const MERMAID_RENDER_DELAY = 420
 const MERMAID_RENDER_TIMEOUT = 4000
+/** 单次 mermaid.render 超时：串行队列内一次挂起不能阻塞后续所有图表 */
+const MERMAID_SINGLE_RENDER_TIMEOUT = 15_000
 let diagramSequence = 0
 let mermaidPromise: Promise<typeof import('mermaid').default> | null = null
+/**
+ * C-5：mermaid.render 内部使用共享临时容器，并发调用（多图表同时渲染、
+ * 文档加载瞬间多个装饰同时 renderNow）会互相污染，报
+ * "fragments are not allowed in template" 或串图。全部经此队列串行执行。
+ */
+let mermaidRenderQueue: Promise<void> = Promise.resolve()
+const enqueueMermaidRender = (render: () => Promise<void>): Promise<void> => {
+  const task = mermaidRenderQueue.then(render)
+  // 队列保活：单次渲染失败不阻断后续渲染；返回给调用方的是未吞错的 task
+  mermaidRenderQueue = task.catch(() => undefined)
+  return task
+}
 const activePreviews = new Set<MermaidPreview>()
 const renderListeners = new Set<() => void>()
 let themeObserver: MutationObserver | null = null
@@ -139,19 +153,30 @@ class MermaidPreview {
     this.status.classList.remove('is-error')
     this.status.textContent = '正在渲染图表…'
     this.renderPromise = getMermaid()
-      .then(async (mermaid) => {
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: 'strict',
-          theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
-        })
-        const id = `markdownsoft-mermaid-${diagramSequence++}`
-        const { svg, bindFunctions } = await mermaid.render(id, source)
-        if (version !== this.renderVersion) return
-        // Mermaid 在 strict 模式下生成 SVG，避免把未经处理的 Markdown 直接写入 DOM。
-        this.preview.innerHTML = svg
-        bindFunctions?.(this.preview)
-      })
+      .then(() =>
+        // C-5：串行队列内执行 mermaid.initialize + render（两者都非并发安全），
+        // 单次渲染 15s 超时兜底，防止队列被一次挂起永久阻塞
+        enqueueMermaidRender(async () => {
+          const mermaid = await getMermaid()
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            theme:
+              document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+          })
+          const id = `markdownsoft-mermaid-${diagramSequence++}`
+          const { svg, bindFunctions } = await Promise.race([
+            mermaid.render(id, source),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('渲染超时')), MERMAID_SINGLE_RENDER_TIMEOUT),
+            ),
+          ])
+          if (version !== this.renderVersion) return
+          // Mermaid 在 strict 模式下生成 SVG，避免把未经处理的 Markdown 直接写入 DOM。
+          this.preview.innerHTML = svg
+          bindFunctions?.(this.preview)
+        }),
+      )
       .catch((error: unknown) => {
         if (version !== this.renderVersion) return
         this.preview.replaceChildren(this.status)

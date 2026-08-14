@@ -200,7 +200,27 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     richRenderRef.current = onRichRender
     const notifyRef = useRef(onNotify)
     notifyRef.current = onNotify
+    /**
+     * C-3：IME 组合期间触发的文档替换（切文档/属性面板写入）。
+     * 立即 replaceAll 会打断组合——未提交拼音丢失，严重时 PM 组合态与 DOM 错乱。
+     * 挂起替换，compositionend 后执行；组合期间多次替换只保留最后一次。
+     */
+    const pendingReplaceRef = useRef<(() => void) | null>(null)
     const [, bumpRender] = useState(0)
+
+    // compositionend 冒泡到编辑器宿主容器（组合可能发生在任何可编辑块内）
+    useEffect(() => {
+      const root = containerRef.current
+      if (!root) return
+      const onCompositionEnd = () => {
+        const run = pendingReplaceRef.current
+        if (!run) return
+        pendingReplaceRef.current = null
+        run()
+      }
+      root.addEventListener('compositionend', onCompositionEnd, true)
+      return () => root.removeEventListener('compositionend', onCompositionEnd, true)
+    }, [])
 
     useEffect(
       () =>
@@ -439,33 +459,105 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
               key,
               view: () => {
                 let raf = 0
-                const report = (view: EditorView) => {
-                  const fn = cursorRef.current
-                  if (!fn) return
-                  const { from } = view.state.selection
-                  // 用块分隔符近似还原为行文本，再算行/列
-                  const text = view.state.doc.textBetween(0, from, '\n', '\n')
-                  const lines = text.split('\n')
-                  // 找光标上方最近的标题（供状态栏显示当前所在章节）
+                /**
+                 * C-12：光标位置/章节信息按块缓存。光标在同一块内移动（每次按键、
+                 * 方向键）只重算块内偏移，不再每次 textBetween(0, from) 拷贝全文、
+                 * 不再遍历整篇文档统计标题——大文档上每次按键的扫描成本从 O(doc)
+                 * 降到 O(块)。
+                 */
+                let blockCache: {
+                  blockStart: number
+                  /** 当前块之前已占用的完整行数（含块间分隔与图片/硬换行） */
+                  prefixLines: number
+                  /** 当前块之前是否还有文本内容（决定块首边界是否计一行） */
+                  hasPrefixText: boolean
+                  heading: string
+                  headingIndex: number
+                } | null = null
+
+                /** 扫描到指定位置前的顶层标题（与旧实现一致：仅顶层，pos 即 offset） */
+                const scanHeadings = (
+                  view: EditorView,
+                  upTo: number,
+                ): { heading: string; headingIndex: number } => {
                   let heading = ''
-                  // 同时统计 h1-h4 序号（与 DOM querySelectorAll('h1-h4') 顺序一致，供大纲高亮）
                   let headingIndex = -1
                   let hCount = -1
-                  view.state.doc.descendants((node, pos) => {
+                  let stopped = false
+                  view.state.doc.forEach((node, offset) => {
+                    if (stopped) return
+                    if (offset > upTo) {
+                      stopped = true
+                      return
+                    }
                     if (node.type.name === 'heading') {
                       const lv = node.attrs.level as number
                       if (lv >= 1 && lv <= 4) {
                         hCount++
-                        if (pos <= from) {
+                        if (offset <= upTo) {
                           headingIndex = hCount
                           heading = node.textContent
                         }
                       }
                     }
                   })
+                  return { heading, headingIndex }
+                }
+
+                const report = (view: EditorView) => {
+                  const fn = cursorRef.current
+                  if (!fn) return
+                  const { from } = view.state.selection
+                  const $from = view.state.doc.resolve(from)
+                  const block = $from.parent
+                  if (!block.isTextblock) {
+                    // 光标在块边界/非文本位置（图片等）：回退旧式全文计算，此场景不常见
+                    blockCache = null
+                    const text = view.state.doc.textBetween(0, from, '\n', '\n')
+                    const lines = text.split('\n')
+                    const heads = scanHeadings(view, from)
+                    fn(
+                      lines.length,
+                      lines[lines.length - 1].length + 1,
+                      heads.heading,
+                      heads.headingIndex,
+                      0,
+                    )
+                    return
+                  }
+                  const blockStart = $from.start()
+                  if (!blockCache || blockCache.blockStart !== blockStart) {
+                    const prefixText = view.state.doc.textBetween(0, blockStart, '\n', '\n')
+                    const prefixLines = prefixText.split('\n').length - 1
+                    const heads = scanHeadings(view, blockStart)
+                    blockCache = {
+                      blockStart,
+                      prefixLines,
+                      hasPrefixText: prefixText.length > 0,
+                      heading: heads.heading,
+                      headingIndex: heads.headingIndex,
+                    }
+                  }
+                  // 与旧公式 textBetween(0, from) 等价：
+                  // 行数 = 块前缀行数 + 块首边界行（光标已进入块内且块前有内容）+ 块内行数 + 1
+                  const within = view.state.doc.textBetween(blockStart, from, '\n', '\n')
+                  const withinLines = within.split('\n')
+                  const boundaryLine =
+                    from > blockStart && blockCache.hasPrefixText ? 1 : 0
+                  const row = blockCache.prefixLines + boundaryLine + withinLines.length
+                  const col = withinLines[withinLines.length - 1].length + 1
+                  let heading = blockCache.heading
+                  let headingIndex = blockCache.headingIndex
+                  // 光标所在块自身是 h1-h4 标题时，标题文本随编辑实时更新
+                  if (block.type.name === 'heading') {
+                    const lv = block.attrs.level as number
+                    if (lv >= 1 && lv <= 4) {
+                      heading = block.textContent
+                    }
+                  }
                   fn(
-                    lines.length,
-                    lines[lines.length - 1].length + 1,
+                    row,
+                    col,
                     heading,
                     headingIndex,
                     // 选中字数（去空白，无选区为 0）
@@ -791,65 +883,96 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       return clone.textContent ?? ''
     }
 
+    /** 编辑器就绪检查（创建完成前调用 action 会抛异常） */
+    const getReadyEditor = (): MilkdownCore | null =>
+      editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+
+    /**
+     * 重建编辑器状态（flush=true 清空 undo/redo 历史，用于切换文档；
+     * flush=false 保留历史，用于程序性更新）。
+     * C-9：替换后清空代码块/表格/全屏/自动补全浮层——它们持有的 DOM 引用
+     * 属于旧文档，不清会悬浮在新文档上指向过期节点。
+     */
+    const applyReplaceContent = (markdown: string, flush: boolean): void => {
+      const ed = getReadyEditor()
+      if (!ed) return
+      ed.action(replaceAll(markdown, flush))
+      const view = ed.ctx.get(editorViewCtx)
+      // 重新转换新文档中的 [[...]] 文本为 wiki 链接
+      // （wikiTextConvertPlugin 只在编辑器创建时运行一次，切换文档不会触发）
+      convertWikiTextInDoc(view)
+      // 清空折叠状态（兜底：replaceAll 解析失败时也把旧文档的折叠映射清除）
+      view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
+      setCodePanel(null)
+      setTablePanel(null)
+      setFullscreenCode(null)
+      setWikiAcState(null)
+      lastPreRef.current = null
+      setLangInput('')
+      setCopied(false)
+    }
+
+    /**
+     * C-3：IME 组合期间挂起替换（compositionend 后执行，见组件顶部监听）。
+     * 组合中多次替换只保留最后一次；非组合态同步执行。
+     */
+    const replaceWhenNotComposing = (run: () => void): void => {
+      const ed = getReadyEditor()
+      if (!ed) return
+      if (ed.ctx.get(editorViewCtx).composing) {
+        pendingReplaceRef.current = run
+        return
+      }
+      run()
+    }
+
     useImperativeHandle(ref, () => {
-      /** 编辑器就绪检查（创建完成前调用 action 会抛异常） */
-      const ready = (): MilkdownCore | null =>
-        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
       const searchController = createSearchController(() => {
-        const editor = ready()
+        const editor = getReadyEditor()
         return editor ? editor.ctx.get(editorViewCtx) : null
       })
 
       return {
         replaceContent: (markdown) => {
-          const ed = ready()
-          if (!ed) return
-          // flush=true：重建编辑器状态（重新解析全文，所有插件状态重新初始化），
-          // undo/redo 历史被清空——否则切换文档后 Ctrl+Z 会把上一份文档的内容回退进来
-          ed.action(replaceAll(markdown, true))
-          const view = ed.ctx.get(editorViewCtx)
-          // 重新转换新文档中的 [[...]] 文本为 wiki 链接
-          // （wikiTextConvertPlugin 只在编辑器创建时运行一次，切换文档不会触发）
-          convertWikiTextInDoc(view)
-          // 清空折叠状态（兜底：replaceAll 解析失败时也把旧文档的折叠映射清除）
-          view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
+          replaceWhenNotComposing(() => applyReplaceContent(markdown, true))
         },
         /** 属性面板等程序性更新：事务替换保留撤销历史，并恢复选区与滚动位置 */
         updateContentPreservingHistory: (markdown) => {
-          const ed = ready()
-          if (!ed) return
-          const view = ed.ctx.get(editorViewCtx)
-          const prevFrom = view.state.selection.from
-          const scrollParent = containerRef.current?.querySelector<HTMLElement>('.editor-scroll')
-          const prevScroll = scrollParent?.scrollTop ?? 0
-          // flush=false：dispatch 单条全文替换事务，undo/redo 历史保留（Ctrl+Z 可回退本次修改）
-          ed.action(replaceAll(markdown, false))
-          convertWikiTextInDoc(view)
-          // 恢复选区与滚动位置，避免光标跳回文档开头
-          const { state, dispatch } = view
-          const pos = Math.min(prevFrom, state.doc.content.size)
-          dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos))))
-          requestAnimationFrame(() => {
-            if (scrollParent) scrollParent.scrollTop = prevScroll
+          replaceWhenNotComposing(() => {
+            const ed = getReadyEditor()
+            if (!ed) return
+            const view = ed.ctx.get(editorViewCtx)
+            const prevFrom = view.state.selection.from
+            const scrollParent = containerRef.current?.querySelector<HTMLElement>('.editor-scroll')
+            const prevScroll = scrollParent?.scrollTop ?? 0
+            // flush=false：dispatch 单条全文替换事务，undo/redo 历史保留（Ctrl+Z 可回退本次修改）
+            applyReplaceContent(markdown, false)
+            // 恢复选区与滚动位置，避免光标跳回文档开头
+            const { state, dispatch } = view
+            const pos = Math.min(prevFrom, state.doc.content.size)
+            dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos))))
+            requestAnimationFrame(() => {
+              if (scrollParent) scrollParent.scrollTop = prevScroll
+            })
           })
         },
         getMarkdown: () => {
-          const ed = ready()
+          const ed = getReadyEditor()
           return ed ? ed.action(getMarkdown()) : null
         },
         insertMd: (markdown) => {
-          ready()?.action(insert(markdown))
+          getReadyEditor()?.action(insert(markdown))
         },
         runCommand: (key, payload) => {
-          const ed = ready()
+          const ed = getReadyEditor()
           if (!ed) return false
           return ed.action(callCommand(key, payload))
         },
         getHtml: () => {
-          return ready()?.action(getHTML()) ?? ''
+          return getReadyEditor()?.action(getHTML()) ?? ''
         },
         getHeadings: () => {
-          const ed = ready()
+          const ed = getReadyEditor()
           if (!ed) return []
           const out: { level: number; text: string }[] = []
           ed.ctx.get(editorViewCtx).state.doc.descendants((node) => {
@@ -861,7 +984,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         },
         getPreviewHtml: () => {
           // 直接取 ProseMirror 视图 DOM，保留 nodeView 渲染的图表/公式
-          const ed = ready()
+          const ed = getReadyEditor()
           if (!ed) return ''
           const view = ed.ctx.get(editorViewCtx)
           // 克隆后清理编辑器态装饰：搜索高亮、光标块高亮、括号配对，
@@ -884,12 +1007,25 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           clone
             .querySelectorAll('.mermaid-toolbar')
             .forEach((el) => el.remove())
+          // C-10：源码编辑态的 mermaid 块——已有渲染 SVG 时切回预览态导出图表；
+          // 尚无 SVG（未渲染/语法失败）则保留源码态，其源码 pre 随后保留，
+          // 避免导出/预览在源码编辑态下整块空白
           clone
-            .querySelectorAll('.mermaid-block')
-            .forEach((el) => el.classList.remove('is-editing-source'))
+            .querySelectorAll('.mermaid-block.is-editing-source')
+            .forEach((el) => {
+              if (el.querySelector('.mermaid-preview svg')) {
+                el.classList.remove('is-editing-source')
+              }
+            })
           clone.querySelectorAll('pre[data-language]').forEach((el) => {
             if (el.getAttribute('data-language')?.trim().toLowerCase() !== 'mermaid') return
-            el.remove()
+            const prev = el.previousElementSibling
+            const stillSourceEditing =
+              prev instanceof Element &&
+              prev.classList.contains('mermaid-block') &&
+              prev.classList.contains('is-editing-source')
+            // 预览态删除 pre（SVG 已展示）；源码态保留 pre（以源码文本导出）
+            if (!stillSourceEditing) el.remove()
           })
           return clone.innerHTML
         },
@@ -897,14 +1033,14 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           containerRef.current?.querySelector<HTMLElement>('.milkdown .editor')?.focus()
         },
         focusEnd: () => {
-          const ed = ready()
+          const ed = getReadyEditor()
           if (!ed) return
           const view = ed.ctx.get(editorViewCtx)
           const { state, dispatch } = view
           dispatch(state.tr.setSelection(TextSelection.atEnd(state.doc)).scrollIntoView())
           view.focus()
         },
-        isReady: () => ready() !== null,
+        isReady: () => getReadyEditor() !== null,
 
         /* ---------- 富内容就绪（导出/预览前等待图表 SVG） ---------- */
 
