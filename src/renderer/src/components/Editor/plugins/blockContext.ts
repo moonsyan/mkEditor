@@ -10,15 +10,19 @@ const blockContextKey = new PluginKey('block-context')
 function buildBlockContextDecos(state: EditorState): DecorationSet {
   const doc = state.doc
   const from = state.selection.from
-  const found: { start: number; end: number }[] = []
+  // M13：顶层块互不重叠，命中即退出，无需遍历完所有块
+  let foundStart = -1
+  let foundEnd = -1
   doc.forEach((node, offset) => {
-    const start = offset
-    const end = offset + node.nodeSize
-    if (from >= start && from <= end) found.push({ start, end })
+    if (foundStart >= 0) return
+    if (from >= offset && from <= offset + node.nodeSize) {
+      foundStart = offset
+      foundEnd = offset + node.nodeSize
+    }
   })
-  if (found.length === 0) return DecorationSet.empty
+  if (foundStart < 0) return DecorationSet.empty
   return DecorationSet.create(doc, [
-    Decoration.node(found[0].start, found[0].end, { class: 'block-active' }),
+    Decoration.node(foundStart, foundEnd, { class: 'block-active' }),
   ])
 }
 

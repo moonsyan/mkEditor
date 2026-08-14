@@ -2,6 +2,7 @@ import { Plugin, PluginKey, TextSelection, type Transaction } from '@milkdown/ki
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { analyzeDecorationChange } from './decoOptimize'
 
 const MERMAID_RENDER_DELAY = 420
 const MERMAID_RENDER_TIMEOUT = 4000
@@ -289,6 +290,14 @@ export const mermaidPreviewPlugin = new Plugin({
     apply: (tr, previous, _oldState, state) => {
       const previousState = previous as MermaidPreviewState
       if (!tr.docChanged) {
+        return {
+          decorations: previousState.decorations.map(tr.mapping, tr.doc),
+          blocks: mapBlocks(previousState.blocks, tr),
+        }
+      }
+      // M13：段落内打字不触碰代码块，直接映射复用，避免每次按键全文档扫描
+      const info = analyzeDecorationChange(tr)
+      if (info.blockAt !== 'code_block' && !info.sliceBlocks.has('code_block')) {
         return {
           decorations: previousState.decorations.map(tr.mapping, tr.doc),
           blocks: mapBlocks(previousState.blocks, tr),

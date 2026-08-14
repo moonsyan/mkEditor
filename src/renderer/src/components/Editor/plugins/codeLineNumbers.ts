@@ -1,6 +1,7 @@
 import { Plugin, PluginKey, type Transaction } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
+import { analyzeDecorationChange } from './decoOptimize'
 
 /* ==================== 代码块行号（装饰 widget，不修改文档） ==================== */
 
@@ -91,6 +92,16 @@ export const lineNumPlugin = new Plugin({
         return { decorations: buildLineNumDecos(tr.doc, blocks), blocks }
       }
       if (!tr.docChanged) {
+        return {
+          decorations: previous.decorations.map(tr.mapping, tr.doc),
+          blocks: mapCodeBlockLines(previous.blocks, tr),
+        }
+      }
+      // M13：段落内打字不触碰代码块，直接映射复用，避免每次按键全文档扫描
+      const info = analyzeDecorationChange(tr)
+      const touchesCodeBlock =
+        info.blockAt === 'code_block' || info.sliceBlocks.has('code_block')
+      if (!touchesCodeBlock) {
         return {
           decorations: previous.decorations.map(tr.mapping, tr.doc),
           blocks: mapCodeBlockLines(previous.blocks, tr),

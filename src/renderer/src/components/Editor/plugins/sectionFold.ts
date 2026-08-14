@@ -3,6 +3,7 @@ import type { EditorState } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { analyzeDecorationChange } from './decoOptimize'
 
 /* ==================== 标题段落折叠（点击标题左侧折叠/展开，对标 Typora） ==================== */
 
@@ -104,27 +105,38 @@ function buildFoldDecos(state: EditorState, collapsed: Set<number>): DecorationS
 export const sectionFoldPlugin = new Plugin({
   key: sectionFoldKey,
   state: {
-    init: () => ({ collapsed: new Set<number>(), decos: DecorationSet.empty }),
+    init: (): { collapsed: Set<number>; decos: DecorationSet } => ({
+      collapsed: new Set<number>(),
+      decos: DecorationSet.empty,
+    }),
     apply(tr, prev, _old, newState) {
+      const previous = prev as { collapsed: Set<number>; decos: DecorationSet }
       const meta = tr.getMeta(sectionFoldKey)
-      let collapsed = prev.collapsed
       if (meta && meta.reset) {
         // 切换文档（replaceContent）时清空，避免旧文件的折叠位置映射泄漏到新文档
-        collapsed = new Set<number>()
-      } else if (meta && meta.toggle !== undefined) {
-        collapsed = new Set(prev.collapsed)
+        return { collapsed: new Set<number>(), decos: buildFoldDecos(newState, new Set()) }
+      }
+      if (meta && meta.toggle !== undefined) {
+        const collapsed = new Set(previous.collapsed)
         if (collapsed.has(meta.toggle)) collapsed.delete(meta.toggle)
         else collapsed.add(meta.toggle)
-      } else if (tr.docChanged) {
-        // 文档变化后重新映射折叠位置，跳过已不存在的标题
-        collapsed = new Set<number>()
-        prev.collapsed.forEach((pos) => {
-          const m = tr.mapping.map(pos)
-          if (m != null && m <= tr.doc.content.size) {
-            const node = tr.doc.nodeAt(m)
-            if (node && node.type.name === 'heading') collapsed.add(m)
-          }
-        })
+        return { collapsed, decos: buildFoldDecos(newState, collapsed) }
+      }
+      if (!tr.docChanged) return previous
+      // 文档变化后重新映射折叠位置，跳过已不存在的标题
+      const collapsed = new Set<number>()
+      previous.collapsed.forEach((pos) => {
+        const m = tr.mapping.map(pos)
+        if (m != null && m <= tr.doc.content.size) {
+          const node = tr.doc.nodeAt(m)
+          if (node && node.type.name === 'heading') collapsed.add(m)
+        }
+      })
+      // M13：段落/标题内打字不改变折叠结构，映射复用旧装饰，
+      // 避免每次按键全文档扫描重建（新增/删除标题时切片含 heading，才需重建）
+      const info = analyzeDecorationChange(tr)
+      if (!info.sliceBlocks.has('heading')) {
+        return { collapsed, decos: previous.decos.map(tr.mapping, tr.doc) }
       }
       return { collapsed, decos: buildFoldDecos(newState, collapsed) }
     },
