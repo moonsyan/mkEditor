@@ -2478,15 +2478,11 @@ img{max-width:100%}
         // 文件
         case 'new': handleNew(); break
         case 'newWindow': void window.desktopAPI?.window.newWindow(); break
-        case 'open': void handleOpen(); break
-        case 'openFolder': void handleOpenFolder(); break
+        // open/openFolder/saveAs/exportHtml/exportMarkdown/exportPandoc
+        // 打开原生对话框：不在此同步分发，统一在 L20 异步块处理
         case 'images': setImagesOpen(true); break
         case 'save': void handleSave(); break
-        case 'saveAs': void handleSaveAs(); break
-        case 'exportHtml': void handleExportHtml(); break
         case 'exportPdf': void handleExportPdf(); break
-        case 'exportMarkdown': void handleExportMarkdown(); break
-        case 'exportPandoc': void handleExportPandoc(); break
         // 编辑
         case 'undo': ed?.runCommand(undoCommand.key); break
         case 'redo': ed?.runCommand(redoCommand.key); break
@@ -2548,7 +2544,35 @@ img{max-width:100%}
           }
           break
       }
-      if (shouldFocusEditor) ed?.focus()
+      // L20：打开原生对话框的动作不能在对话框打开前同步 focus——
+      // 焦点先被菜单按钮拿走，同步 focus 又被对话框打断，取消后
+      // 焦点落在窗口 chrome 上。改为等 promise 结束（对话框关闭）
+      // 再聚焦：成功路径自身会聚焦编辑器，这里补取消对话框的路径。
+      if (shouldFocusEditor) {
+        if (
+          action === 'open' ||
+          action === 'openFolder' ||
+          action === 'saveAs' ||
+          action === 'exportHtml' ||
+          action === 'exportMarkdown' ||
+          action === 'exportPandoc'
+        ) {
+          void (async () => {
+            switch (action) {
+              case 'open': await handleOpen(); break
+              case 'openFolder': await handleOpenFolder(); break
+              case 'saveAs': await handleSaveAs(); break
+              case 'exportHtml': await handleExportHtml(); break
+              case 'exportMarkdown': await handleExportMarkdown(); break
+              case 'exportPandoc': await handleExportPandoc(); break
+              default: break
+            }
+            ed?.focus()
+          })()
+        } else {
+          ed?.focus()
+        }
+      }
     },
     [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleExportHtml, handleExportPdf, handleExportMarkdown, handleExportPandoc, openOutlinePanel, centerCaret],
   )
