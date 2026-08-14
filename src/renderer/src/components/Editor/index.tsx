@@ -52,6 +52,7 @@ import {
   footnoteDefSchema,
   footnoteDefInputRule,
   footnoteRefInputRule,
+  footnoteDefKeymap,
 } from './plugins/footnote'
 import { frontmatterRemarkPlugin, frontmatterSchema, frontmatterKeymap } from './plugins/frontmatter'
 import {
@@ -346,6 +347,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         })
         // frontmatter 内 Enter 行为（须先于 commonmark 预设注册才能抢先其 Enter 绑定）
         .use(frontmatterKeymap)
+        // 脚注定义内 Enter 行为同样须先于 commonmark 的 Enter 绑定
+        .use(footnoteDefKeymap)
         // 围栏 Enter 建代码块同样须先于 commonmark 的 Enter 绑定
         .use(customCodeFenceKeymap)
         .use(commonmark)

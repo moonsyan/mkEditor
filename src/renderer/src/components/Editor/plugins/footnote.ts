@@ -1,7 +1,9 @@
 import { schemaCtx } from '@milkdown/kit/core'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { $inputRule, $node } from '@milkdown/kit/utils'
+import { keymap } from '@milkdown/kit/prose/keymap'
+import type { EditorState } from '@milkdown/kit/prose/state'
+import { $inputRule, $node, $prose } from '@milkdown/kit/utils'
 import type { MarkdownNode } from '@milkdown/kit/transformer'
 import { footnote as footnoteSyntax } from 'micromark-extension-footnote'
 import {
@@ -128,3 +130,31 @@ export const footnoteRefInputRule = $inputRule((ctx) => {
     )
   })
 })
+
+/** 光标是否在脚注定义节点内 */
+const inFootnoteDef = (state: EditorState): boolean => {
+  const { $from } = state.selection
+  for (let d = $from.depth; d > 0; d--) {
+    if ($from.node(d).type.name === 'footnote_def') return true
+  }
+  return false
+}
+
+/**
+ * 脚注定义内 Enter 插入换行而非拆分节点（L12）：
+ * 默认 splitBlock 会把定义拆成两个同标签的 footnote_def，
+ * 序列化后出现重复 [^1]: 定义。续行缩进由 mdast-util-footnote 的
+ * toMarkdown（indentLines）负责，往返安全。
+ * 与 frontmatter 一致，须注册在 commonmark 预设之前才能抢先其 Enter 绑定。
+ */
+export const footnoteDefKeymap = $prose(() =>
+  keymap({
+    Enter: (state, dispatch) => {
+      if (!inFootnoteDef(state)) return false
+      if (dispatch) {
+        dispatch(state.tr.insertText('\n').scrollIntoView())
+      }
+      return true
+    },
+  }),
+)
