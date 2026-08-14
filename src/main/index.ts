@@ -94,14 +94,15 @@ app.on('web-contents-created', (_, contents) => {
     return { action: 'deny' }
   })
 
-  // 普通链接没有 target 时会在当前窗口内导航。初始页面加载完成后，
-  // 仅允许将安全外链交给系统浏览器，避免应用壳被陌生页面替换。
-  contents.once('did-finish-load', () => {
-    contents.on('will-navigate', (event, url) => {
-      event.preventDefault()
-      if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
-        void shell.openExternal(url).catch(() => {})
-      }
-    })
+  // M15：will-navigate 在 web-contents-created 一次性注册，不再依赖
+  // did-finish-load 延迟注册（重载/崩溃自愈会累计重复监听，点一个外链开 N 个标签）。
+  // 程序化导航（loadFile/loadURL/reload）不触发 will-navigate，初始加载不受影响。
+  // 普通链接没有 target 时会在当前窗口内导航；统一交给系统浏览器，
+  // 避免应用壳被陌生页面替换（仅限安全协议，恶意文档中的 javascript:/file:/自定义协议不会放行）。
+  contents.on('will-navigate', (event, url) => {
+    event.preventDefault()
+    if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) {
+      void shell.openExternal(url).catch(() => {})
+    }
   })
 })
