@@ -2362,7 +2362,10 @@ img{max-width:100%}
 
   const openOutlinePanel = useCallback(() => {
     setSidebarCollapsed(false)
-    setFocusOutlineTick((t) => t + 1)
+    // M5：侧栏折叠时组件重新挂载，挂载时 lastOutlineTickRef 初始化为当前 tick，
+    // 同一批渲染内递增的 tick 会被新实例当作"已消费"，Tab 永远切不过去。
+    // 延迟一拍再递增，保证展开后的新实例能消费到这次切换
+    setTimeout(() => setFocusOutlineTick((t) => t + 1), 0)
   }, [])
 
   const handleOutlineClick = useCallback((index: number) => {
