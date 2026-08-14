@@ -1099,6 +1099,19 @@ export default function App(): JSX.Element {
     setSearchCurrent(-1)
   }, [dirOfFile])
 
+  /** 读指定文档的内容：活动文件直接读编辑器实时内容（防抖窗口内 state 滞后），
+   *  非活动文件读 ref 镜像（切换时已 flush，不会滞后）。 */
+  const liveContentOf = useCallback(
+    (id: string): string => {
+      if (id === activeFileIdRef.current && editorRef.current?.isReady()) {
+        const md = editorRef.current.getMarkdown()
+        if (md !== null) return toStoredImages(md, dirOfFile(id))
+      }
+      return contentsRef.current[id] ?? ''
+    },
+    [dirOfFile],
+  )
+
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
   const discardPreviewTab = useCallback((nextFileId: string) => {
     const previous = findDiscardablePreview(openFilesRef.current, nextFileId)
@@ -1859,8 +1872,8 @@ img{max-width:100%}
       // 先写回未保存内容，避免重命名丢失编辑（带冲突检测：外部修改过的不静默覆盖，中止重命名）
       const oldId = `file-${path}`
       let pending: string | undefined
-      if (savedMap[oldId] === false && contents[oldId] !== undefined) {
-        pending = contents[oldId]
+      if (savedMap[oldId] === false && contentsRef.current[oldId] !== undefined) {
+        pending = liveContentOf(oldId)
         const saveRes = await saveWithEncodingFallback(path, pending, fileMtime[oldId], oldId)
         if (!saveRes.ok) {
           setToast(
@@ -1926,7 +1939,9 @@ img{max-width:100%}
         delete next[oldId]
         return next
       })
-      if (activeFileId === oldId) {
+      // H3：重命名 await 期间用户可能已切到其它标签。用 ref 实时判定，
+      // 否则完成回调会把活动标签拽回旧文件、编辑器内容串号
+      if (activeFileIdRef.current === oldId) {
         activeFileIdRef.current = newId
         setActiveFileId(newId)
         setDocTitle(finalName)
@@ -1936,7 +1951,7 @@ img{max-width:100%}
       void clearDraft(oldId)
       await refreshWorkspace()
     },
-    [contents, savedMap, fileMtime, activeFileId, saveWithEncodingFallback, refreshWorkspace, clearDraft],
+    [savedMap, fileMtime, liveContentOf, saveWithEncodingFallback, refreshWorkspace, clearDraft],
   )
 
   const handleDocumentTitleBlur = useCallback(
@@ -1989,7 +2004,7 @@ img{max-width:100%}
       if (savedMap[delId] === false) {
         const saveRes = await saveWithEncodingFallback(
           path,
-          contents[delId] ?? '',
+          liveContentOf(delId),
           fileMtime[delId],
           delId,
         )
@@ -2002,7 +2017,7 @@ img{max-width:100%}
           return
         }
         if (saveRes.data) {
-          INITIAL_OR_SAVED.current[delId] = contents[delId] ?? ''
+          INITIAL_OR_SAVED.current[delId] = contentsRef.current[delId] ?? ''
           setFileMtime((prev) => ({ ...prev, [delId]: saveRes.data!.modifiedTime }))
         }
       }
@@ -2039,14 +2054,16 @@ img{max-width:100%}
       void clearDraft(delId)
       delete INITIAL_OR_SAVED.current[delId]
       await refreshWorkspace()
-      if (activeFileId === delId) {
+      // M3：删除 await 期间用户可能已切到其它标签。用 ref 实时判定，
+      // 否则完成回调会把当前正在编辑的文档切走，未保存输入丢失
+      if (activeFileIdRef.current === delId) {
         // 切到相邻标签；删掉的是最后一个标签时进入"开始"界面（不再强制新建空白文档）
         const idx = openFiles.findIndex((f) => f.id === delId)
         const neighbor = openFiles[idx + 1] ?? openFiles[idx - 1] ?? null
         if (neighbor) switchFile(neighbor.id)
       }
     },
-    [activeFileId, refreshWorkspace, switchFile, clearDraft, savedMap, contents, fileMtime, saveWithEncodingFallback, openFiles],
+    [refreshWorkspace, switchFile, clearDraft, savedMap, liveContentOf, fileMtime, saveWithEncodingFallback, openFiles],
   )
 
   /** 关闭标签页：从打开列表移除（不删磁盘文件）；有未保存内容时先确认 */
@@ -2112,7 +2129,7 @@ img{max-width:100%}
       for (const f of dirty) {
         const saveRes = await saveWithEncodingFallback(
           f.path!,
-          contents[f.id] ?? '',
+          liveContentOf(f.id),
           fileMtime[f.id],
           f.id,
         )
@@ -2127,7 +2144,7 @@ img{max-width:100%}
         // 写回成功后同步基线与 mtime（用旧 id，后续迁移会按序搬走）；
         // 否则陈旧基线造成"假脏状态"，且移动文件夹时子文件的旧 mtime 会导致下次保存误报 CONFLICT
         if (saveRes.data) {
-          INITIAL_OR_SAVED.current[f.id] = contents[f.id] ?? ''
+          INITIAL_OR_SAVED.current[f.id] = contentsRef.current[f.id] ?? ''
           setFileMtime((prev) => ({ ...prev, [f.id]: saveRes.data!.modifiedTime }))
         }
       }
@@ -2223,19 +2240,23 @@ img{max-width:100%}
         next[`file-${newPath}`] = res.data!.modifiedTime || next[`file-${newPath}`] || 0
         return next
       })
-      // 激活文件若在被移动范围内，同步切换 id
-      if (activeFileId.startsWith('file-') && isUnder(activeFileId.slice(5))) {
-        const nid = `file-${mapPath(activeFileId.slice(5))}`
+      // M2：移动 await 期间用户可能已切到其它标签。用 ref 实时判定：
+      // 激活文件已不在被移动范围内时不动编辑器，避免拽回活动标签、覆盖当前编辑
+      const currentActive = activeFileIdRef.current
+      if (currentActive.startsWith('file-') && isUnder(currentActive.slice(5))) {
+        // 完成前把当前文档实时内容落账（用户可能刚打字，防抖回调未到）
+        flushEditorContent()
+        const nid = `file-${mapPath(currentActive.slice(5))}`
         activeFileIdRef.current = nid
         setActiveFileId(nid)
         // M7：移动改变了文档目录，编辑器内 mdimg 仍按旧目录解析；
         // 按新目录重新迁移并重渲染，否则下一键保存就把 mdimg:///旧目录/ 绝对路径写进文件
-        replaceEditorContent(nid, contentsRef.current[activeFileId] ?? '', 'update')
+        replaceEditorContent(nid, contentsRef.current[currentActive] ?? '', 'update')
       }
       setToast('已移动')
       await refreshWorkspace()
     },
-    [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, activeFileId, refreshWorkspace, clearDraft, replaceEditorContent],
+    [openFiles, savedMap, fileMtime, liveContentOf, saveWithEncodingFallback, refreshWorkspace, clearDraft, replaceEditorContent, flushEditorContent],
   )
 
   /** 右键在新窗口打开文件（U7） */
