@@ -43,10 +43,14 @@ const MAX_VALUE_SIZE = 20 * 1024 * 1024
 const SESSION_MAX_FILES = 200
 /** drafts 保留条数上限（按最近保存时间） */
 const DRAFTS_MAX = 50
-/** 跨进程写锁等待上限，避免崩溃后残留锁永久阻塞设置保存。 */
-const SETTINGS_LOCK_MAX_RETRIES = 80
+/** 跨进程写锁等待上限，避免崩溃后残留锁永久阻塞设置保存。
+ *  B-L1：重试窗口（上限×间隔）必须覆盖陈旧判定阈值——
+ *  此前重试 4s 即放弃，而陈旧锁 60s 后才被清理，崩溃残留锁会让
+ *  之后整整一分钟内的所有设置写入失败。现在陈旧 4s、重试 5s，
+ *  残留锁约 4s 内自愈，正常写入（持锁远小于 4s）不受影响。 */
+const SETTINGS_LOCK_MAX_RETRIES = 100
 const SETTINGS_LOCK_RETRY_DELAY_MS = 50
-const SETTINGS_LOCK_STALE_MS = 60_000
+const SETTINGS_LOCK_STALE_MS = 4_000
 
 function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json')
