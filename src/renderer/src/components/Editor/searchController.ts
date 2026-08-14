@@ -7,6 +7,7 @@ import {
   searchKey,
   searchState,
 } from './plugins/searchHighlight'
+import { collapsedRangeAt, sectionFoldKey } from './plugins/sectionFold'
 
 export interface SearchResult {
   count: number
@@ -92,8 +93,12 @@ export function createSearchController(getView: () => EditorView | null): Search
           class: index === searchState.current ? 'search-hit current' : 'search-hit',
         }),
       )
+      let tr = view.state.tr
+      // M12：命中在折叠小节内时先展开该小节，否则光标跳进不可见内容、滚动无效
+      const folded = collapsedRangeAt(view.state, hit.from)
+      if (folded) tr = tr.setMeta(sectionFoldKey, { toggle: folded.heading })
       view.dispatch(
-        view.state.tr
+        tr
           .setMeta(searchKey, DecorationSet.create(view.state.doc, decorations))
           .setSelection(TextSelection.create(view.state.doc, hit.from))
           .scrollIntoView(),
