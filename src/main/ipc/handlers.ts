@@ -15,8 +15,8 @@ import {
   upsertDraft,
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
-import { allowImageDirectory } from '../image-protocol'
-import { isPathTrusted, trustDirectory } from '../trusted-paths'
+import { allowImageDirectory, isImageDirAllowed } from '../image-protocol'
+import { isFileTrustedForSave, isPathTrusted, trustDirectory, trustFileForSave } from '../trusted-paths'
 import { setWebContentsUnsaved } from '../unsaved'
 
 const execFileAsync = promisify(execFile)
@@ -298,7 +298,8 @@ export function registerIpcHandlers(): void {
   trustDirectory(join(app.getPath('userData'), 'images'))
   // L8：会话恢复路径预授权——新进程的信任根初始为空，渲染端恢复会话时
   // FILE_READ/SEARCH 等必须能命中上次会话已打开的文档与工作区。
-  // 逆序登记、工作区最后，超限淘汰时优先淘汰最旧的散落文件目录。
+  // H1 修复：散落文档（可能经拖入打开）只恢复"图片读 + 文件级保存"，
+  // 不恢复目录完整信任；工作区目录本身仍授完整信任。
   void getSetting('session').then((raw) => {
     const session = raw as
       | { files?: { path?: string }[]; workspacePath?: string }
@@ -306,7 +307,10 @@ export function registerIpcHandlers(): void {
     const files = session?.files ?? []
     for (let i = files.length - 1; i >= 0; i--) {
       const p = files[i]?.path
-      if (typeof p === 'string' && p) trustDirectory(dirname(p))
+      if (typeof p === 'string' && p) {
+        allowImageDirectory(dirname(p))
+        trustFileForSave(p)
+      }
     }
     if (typeof session?.workspacePath === 'string' && session.workspacePath) {
       trustDirectory(session.workspacePath)
@@ -356,7 +360,10 @@ export function registerIpcHandlers(): void {
         }
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
-      allowImageDirectory(dirname(filePath))
+      // H1 修复：对话框选择 = 用户明确授权，授完整信任根；
+      // 该文件本身另加入文件级保存白名单
+      trustDirectory(dirname(filePath))
+      trustFileForSave(filePath)
       lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
@@ -409,7 +416,8 @@ export function registerIpcHandlers(): void {
       try {
         const budget: TreeBudget = { nodes: 0, truncated: false }
         const children = await walkMarkdownTree(folderPath, 0, budget)
-        allowImageDirectory(folderPath)
+        // H1 修复：工作区目录授完整信任（树内文件需读/写/删/搜/图）
+        trustDirectory(folderPath)
         return {
           ok: true,
           data: {
@@ -449,7 +457,10 @@ export function registerIpcHandlers(): void {
         }
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
+      // H1 修复：拖入/会话恢复的 .md 只授其目录"图片读取"权限（allowImageDirectory），
+      // 该文件本身加入文件级保存白名单——不再因读取一个 .md 而获得目录写/删/搜权限
       allowImageDirectory(dirname(filePath))
+      trustFileForSave(filePath)
       lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
@@ -480,8 +491,9 @@ export function registerIpcHandlers(): void {
       },
     ) => {
       try {
-        // L8：保存目标必须属于已授权根（打开的文档/对话框另存的位置）
-        if (!ensureTrusted(args.path)) {
+        // L8：保存目标必须属于已授权根（打开的文档/对话框另存的位置），
+        // 或为本应用读取过的 .md 精确文件（拖入/会话恢复，见 trusted-paths.ts）
+        if (!ensureTrusted(args.path) && !isFileTrustedForSave(args.path)) {
           return { ok: false, error: { code: 'INVALID_PATH' } }
         }
         const pre = await stat(args.path).catch(() => null)
@@ -1026,7 +1038,10 @@ export function registerIpcHandlers(): void {
       dirs.length > MAX_IMAGE_LIST_DIRS ||
       dirs.some(
         (dir) =>
-          typeof dir !== 'string' || !dir || dir.length > 4096 || !ensureTrusted(dir),
+          typeof dir !== 'string' ||
+          !dir ||
+          dir.length > 4096 ||
+          (!ensureTrusted(dir) && !isImageDirAllowed(dir)),
       )
     ) {
       return { ok: false, error: { code: 'INVALID_ARGUMENT' } }

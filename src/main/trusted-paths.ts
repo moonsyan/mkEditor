@@ -42,3 +42,29 @@ export function isPathTrusted(filePath: string): boolean {
 export function getTrustedRoots(): string[] {
   return Array.from(trustedRoots.keys())
 }
+
+/**
+ * 文件级保存白名单（H1 修复）：FILE_READ 读过的 .md 精确路径。
+ * FILE_SAVE 允许写回这些文件，但不再向其所在目录授予任何其它权限。
+ */
+const trustedFiles = new Map<string, true>()
+
+/** 文件级白名单数量上限：超出时淘汰最早加入的 */
+const MAX_TRUSTED_FILES = 128
+
+export function trustFileForSave(filePath: string): void {
+  if (!filePath) return
+  const p = resolve(filePath)
+  if (trustedFiles.has(p)) return
+  if (trustedFiles.size >= MAX_TRUSTED_FILES) {
+    const oldest = trustedFiles.keys().next().value
+    if (oldest !== undefined) trustedFiles.delete(oldest)
+  }
+  trustedFiles.set(p, true)
+}
+
+/** 该精确文件是否可写回（仅 FILE_SAVE 使用；目录其它操作仍需完整信任根） */
+export function isFileTrustedForSave(filePath: string): boolean {
+  if (!filePath) return false
+  return trustedFiles.has(resolve(filePath))
+}
