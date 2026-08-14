@@ -9,10 +9,13 @@ export function usePersistedSetting<T>(
   value: T,
   ready: boolean,
   debounceMs = 0,
+  allowNull = false,
 ): void {
   useEffect(() => {
-    // null 表示"无记录"（如折叠键从未持久化过），不写回，避免覆盖其他记录
-    if (!ready || value == null) return
+    // null 表示"无记录"（如折叠键从未持久化过），默认不写回，避免覆盖其他记录；
+    // allowNull 时允许显式写回 null（如移除自定义主题，持久化"已移除"状态，
+    // 重启后不再重新加载旧主题）
+    if (!ready || (value == null && !allowNull)) return
     if (debounceMs <= 0) {
       window.desktopAPI?.settings.set(key, value).catch(() => {})
       return

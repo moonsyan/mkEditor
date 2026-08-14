@@ -103,6 +103,10 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [ddStyle, setDdStyle] = useState<CSSProperties>({})
   const barRef = useRef<HTMLDivElement>(null)
+  /** D2：当前菜单是否由点击打开（悬停打开的菜单，点击标题=钉住而非关闭） */
+  const openByClickRef = useRef(false)
+  /** D3：当前打开菜单的触发按钮（窗口尺寸变化时按新位置重算下拉坐标） */
+  const triggerRef = useRef<HTMLElement | null>(null)
 
   /** 实际菜单定义：把最近文件动态注入文件菜单（"打开文件夹"之后） */
   const menus = useMemo(() => {
@@ -144,6 +148,20 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
+  // D3：窗口尺寸变化时按触发按钮的新位置重算下拉坐标
+  // （fixed 定位不随窗口移动，不重算会悬在旧位置）
+  useEffect(() => {
+    if (!openKey) return
+    const recompute = () => {
+      const trigger = triggerRef.current
+      if (!trigger) return
+      const rect = trigger.getBoundingClientRect()
+      setDdStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left })
+    }
+    window.addEventListener('resize', recompute)
+    return () => window.removeEventListener('resize', recompute)
+  }, [openKey])
+
   const handleItemClick = useCallback(
     (key: string, item: MenuItemDef) => {
       setOpenKey(null)
@@ -153,9 +171,11 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
   )
 
   /** 打开菜单时计算下拉位置（fixed 定位，避免被 workspace overflow 裁剪） */
-  const openMenu = useCallback((key: string, trigger: HTMLElement) => {
+  const openMenu = useCallback((key: string, trigger: HTMLElement, byClick = false) => {
+    triggerRef.current = trigger
     const rect = trigger.getBoundingClientRect()
     setDdStyle({ position: 'fixed', top: rect.bottom + 4, left: rect.left })
+    openByClickRef.current = byClick
     setOpenKey(key)
   }, [])
 
@@ -169,7 +189,8 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
     }
     if (!['ArrowDown', 'Enter', ' '].includes(event.key)) return
     event.preventDefault()
-    openMenu(key, event.currentTarget)
+    // 键盘打开按"点击打开"处理：再次 Enter/空格可关闭
+    openMenu(key, event.currentTarget, true)
   }
 
   return (
@@ -189,8 +210,13 @@ export function MenuBar({ onAction, recentFiles = [] }: MenuBarProps): JSX.Eleme
             aria-expanded={openKey === key}
             aria-haspopup="menu"
             onClick={(event) => {
-              if (openKey === key) setOpenKey(null)
-              else openMenu(key, event.currentTarget)
+              if (openKey === key) {
+                // D2：悬停打开的菜单，点击标题=钉住（保持打开）；
+                // 点击打开的菜单，再点=关闭
+                if (openByClickRef.current) setOpenKey(null)
+              } else {
+                openMenu(key, event.currentTarget, true)
+              }
             }}
             onKeyDown={(event) => handleMenuKeyDown(event, key)}
           >

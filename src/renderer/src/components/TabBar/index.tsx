@@ -17,7 +17,9 @@ interface TabBarProps {
  * 支持拖拽排序。复用现有 openFiles / activeFileId 状态，不改动单文档内核。
  */
 export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, onReorder }: TabBarProps) {
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  // D8：拖拽记录被拖标签的 id 而非下标——openFiles 可能在拖拽中变化
+  //（预览标签替换、其它标签关闭等），落点时按 id 反查最新下标
+  const [dragId, setDragId] = useState<string | null>(null)
   const [overIndex, setOverIndex] = useState<number | null>(null)
   const tabRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
@@ -57,27 +59,31 @@ export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, o
             aria-selected={active}
             aria-label={`${file.name}${dirty ? '，未保存' : ''}${preview ? '，预览标签' : ''}`}
             tabIndex={active ? 0 : -1}
-            className={`tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${overIndex === i && dragIndex !== null && dragIndex !== i ? 'drag-over' : ''}`}
+            className={`tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${overIndex === i && dragId !== null && dragId !== file.id ? 'drag-over' : ''}`}
             draggable
             onDragStart={(e) => {
-              setDragIndex(i)
+              setDragId(file.id)
               e.dataTransfer.effectAllowed = 'move'
             }}
             onDragOver={(e) => {
               e.preventDefault()
-              if (dragIndex !== null && dragIndex !== i) setOverIndex(i)
+              if (dragId !== null && dragId !== file.id) setOverIndex(i)
             }}
             onDragLeave={() => {
               if (overIndex === i) setOverIndex(null)
             }}
             onDrop={(e) => {
               e.preventDefault()
-              if (dragIndex !== null && dragIndex !== i) onReorder(dragIndex, i)
-              setDragIndex(null)
+              if (dragId !== null && dragId !== file.id) {
+                // D8：落点按 id 反查当前下标（拖拽期间 openFiles 可能已变化）
+                const from = openFiles.findIndex((f) => f.id === dragId)
+                if (from !== -1) onReorder(from, i)
+              }
+              setDragId(null)
               setOverIndex(null)
             }}
             onDragEnd={() => {
-              setDragIndex(null)
+              setDragId(null)
               setOverIndex(null)
             }}
             onClick={() => onSwitch(file.id)}

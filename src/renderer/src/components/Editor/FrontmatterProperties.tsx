@@ -137,7 +137,13 @@ export function FrontmatterProperties({
               <button
                 type="button"
                 className="fm-rm-btn"
-                onClick={() => onDeleteProperty(key)}
+                onClick={() => {
+                  // E11：删除后清空行内编辑状态——否则同一 key 重新添加时，
+                  // 旧 editBuffer 会顶掉新值
+                  setEditingField(null)
+                  setEditBuffer('')
+                  onDeleteProperty(key)
+                }}
                 aria-label={`删除属性 ${key}`}
                 title={`删除属性 "${key}"`}
               >

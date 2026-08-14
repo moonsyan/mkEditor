@@ -228,7 +228,8 @@ export function WorkspaceSearchDialog({
           {error && <div className="ws-error">{error}</div>}
           <div className="ws-results">
             {loading && <div className="ws-empty">搜索中…</div>}
-            {!loading && searched && matches.length === 0 && (
+            {/* D6：搜索失败（错误横幅已展示）时不再显示"无匹配结果"，避免双重提示 */}
+            {!loading && !error && searched && matches.length === 0 && (
               <div className="ws-empty">无匹配结果</div>
             )}
             {!loading &&

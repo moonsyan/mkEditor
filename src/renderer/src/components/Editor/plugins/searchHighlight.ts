@@ -58,6 +58,15 @@ export function collectHits(doc: ProseNode, re: RegExp): SearchHit[] {
   return hits
 }
 
+/** 命中变化回调（D1：文档编辑后 hits 经映射更新，通知 UI 刷新计数显示） */
+export type SearchHitsListener = (hits: SearchHit[], current: number) => void
+let hitsListener: SearchHitsListener | null = null
+
+/** 注册/注销命中变化监听（搜索栏打开期间由 App 订阅） */
+export function setSearchHitsListener(listener: SearchHitsListener | null): void {
+  hitsListener = listener
+}
+
 export const searchKey = new PluginKey('search-highlight')
 
 /** 搜索高亮插件：装饰集通过 meta 更新 */
@@ -83,6 +92,8 @@ export const searchPlugin = new Plugin({
         if (searchState.current >= searchState.hits.length) {
           searchState.current = searchState.hits.length - 1
         }
+        // D1：编辑后命中位置/数量已变，通知 UI 同步计数显示
+        hitsListener?.(searchState.hits, searchState.current)
       }
       return (prev as DecorationSet).map(tr.mapping, tr.doc)
     },

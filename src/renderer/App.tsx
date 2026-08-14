@@ -7,6 +7,7 @@ import { Sidebar } from './src/components/Sidebar'
 import type { OpenFile, WorkspaceInfo } from './src/components/Sidebar'
 import { Editor } from './src/components/Editor'
 import type { EditorHandle } from './src/components/Editor'
+import { setSearchHitsListener } from './src/components/Editor/plugins/searchHighlight'
 import { StatusBar } from './src/components/StatusBar'
 import { ThemeSwitcher } from './src/components/ThemeSwitcher'
 import { SearchBar } from './src/components/SearchBar'
@@ -753,17 +754,21 @@ export default function App(): JSX.Element {
     document.title = `${saved ? '' : '● '}${docTitle} — MarkdownSoft`
   }, [docTitle, saved])
 
-  // 有未保存内容时，关闭窗口前确认
+  // 有未保存内容时，关闭窗口前确认；退出前把防抖未落盘的统计/最近文件立即写回
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (Object.values(savedMap).some((s) => !s)) {
         e.preventDefault()
         e.returnValue = ''
       }
+      // E7：防抖定时器随窗口销毁不再执行（写作统计 10s、最近文件 2s），
+      // 退出时立即写回，避免最后一次输入丢失（best-effort）
+      window.desktopAPI?.settings.set('writingStats', writingStats).catch(() => {})
+      window.desktopAPI?.settings.set('recentFiles', recentFiles).catch(() => {})
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [savedMap])
+  }, [savedMap, writingStats, recentFiles])
 
   /* ==================== 自动保存 ==================== */
 
@@ -811,10 +816,26 @@ export default function App(): JSX.Element {
     [],
   )
 
+  /** 读指定文档的内容：活动文件直接读编辑器实时内容（防抖窗口内 state 滞后），
+   *  非活动文件读 ref 镜像（切换时已 flush，不会滞后）。
+   *  定义在 useDraftPersistence 之前（E4：冲刷草稿时需读取实时内容）。 */
+  const liveContentOf = useCallback(
+    (id: string): string => {
+      if (id === activeFileIdRef.current && editorRef.current?.isReady()) {
+        const md = editorRef.current.getMarkdown()
+        if (md !== null) return toStoredImages(md, dirOfFile(id))
+      }
+      return contentsRef.current[id] ?? ''
+    },
+    [dirOfFile],
+  )
+
   const { clearDraft, draftPendingRef, saveDraft } = useDraftPersistence({
     activeFileId,
     content: activeContent,
     ready: settingsReady,
+    // E4：切换标签冲刷草稿时读编辑器实时内容，避免 200ms 防抖窗口内内容滞后
+    getLiveContent: liveContentOf,
   })
 
   // 用 ref 镜像最新状态，供定时器读取（避免闭包捕获旧值）
@@ -936,8 +957,9 @@ export default function App(): JSX.Element {
     }
   }, [customCss])
 
-  // 自定义主题持久化
-  usePersistedSetting('customCss', customCss, settingsReady)
+  // 自定义主题持久化（E6：allowNull——移除主题时显式写回 null，
+  // 重启后不再复活旧主题；其余设置项保持 null 不写回的默认语义）
+  usePersistedSetting('customCss', customCss, settingsReady, 0, true)
 
   // Wiki 链接自动补全候选文件列表
   const wikiLinkFileList = useMemo(() => {
@@ -1109,19 +1131,6 @@ export default function App(): JSX.Element {
     setSearchCount(0)
     setSearchCurrent(-1)
   }, [dirOfFile])
-
-  /** 读指定文档的内容：活动文件直接读编辑器实时内容（防抖窗口内 state 滞后），
-   *  非活动文件读 ref 镜像（切换时已 flush，不会滞后）。 */
-  const liveContentOf = useCallback(
-    (id: string): string => {
-      if (id === activeFileIdRef.current && editorRef.current?.isReady()) {
-        const md = editorRef.current.getMarkdown()
-        if (md !== null) return toStoredImages(md, dirOfFile(id))
-      }
-      return contentsRef.current[id] ?? ''
-    },
-    [dirOfFile],
-  )
 
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
   const discardPreviewTab = useCallback((nextFileId: string) => {
@@ -2393,6 +2402,20 @@ img{max-width:100%}
     setSearchCurrent(-1)
     focusEditorSoon()
   }, [focusEditorSoon])
+
+  // D1：搜索栏打开期间订阅编辑后命中变化（插件在 docChanged 后重映射 hits），
+  // 计数与高亮保持同步（此前编辑文档后计数停滞在旧值）
+  useEffect(() => {
+    if (searchMode === 'none') {
+      setSearchHitsListener(null)
+      return
+    }
+    setSearchHitsListener((hits, current) => {
+      setSearchCount(hits.length)
+      setSearchCurrent(current)
+    })
+    return () => setSearchHitsListener(null)
+  }, [searchMode])
 
   /* ==================== 分栏预览 ==================== */
 

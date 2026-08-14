@@ -27,6 +27,15 @@ export function ThemeSwitcher({ currentTheme, onThemeChange }: ThemeSwitcherProp
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // D4：Esc 关闭（与菜单栏行为一致；此前只能点击外部关闭）
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   return (
     <div className="theme-switcher" ref={ref}>
       <button

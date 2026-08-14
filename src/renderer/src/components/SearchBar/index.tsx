@@ -60,10 +60,14 @@ export function SearchBar({
   const [wholeWord, setWholeWord] = useState(initial?.wholeWord ?? false)
   const [replacement, setReplacement] = useState(initial?.replacement ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
+  const replaceInputRef = useRef<HTMLInputElement>(null)
 
-  // 打开时自动聚焦
+  // 打开/切换模式时聚焦相应输入框
+  // D5：此前切换到替换模式仍聚焦查询框——用户刚按 Ctrl+H 想直接输入替换文本，
+  // 结果输入进了查找框
   useEffect(() => {
-    inputRef.current?.focus()
+    if (withReplace) replaceInputRef.current?.focus()
+    else inputRef.current?.focus()
   }, [withReplace])
 
   // U4：携带上次查询词打开时，立即重新执行搜索恢复高亮。
@@ -202,6 +206,7 @@ export function SearchBar({
           <span className="search-regex-placeholder" />
           <span className="search-regex-placeholder" />
           <input
+            ref={replaceInputRef}
             className="search-input"
             placeholder="替换为"
             value={replacement}

@@ -253,21 +253,38 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
     const [fullscreenCode, setFullscreenCode] = useState<FullscreenCodeState | null>(null)
     // Wiki 链接自动补全浮层状态
     const [wikiAcState, setWikiAcState] = useState<WikiAutocompleteState | null>(null)
+    /** E10：浮层内容坐标缓存（键为上报状态对象，收到新报告时重新换算） */
+    const wikiAcPosRef = useRef<{ key: unknown; x: number; y: number } | null>(null)
 
     // 从 ProseMirror autocomplete 状态 + 候选文件列表派生 overlay 数据
     const wikiAcOverlay = wikiAcState && wikiLinkFiles && wikiLinkFiles.length > 0
       ? (() => {
-          // C-4：coordsAtPos 返回视口坐标，而浮层 position:absolute 的包含块是
-          // 最近的定位祖先（.editor-host，position:relative）。减去锚点 rect
-          // 换算为容器内坐标，否则浮层整体下移 TabBar 高度、且不随滚动校正
-          const anchor = containerRef.current?.closest('.editor-host')
+          // E10：浮层渲染在 .editor-scroll 内（EditorOverlays 是其子节点），
+          // position:absolute 的包含块是 .editor-scroll（position:relative，
+          // editor.css:15）而非 .editor-host——按 .editor-host 换算会把浮层
+          // 整体下移 TabBar 高度。锚点改用滚动容器自身，并把视口坐标换算为
+          // 内容坐标（+scrollTop/scrollLeft）：滚动时浏览器将浮层随内容一起
+          // 滚动，天然与光标保持粘连。换算结果按报告对象缓存：插件只在选区
+          // 变化时上报新坐标，若滚动后因其它状态变化重渲染，复用缓存的内容
+          // 坐标可避免浮层按新 scrollTop 错误偏移
+          const anchor = scrollRef.current
           const anchorRect = anchor?.getBoundingClientRect()
-          const x = anchorRect
-            ? wikiAcState.coords.left - anchorRect.left
-            : wikiAcState.coords.left
-          const y = anchorRect
-            ? wikiAcState.coords.top - anchorRect.top
-            : wikiAcState.coords.top
+          const cached = wikiAcPosRef.current
+          const pos =
+            cached && cached.key === wikiAcState
+              ? cached
+              : (wikiAcPosRef.current = anchorRect
+                  ? {
+                      key: wikiAcState,
+                      x: wikiAcState.coords.left - anchorRect.left + (anchor?.scrollLeft ?? 0),
+                      y: wikiAcState.coords.top - anchorRect.top + (anchor?.scrollTop ?? 0),
+                    }
+                  : {
+                      key: wikiAcState,
+                      x: wikiAcState.coords.left,
+                      y: wikiAcState.coords.top,
+                    })
+          const { x, y } = pos
           return {
             query: wikiAcState.query,
             suggestions: filterWikiSuggestions(
