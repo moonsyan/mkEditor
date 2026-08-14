@@ -505,6 +505,15 @@ export default function App(): JSX.Element {
         if (Object.keys(restoredEncodings).length) {
           setEncodingMap((prev) => ({ ...prev, ...restoredEncodings }))
         }
+        // H7：会话恢复的未命名标签（untitled-N）可能占用新标签 ID，
+        // 启动时把自增计数推进到已恢复的最大编号，避免 Ctrl+N 创建重复 ID
+        for (const f of restoredFiles) {
+          const match = /^untitled-(\d+)$/.exec(f.id)
+          if (match) {
+            const n = Number(match[1])
+            if (n >= untitledCounter) untitledCounter = n + 1
+          }
+        }
 
         /* ---- 草稿恢复：未保存的编辑内容回滚 ---- */
         const dirtyIds: string[] = []
