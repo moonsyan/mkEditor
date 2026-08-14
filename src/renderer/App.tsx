@@ -1474,6 +1474,11 @@ export default function App(): JSX.Element {
     activeFileIdRef.current = newId
     setActiveFileId(newId)
     setDocTitle(name)
+    // M7：另存为改变文档目录后，编辑器内 mdimg 仍按旧目录解析；
+    // 按新目录重新迁移并重渲染，否则下一键保存就把旧目录绝对路径写进新文件
+    if (newId !== oldId) {
+      replaceEditorContent(newId, content, 'update')
+    }
     void clearDraft(oldId)
     if (newId !== oldId) void clearDraft(newId)
     if (retainUnsavedTarget) {
@@ -1482,7 +1487,7 @@ export default function App(): JSX.Element {
       return
     }
     if (targetAlreadyOpen) setToast('已覆盖并切换到已打开的同名文件')
-  }, [activeFileId, contents, savedMap, clearDraft, saveDraft])
+  }, [activeFileId, contents, savedMap, clearDraft, saveDraft, replaceEditorContent])
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)
@@ -2170,11 +2175,14 @@ img{max-width:100%}
         const nid = `file-${mapPath(activeFileId.slice(5))}`
         activeFileIdRef.current = nid
         setActiveFileId(nid)
+        // M7：移动改变了文档目录，编辑器内 mdimg 仍按旧目录解析；
+        // 按新目录重新迁移并重渲染，否则下一键保存就把 mdimg:///旧目录/ 绝对路径写进文件
+        replaceEditorContent(nid, contentsRef.current[activeFileId] ?? '', 'update')
       }
       setToast('已移动')
       await refreshWorkspace()
     },
-    [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, activeFileId, refreshWorkspace, clearDraft],
+    [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, activeFileId, refreshWorkspace, clearDraft, replaceEditorContent],
   )
 
   /** 右键在新窗口打开文件（U7） */
