@@ -49,12 +49,18 @@ const parseSafePropertyLine = (line: string): SafePropertyLine | null => {
   return { key: match[1], value: rawValue, quote: null }
 }
 
-const findTopLevelPropertyIndex = (lines: string[], key: string): number => {
+/**
+ * L18：重复键时 YAML 语义以最后一次出现为准，parseFrontmatterYaml 也是
+ * 后写覆盖先写。编辑/删除必须作用于最后一行，否则面板显示的是最后一行、
+ * 改的却是第一行，看起来"没生效"。
+ */
+const findLastPropertyIndex = (lines: string[], key: string): number => {
+  let found = -1
   for (let i = 0; i < lines.length; i++) {
     const match = /^([A-Za-z0-9_-]+)[ \t]*:/.exec(lines[i])
-    if (match?.[1] === key) return i
+    if (match?.[1] === key) found = i
   }
-  return -1
+  return found
 }
 
 /**
@@ -224,7 +230,7 @@ export function setFrontmatterProperty(
   }
 
   const lines = existing.text.split(/\r?\n/)
-  const index = findTopLevelPropertyIndex(lines, key)
+  const index = findLastPropertyIndex(lines, key)
   if (index >= 0) {
     const property = parseSafePropertyLine(lines[index])
     if (!property) return markdown
@@ -247,7 +253,7 @@ export function deleteFrontmatterProperty(markdown: string, key: string): string
 
   const lineBreak = getLineBreak(markdown)
   const lines = existing.text.split(/\r?\n/)
-  const index = findTopLevelPropertyIndex(lines, key)
+  const index = findLastPropertyIndex(lines, key)
   if (index < 0) return markdown
   if (!parseSafePropertyLine(lines[index])) return markdown
 

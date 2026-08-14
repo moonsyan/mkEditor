@@ -39,4 +39,17 @@ describe('frontmatter 属性编辑', () => {
     const extraGap = '---\ntitle: A\n---\n\n\n# 标题'
     expect(deleteFrontmatterProperty(extraGap, 'title')).toBe('\n# 标题')
   })
+
+  it('L18:重复键时编辑/删除作用于最后一行（与解析器 last-wins 一致）', () => {
+    const markdown = '---\ntitle: A\ntitle: B\n---\n正文'
+
+    // 面板显示 B（解析器读最后一行），编辑 B 应改最后一行
+    expect(setFrontmatterProperty(markdown, 'title', 'C')).toBe(
+      '---\ntitle: A\ntitle: C\n---\n正文',
+    )
+    // 删除同样删最后一行
+    expect(deleteFrontmatterProperty(markdown, 'title')).toBe(
+      '---\ntitle: A\n---\n正文',
+    )
+  })
 })
