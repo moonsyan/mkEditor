@@ -104,11 +104,13 @@ export function useImageInsertion({
 
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
+      // M10：dragOver 已对所有文件 preventDefault（接受拖放），
+      // drop 必须同样拦截，否则 .pdf/.docx 等非图片会落入浏览器默认导航、整个窗口跳走
+      event.preventDefault()
       const files = Array.from(event.dataTransfer?.files ?? []).filter((file) =>
         file.type.startsWith('image/'),
       )
       if (files.length === 0) return
-      event.preventDefault()
       files.forEach(insertImageFile)
     },
     [insertImageFile],
