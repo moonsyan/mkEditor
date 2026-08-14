@@ -1092,6 +1092,11 @@ export default function App(): JSX.Element {
     setContents((prev) => (prev[fileId] === stored ? prev : { ...prev, [fileId]: stored }))
     const isSaved = !isDocumentDirty(stored, INITIAL_OR_SAVED.current[fileId] ?? '')
     setSavedMap((prev) => (prev[fileId] === isSaved ? prev : { ...prev, [fileId]: isSaved }))
+    // 文档即将被替换:搜索 hits 还指向旧文档位置,先清空状态与高亮。
+    // 否则换到更短文档后 next/替换会越界抛 RangeError,或在错误位置替换文本
+    editorRef.current?.endSearch()
+    setSearchCount(0)
+    setSearchCurrent(-1)
   }, [dirOfFile])
 
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
