@@ -1341,6 +1341,13 @@ export default function App(): JSX.Element {
       if (opening) {
         const opened = await opening
         if (opened && pinned) pinPreviewTab(id)
+        // 迟到返回的调用方（双击/重复点击）：首个请求完成时若最新选择仍是本文件，
+        // 补齐"切到该标签"——此前该分支只 pin 不切换，慢速读取（网络盘）时
+        // 双击会表现为"点了没反应"
+        if (opened && latestWorkspaceSelectionRef.current === path) {
+          const nowOpen = openFilesRef.current.find((f) => f.id === id)
+          if (nowOpen) switchFile(id)
+        }
         return opened
       }
       const openRequest = (async (): Promise<boolean> => {
@@ -1869,12 +1876,16 @@ img{max-width:100%}
         return
       }
       if (!window.desktopAPI) return
-      // 先写回未保存内容，避免重命名丢失编辑（带冲突检测：外部修改过的不静默覆盖，中止重命名）
-      const oldId = `file-${path}`
+      // 先写回未保存内容，避免重命名丢失编辑（带冲突检测：外部修改过的不静默覆盖，中止重命名）。
+      // A-L3：记录一律按"当前 path 查到的 id"寻址而非闭包里的旧 id——
+      // 连续两次重命名（A→B 后立刻 B→C）交错完成时，闭包 oldId 已过期，
+      // 用旧 id 迁移会把记录/内容搬到错误键下，产生重复标签 id 或内容丢失
+      const currentRecord = openFilesRef.current.find((f) => f.path === path)
+      const currentId = currentRecord?.id ?? `file-${path}`
       let pending: string | undefined
-      if (savedMap[oldId] === false && contentsRef.current[oldId] !== undefined) {
-        pending = liveContentOf(oldId)
-        const saveRes = await saveWithEncodingFallback(path, pending, fileMtime[oldId], oldId)
+      if (savedMap[currentId] === false && contentsRef.current[currentId] !== undefined) {
+        pending = liveContentOf(currentId)
+        const saveRes = await saveWithEncodingFallback(path, pending, fileMtime[currentId], currentId)
         if (!saveRes.ok) {
           setToast(
             saveRes.error?.code === 'CONFLICT'
@@ -1884,8 +1895,8 @@ img{max-width:100%}
           return
         }
         if (saveRes.data) {
-          INITIAL_OR_SAVED.current[oldId] = pending
-          setFileMtime((prev) => ({ ...prev, [oldId]: saveRes.data!.modifiedTime }))
+          INITIAL_OR_SAVED.current[currentId] = pending
+          setFileMtime((prev) => ({ ...prev, [currentId]: saveRes.data!.modifiedTime }))
         }
       }
       const res = await window.desktopAPI.workspace.renameFile(path, newName)
@@ -1901,54 +1912,62 @@ img{max-width:100%}
         setToast('重命名失败')
         return
       }
-      // 就地迁移打开记录/内容/基线/mtime 到新 id，避免旧路径幽灵标签残留
+      // 就地迁移打开记录/内容/基线/mtime 到新 id，避免旧路径幽灵标签残留。
+      // 迁移瞬间再次按原 path 定位记录：若已被另一在途重命名/删除移走则无事可迁
       const newPath = res.data.path
       const finalName = res.data.name
       const newId = `file-${newPath}`
+      const recordToMove = openFilesRef.current.find((f) => f.path === path)
+      if (!recordToMove) {
+        void clearDraft(`file-${path}`)
+        await refreshWorkspace()
+        return
+      }
+      const srcId = recordToMove.id
       const renamedFiles = openFilesRef.current.map((file) =>
-        file.id === oldId
+        file.path === path
           ? { ...file, id: newId, name: finalName, path: newPath }
           : file,
       )
       openFilesRef.current = renamedFiles
       setOpenFiles(renamedFiles)
       setContents((prev) => {
-        if (prev[oldId] === undefined) return prev
+        if (prev[srcId] === undefined) return prev
         const next = { ...prev }
-        next[newId] = next[oldId]
-        delete next[oldId]
+        next[newId] = next[srcId]
+        delete next[srcId]
         return next
       })
       // 基线：若刚写回了 pending，则基线即 pending（磁盘已是该内容），否则沿用旧基线
       INITIAL_OR_SAVED.current[newId] =
-        pending !== undefined ? pending : (INITIAL_OR_SAVED.current[oldId] ?? '')
-      delete INITIAL_OR_SAVED.current[oldId]
+        pending !== undefined ? pending : (INITIAL_OR_SAVED.current[srcId] ?? '')
+      delete INITIAL_OR_SAVED.current[srcId]
       // mtime 用重命名后的新值，避免旧值导致下次保存误报"外部修改"
       setFileMtime((prev) => {
         const next = { ...prev }
         if (res.data && res.data.modifiedTime > 0) next[newId] = res.data.modifiedTime
-        else if (prev[oldId] !== undefined) next[newId] = prev[oldId]
-        delete next[oldId]
+        else if (prev[srcId] !== undefined) next[newId] = prev[srcId]
+        delete next[srcId]
         return next
       })
       // 源编码同步迁移（GBK 文件重命名后保存仍写回原编码）
       setEncodingMap((prev) => {
-        if (prev[oldId] === undefined) return prev
+        if (prev[srcId] === undefined) return prev
         const next = { ...prev }
-        next[newId] = next[oldId]
-        delete next[oldId]
+        next[newId] = next[srcId]
+        delete next[srcId]
         return next
       })
       // H3：重命名 await 期间用户可能已切到其它标签。用 ref 实时判定，
       // 否则完成回调会把活动标签拽回旧文件、编辑器内容串号
-      if (activeFileIdRef.current === oldId) {
+      if (activeFileIdRef.current === srcId) {
         activeFileIdRef.current = newId
         setActiveFileId(newId)
         setDocTitle(finalName)
       }
       // 重命名前内容已写盘，旧草稿清除（含防抖中未落盘的待写项，避免写回旧 id）
-      if (draftPendingRef.current?.id === oldId) draftPendingRef.current = null
-      void clearDraft(oldId)
+      if (draftPendingRef.current?.id === srcId) draftPendingRef.current = null
+      void clearDraft(srcId)
       await refreshWorkspace()
     },
     [savedMap, fileMtime, liveContentOf, saveWithEncodingFallback, refreshWorkspace, clearDraft],
