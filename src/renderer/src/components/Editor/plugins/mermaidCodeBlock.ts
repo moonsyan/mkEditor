@@ -177,7 +177,6 @@ class MermaidPreview {
   getSourcePosition = (): number | undefined => this.getPos()
 
   syncSelection = () => {
-    if (!this.isEditingSource) return
     const codePos = this.getPos()
     if (typeof codePos !== 'number') return
     const codeNode = this.view.state.doc.nodeAt(codePos)
@@ -186,8 +185,15 @@ class MermaidPreview {
       codeNode &&
       codeNode.type.name === 'code_block' &&
       isSelectionInsideMermaidBlock(from, to, codePos, codeNode.nodeSize)
-    if (isInsideCodeBlock) return
-    this.showPreview()
+    if (this.isEditingSource) {
+      // 源码编辑态：选区移出代码块后切回预览
+      if (isInsideCodeBlock) return
+      this.showPreview()
+      return
+    }
+    // 预览态：键盘/搜索把光标带入隐藏的源码块时自动切换源码编辑，
+    // 否则光标在 display:none 的 pre 里消失，用户会盲改源码（H4）
+    if (isInsideCodeBlock) this.setSourceEditing(true)
   }
 
   private handleToggleSource = () => {
