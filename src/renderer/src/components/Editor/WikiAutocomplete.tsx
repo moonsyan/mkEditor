@@ -54,29 +54,37 @@ export function WikiAutocomplete({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // 组合键（Ctrl/Cmd/Alt）不拦截，放行给全局快捷键与编辑器
+      if (event.ctrlKey || event.metaKey || event.altKey) return
       if (isImeComposing(event)) return
+      // 捕获阶段拦截（H3）：PM 的 keydown 在编辑器 DOM 冒泡阶段，
+      // 若不提前 stopPropagation，↓/↑ 会同时移动文档光标、Enter 会先拆段再插入链接
       if (event.key === 'Escape') {
         event.preventDefault()
+        event.stopPropagation()
         onClose()
         return
       }
       if (event.key === 'ArrowDown') {
         event.preventDefault()
+        event.stopPropagation()
         setActiveIndex((current) => Math.min(suggestions.length - 1, current + 1))
         return
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault()
+        event.stopPropagation()
         setActiveIndex((current) => Math.max(0, current - 1))
         return
       }
       if (event.key === 'Enter') {
         event.preventDefault()
+        event.stopPropagation()
         handleSelect(activeIndex)
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [activeIndex, handleSelect, onClose, suggestions.length])
 
   if (suggestions.length === 0) return null
