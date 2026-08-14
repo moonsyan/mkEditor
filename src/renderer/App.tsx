@@ -231,6 +231,15 @@ export default function App(): JSX.Element {
   const wsSelectSeqRef = useRef(0)
   /** 组合键 → 动作 反查表（keydown 中读 ref，避免频繁重建监听） */
   const shortcutLookupRef = useRef<Record<string, string>>({})
+  /** 弹窗打开标志镜像（M4）：对话框打开期间禁用全局快捷键，
+   *  避免 Ctrl+S/Ctrl+N 等在弹窗按钮聚焦时误触发（ref 镜像避免重建监听器） */
+  const modalOpenRef = useRef(false)
+  modalOpenRef.current =
+    settingsOpen ||
+    helpView !== null ||
+    imagesOpen ||
+    pdfOptsOpen ||
+    wsSearchOpen
 
   useEffect(() => {
     if (!focusMode) return
@@ -2537,7 +2546,13 @@ img{max-width:100%}
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // M4：弹窗/对话框打开时全局快捷键一律不响应（焦点可能在按钮上，
+      // isEditableShortcutTarget 拦不住），由弹窗自身的键位处理接管
+      if (modalOpenRef.current) return
       if (isImeComposing(e)) return
+      // M6：事件已被更优先的处理者消费（defaultPrevented）或长按自动重复时不再触发动作
+      if (e.defaultPrevented) return
+      if (e.repeat) return
       const combo = comboFromEvent(e)
       if (!combo) return
       const action = shortcutLookupRef.current[combo]
