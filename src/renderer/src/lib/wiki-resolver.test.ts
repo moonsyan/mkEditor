@@ -144,6 +144,18 @@ describe('resolveWikiTarget', () => {
     expect(result.resolved).toBe(false)
   })
 
+  it('L19:子目录路径大小写不敏感匹配（Windows 路径大小写不敏感）', () => {
+    // 目录段 Sub 大小写不符，文件名也不一致——精确匹配与文件名兜底都失效
+    const result = resolveWikiTarget('Sub/NOTE', workspacePath, 'D:/notes/index.md', tree)
+    expect(result.resolved).toBe(true)
+    expect(result.path).toBe('D:/notes/sub/note.md')
+
+    // 根目录直接引用 + 文件名大小写不符
+    const result2 = resolveWikiTarget('TODO.md', workspacePath, 'D:/notes/index.md', tree)
+    expect(result2.resolved).toBe(true)
+    expect(result2.path).toBe('D:/notes/todo.md')
+  })
+
   it('空 target 返回未解析', () => {
     const result = resolveWikiTarget('', workspacePath, 'D:/notes/index.md', tree)
     expect(result.resolved).toBe(false)

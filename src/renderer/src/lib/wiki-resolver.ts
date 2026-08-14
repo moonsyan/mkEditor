@@ -138,6 +138,11 @@ function findFileByPathInTree(
   targetPath: string,
 ): string | null {
   const normalized = targetPath.replace(/\\/g, '/')
+  // L19：先精确匹配（大小写敏感，兼容大小写敏感文件系统）；
+  // 未命中再大小写不敏感匹配——Windows 文件系统大小写不敏感，
+  // 用户手写 [[Sub/Doc]] 目录部分大小写不符时精确命中失败，
+  // findFileByName 只兜底文件名、兜不住目录段，链接就解析不了
+  const lower = normalized.toLowerCase()
   const walk = (nodes: FolderTreeNode[]): string | null => {
     for (const node of nodes) {
       if (node.children) {
@@ -146,6 +151,7 @@ function findFileByPathInTree(
       } else {
         const nodePath = node.path.replace(/\\/g, '/')
         if (nodePath === normalized) return node.path
+        if (nodePath.toLowerCase() === lower) return node.path
       }
     }
     return null
