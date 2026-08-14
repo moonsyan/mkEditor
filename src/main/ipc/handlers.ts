@@ -29,6 +29,9 @@ const searchLineCache = new Map<
   string,
   { mtimeMs: number; size: number; lines: string[]; bytes: number }
 >()
+/** 最近读取/写入的文件状态（保存冲突检测用）：path → { mtimeMs, size }。
+ *  主进程是唯一读写入口，读时建立、写后更新；mtime 或 size 与记录不符即为外部修改。 */
+const lastKnownFileState = new Map<string, { mtimeMs: number; size: number }>()
 /** 缓存条目上限：超出时淘汰最早插入的条目（Map 保持插入顺序） */
 const SEARCH_CACHE_MAX = 1000
 /** 搜索行缓存总大小上限，防止大量中等大小 Markdown 长期占用主进程内存 */
@@ -280,6 +283,7 @@ export function registerIpcHandlers(): void {
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
       allowImageDirectory(dirname(filePath))
+      lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
         data: {
@@ -359,6 +363,7 @@ export function registerIpcHandlers(): void {
       }
       const { content, encoding } = await readTextAutoEncoding(filePath)
       allowImageDirectory(dirname(filePath))
+      lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
         data: {
@@ -392,11 +397,17 @@ export function registerIpcHandlers(): void {
         if (!pre) {
           return { ok: false, error: { code: 'NOT_FOUND' } }
         }
-        // 容差 3 秒，避开低精度文件系统（FAT32 为 2 秒）的时间戳误差，减少误报
-        if (
-          typeof args.expectedMtime === 'number' &&
-          pre.mtimeMs > args.expectedMtime + 3000
-        ) {
+        // 冲突检测（H6）：磁盘 mtime 明显比预期新、或文件尺寸与最近一次读/写不一致，
+        // 均视为被外部修改，拒绝写入避免静默覆盖。
+        // - mtime 容差 500ms 仅吸收本应用连续保存的时间戳抖动（NTFS 纳秒精度无需大容差）；
+        // - 尺寸维度可捕获 FAT32 同时间片内被编辑、以及 git checkout / cp -p 等
+        //   旧 mtime 的外部修改（此前 3 秒无条件容差会让这些修改被静默覆盖）。
+        const known = lastKnownFileState.get(args.path)
+        const conflict =
+          (typeof args.expectedMtime === 'number' &&
+            pre.mtimeMs > args.expectedMtime + 500) ||
+          (known !== undefined && pre.size !== known.size)
+        if (conflict) {
           return {
             ok: false,
             error: { code: 'CONFLICT', message: '文件已被外部修改' },
@@ -421,6 +432,7 @@ export function registerIpcHandlers(): void {
           await writeFileAtomically(args.path, args.content, pre.mode)
         }
         const fileStat = await stat(args.path)
+        lastKnownFileState.set(args.path, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
         return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -456,7 +468,12 @@ export function registerIpcHandlers(): void {
         // 返回真实落盘 mtime（渲染端用于下次保存的冲突检测，比 Date.now() 更准）
         let modifiedTime = 0
         try {
-          modifiedTime = (await stat(result.filePath)).mtimeMs
+          const fileStat = await stat(result.filePath)
+          modifiedTime = fileStat.mtimeMs
+          lastKnownFileState.set(result.filePath, {
+            mtimeMs: fileStat.mtimeMs,
+            size: fileStat.size,
+          })
         } catch {
           /* stat 失败不阻断，渲染端会降级用当前时间 */
         }
