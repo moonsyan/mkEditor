@@ -831,7 +831,18 @@ export default function App(): JSX.Element {
       try {
         for (const f of fs) {
           if (!f.path || sm[f.id] !== false) continue
-          const content = cs[f.id] ?? ''
+          let content = cs[f.id] ?? ''
+          // A-M4:contents state 滞后编辑器 ≤200ms(防抖回调未落账)。
+          // 活动文件直接读编辑器实时内容,避免把旧内容写盘后错标"已保存"
+          if (f.id === activeFileIdRef.current && editorRef.current?.isReady()) {
+            const live = editorRef.current.getMarkdown()
+            if (live !== null) {
+              content = toStoredImages(live, dirOfFile(f.id))
+              if (contentsRef.current[f.id] !== content) {
+                contentsRef.current = { ...contentsRef.current, [f.id]: content }
+              }
+            }
+          }
           // 带冲突检测：外部修改过的文件不自动覆盖；GBK 文件写回原编码（含字符降级保护）
           const result = await saveWithEncodingFallback(f.path, content, mt[f.id], f.id)
           if (result.ok && result.data) {
@@ -1064,6 +1075,25 @@ export default function App(): JSX.Element {
     [dirOfFile, pinPreviewTab],
   )
 
+  /** 把编辑器实时内容同步落账（不等 200ms 防抖回调）。
+   *  listener 的 markdownUpdated 带 200ms 防抖：此窗口内切换/新建/打开文件，
+   *  旧文档的最近输入尚未写入 contents 就被替换掉，切回时静默丢失。
+   *  所有切换内容前必须先调用本函数，把活动文档的最新内容读入 state。 */
+  const flushEditorContent = useCallback(() => {
+    if (!editorRef.current?.isReady()) return
+    const fileId = activeFileIdRef.current
+    if (!fileId || !openFilesRef.current.some((f) => f.id === fileId)) return
+    const md = editorRef.current.getMarkdown()
+    if (md === null) return
+    const stored = toStoredImages(md, dirOfFile(fileId))
+    if (contentsRef.current[fileId] !== stored) {
+      contentsRef.current = { ...contentsRef.current, [fileId]: stored }
+    }
+    setContents((prev) => (prev[fileId] === stored ? prev : { ...prev, [fileId]: stored }))
+    const isSaved = !isDocumentDirty(stored, INITIAL_OR_SAVED.current[fileId] ?? '')
+    setSavedMap((prev) => (prev[fileId] === isSaved ? prev : { ...prev, [fileId]: isSaved }))
+  }, [dirOfFile])
+
   /** 侧栏打开下一个预览前丢弃前一个未修改的预览标签。 */
   const discardPreviewTab = useCallback((nextFileId: string) => {
     const previous = findDiscardablePreview(openFilesRef.current, nextFileId)
@@ -1140,6 +1170,8 @@ export default function App(): JSX.Element {
       latestWorkspaceSelectionRef.current = ''
       // 防御：目标不在打开列表中不切换，避免激活文件悬空的幽灵状态
       if (!openFiles.some((f) => f.id === id)) return
+      // 切换前把当前文档实时内容落账（防抖窗口内的最近输入不能丢）
+      flushEditorContent()
       // 先让标题输入框失焦：确保标题编辑保存到旧文件，不会串到新文件
       titleRef.current?.blur()
       // 先同步 ref，再替换内容（replaceAll 会同步触发 onChange）
@@ -1152,10 +1184,11 @@ export default function App(): JSX.Element {
       replaceEditorContent(id, contents[id] ?? '')
       focusEditorSoon()
     },
-    [activeFileId, openFiles, contents, dirOfFile, focusEditorSoon],
+    [activeFileId, openFiles, contents, dirOfFile, focusEditorSoon, flushEditorContent],
   )
 
   const handleNew = useCallback(() => {
+    flushEditorContent()
     titleRef.current?.blur()
     const id = `untitled-${untitledCounter++}`
     const name = `未命名 ${untitledCounter - 1}.md`
@@ -1170,7 +1203,7 @@ export default function App(): JSX.Element {
     setDocTitle(name)
     replaceEditorContent(id, '', 'initialize')
     focusEditorSoon()
-  }, [focusEditorSoon, replaceEditorContent])
+  }, [focusEditorSoon, replaceEditorContent, flushEditorContent])
 
   /**
    * 点击左侧文件夹树中的样例文件：已打开则切换，未打开则打开为新标签页。
@@ -1191,6 +1224,7 @@ export default function App(): JSX.Element {
       const name = DEMO_FILES[id].name
       const content = DEMO_FILES[id].content
       if (!pinned) discardPreviewTab(id)
+      flushEditorContent()
       const file = { id, name, preview: !pinned }
       openFilesRef.current = [...openFilesRef.current, file]
       activeFileIdRef.current = id
@@ -1203,7 +1237,7 @@ export default function App(): JSX.Element {
       replaceEditorContent(id, content, 'initialize')
       focusEditorSoon()
     },
-    [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon, pinPreviewTab],
+    [openFiles, switchFile, discardPreviewTab, replaceEditorContent, focusEditorSoon, pinPreviewTab, flushEditorContent],
   )
 
   const handleOpen = useCallback(async () => {
@@ -1218,6 +1252,8 @@ export default function App(): JSX.Element {
       }
       return
     }
+    // 打开新文件前先落账当前文档（防抖窗口内的最近输入不能丢）
+    flushEditorContent()
     titleRef.current?.blur()
     const { path, name, content } = result.data
     if (result.data.encoding) {
@@ -1246,7 +1282,7 @@ export default function App(): JSX.Element {
     recordRecent(path, name)
     replaceEditorContent(id, content, 'initialize')
     focusEditorSoon()
-  }, [openFiles, switchFile, recordRecent, replaceEditorContent, focusEditorSoon, pinPreviewTab])
+  }, [openFiles, switchFile, recordRecent, replaceEditorContent, focusEditorSoon, pinPreviewTab, flushEditorContent])
 
   /* ==================== 打开文件夹 / 工作区 ==================== */
 
@@ -1306,6 +1342,8 @@ export default function App(): JSX.Element {
           if (pinned && openedMeanwhile.preview) pinPreviewTab(id)
           return true
         }
+        // 打开新文件前先落账当前文档（防抖窗口内的最近输入不能丢）
+        flushEditorContent()
         titleRef.current?.blur()
         const { name, content } = result.data
         if (result.data.encoding) {
@@ -1336,7 +1374,7 @@ export default function App(): JSX.Element {
         }
       }
     },
-    [switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent, pinPreviewTab],
+    [switchFile, recordRecent, focusEditorSoon, discardPreviewTab, replaceEditorContent, pinPreviewTab, flushEditorContent],
   )
 
   /* ==================== 拖入 .md 文件直接打开 ==================== */
@@ -1721,7 +1759,12 @@ img{max-width:100%}
     if (!window.desktopAPI) return
     try {
       const title = docTitle.replace(/\.md$/, '')
-      const content = contents[activeFileId] ?? ''
+      // A-L1：与 handleSave 一致，读编辑器实时内容（防抖窗口内 state 滞后）
+      const editorMd = editorRef.current?.isReady() ? editorRef.current.getMarkdown() : null
+      const content =
+        editorMd != null
+          ? toStoredImages(editorMd, dirOfFile(activeFileId))
+          : (contents[activeFileId] ?? '')
       // 默认名加"-导出"后缀，避免与同名源文件混淆直接覆盖
       const res = await window.desktopAPI.document.saveAs(content, {
         filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
@@ -1732,14 +1775,19 @@ img{max-width:100%}
     } catch {
       setToast('Markdown 导出失败，请稍后重试')
     }
-  }, [docTitle, contents, activeFileId])
+  }, [docTitle, contents, activeFileId, dirOfFile])
 
   /** pandoc 多格式导出（Word/EPUB/LaTeX/纯文本）；未安装 pandoc 时提示安装 */
   const handleExportPandoc = useCallback(async () => {
     if (!window.desktopAPI) return
     try {
       const title = docTitle.replace(/\.md$/, '')
-      const content = contents[activeFileId] ?? ''
+      // A-L1：与 handleSave 一致，读编辑器实时内容（防抖窗口内 state 滞后）
+      const editorMd = editorRef.current?.isReady() ? editorRef.current.getMarkdown() : null
+      const content =
+        editorMd != null
+          ? toStoredImages(editorMd, dirOfFile(activeFileId))
+          : (contents[activeFileId] ?? '')
       const res = await window.desktopAPI.document.exportPandoc(content, title)
       if (res.ok) setToast('导出成功')
       else if (res.error?.code === 'PANDOC_NOT_FOUND') {
@@ -1750,7 +1798,7 @@ img{max-width:100%}
     } catch {
       setToast('导出失败，请稍后重试')
     }
-  }, [docTitle, contents, activeFileId])
+  }, [docTitle, contents, activeFileId, dirOfFile])
 
   /* ==================== 自定义主题 ==================== */
 
