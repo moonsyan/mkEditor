@@ -1063,15 +1063,19 @@ export function registerIpcHandlers(): void {
               continue
             }
 
-            // 索引缓存：mtime 与 size 均未变时复用已拆分的行，避免重复读盘解码
+            // 索引缓存：mtime 与 size 均未变时复用已拆分的行，避免重复读盘解码。
+            // L4：FAT32/exFAT 的 mtime 精度仅 2 秒，文件刚被编辑过时
+            // mtime/size 可能均未变化但内容已不同，mtime 落定前跳过缓存。
             let lines: string[]
             const cached = searchLineCache.get(p)
-            if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
+            const mtimeSettled = Date.now() - st.mtimeMs > 2500
+            if (cached && mtimeSettled && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
               lines = cached.lines
             } else {
               const { content } = await readTextAutoEncoding(p)
               lines = content.split(/\r?\n/)
-              if (st.size <= SEARCH_CACHE_FILE_MAX) {
+              // 只在 mtime 落定后写缓存，避免 2 秒窗口内的第二次编辑命中旧内容
+              if (st.size <= SEARCH_CACHE_FILE_MAX && mtimeSettled) {
                 cacheSearchLines(p, { mtimeMs: st.mtimeMs, size: st.size, lines })
               }
             }
