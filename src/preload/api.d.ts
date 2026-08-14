@@ -72,7 +72,7 @@ export interface DesktopAPI {
   }
 }
 
-/** 文件打开结果（encoding 为自动探测的源编码，保存时统一写回 UTF-8） */
+/** 文件打开结果（encoding 为自动探测的源编码：UTF-8/GBK/UTF-16LE/UTF-16BE，保存时写回原编码） */
 export interface FileResult {
   ok: boolean
   data?: {
@@ -93,13 +93,14 @@ export interface FolderTreeNode {
   children?: FolderTreeNode[]
 }
 
-/** 打开文件夹结果 */
+/** 打开文件夹结果（truncated：目录树超出节点预算被截断） */
 export interface FolderResult {
   ok: boolean
   data?: {
     path: string
     name: string
     tree: FolderTreeNode[]
+    truncated: boolean
   }
   error?: { code: string; message?: string }
 }

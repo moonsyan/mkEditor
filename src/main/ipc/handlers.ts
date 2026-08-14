@@ -17,6 +17,7 @@ import {
 import { createWindow } from '../window/window-manager'
 import { allowImageDirectory, isImageDirAllowed } from '../image-protocol'
 import { isFileTrustedForSave, isPathTrusted, trustDirectory, trustFileForSave } from '../trusted-paths'
+import { restoreTrustFromDisk, schedulePersistTrust } from '../session-trust'
 import { setWebContentsUnsaved } from '../unsaved'
 
 const execFileAsync = promisify(execFile)
@@ -43,6 +44,8 @@ const searchLineCache = new Map<
 const lastKnownFileState = new Map<string, { mtimeMs: number; size: number }>()
 /** 冲突检测状态条目上限：防止长会话里被改名/删除的旧路径无限累积 */
 const MAX_FILE_STATE_ENTRIES = 4096
+/** 同路径并发保存互斥（T-OCTOU）：按 path 串行化 FILE_SAVE 的完整写盘流程 */
+const saveLocks = new Map<string, Promise<unknown>>()
 const rememberFileState = (
   path: string,
   state: { mtimeMs: number; size: number },
@@ -77,6 +80,8 @@ const isValidBase64Payload = (payload: string): boolean => {
 }
 /** 单篇 Markdown 文档读取上限，避免误选超大文件拖垮主进程与编辑器。 */
 const MAX_DOCUMENT_FILE_SIZE = 20 * 1024 * 1024
+/** 导出载荷上限（PDF/HTML 等）：内联 base64 图片后远超原文，放宽到 100MB 仅防失控写出 */
+const MAX_EXPORT_FILE_SIZE = 100 * 1024 * 1024
 /** Base64 解码前的长度上限，避免超大 IPC 载荷先造成主进程内存峰值 */
 const MAX_IMAGE_BASE64_LENGTH = Math.ceil((MAX_IMAGE_SIZE * 4) / 3) + 4
 /** 自定义主题 CSS 上限，防止误选大文件阻塞主进程或渲染进程。 */
@@ -186,27 +191,46 @@ function cacheSearchLines(
   searchLineCacheBytes += entry.size
 }
 
+/** UTF-32 等无法安全往返的编码：拒绝打开而非静默乱码后不可逆改写（见 readTextAutoEncoding） */
+class UnsupportedEncodingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UnsupportedEncodingError'
+  }
+}
+
 /**
- * 自动探测编码读取文本（低优14）：先按 UTF-8 严格解码，
- * 失败则尝试 GBK（Electron 内置 full-icu，TextDecoder 支持）；
- * 均失败时按 UTF-8 宽松解码兜底。保存时统一写回 UTF-8。
+ * 自动探测编码读取文本：优先按 BOM 判定（UTF-8 / UTF-16LE / UTF-16BE / UTF-32），
+ * 无 BOM 时先按严格 UTF-8 解码，失败则按 GBK 宽松解码（带替换符）。
+ * UTF-16 正确解码并标记编码，保存时写回原编码（BOM 保留）；UTF-32 无法用
+ * 原生/iconv 往返，明确拒绝打开——否则乱码解码后一次保存就把原文件
+ * 不可逆地改写为乱码内容。
  */
 async function readTextAutoEncoding(
   filePath: string,
 ): Promise<{ content: string; encoding: string }> {
   const buf = await readFile(filePath)
-  try {
-    return {
-      content: new TextDecoder('utf-8', { fatal: true }).decode(buf),
-      encoding: 'UTF-8',
-    }
-  } catch {
-    /* 非严格 UTF-8，尝试 GBK */
+  if (buf.length >= 4 && buf[0] === 0xff && buf[1] === 0xfe && buf[2] === 0x00 && buf[3] === 0x00) {
+    throw new UnsupportedEncodingError('UTF-32LE 编码暂不支持，请先转为 UTF-8')
+  }
+  if (buf.length >= 4 && buf[0] === 0xfe && buf[1] === 0xff && buf[2] === 0x00 && buf[3] === 0x00) {
+    throw new UnsupportedEncodingError('UTF-32BE 编码暂不支持，请先转为 UTF-8')
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return { content: buf.subarray(2).toString('utf16le'), encoding: 'UTF-16LE' }
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    return { content: iconv.decode(buf.subarray(2), 'utf-16be'), encoding: 'UTF-16BE' }
+  }
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return { content: buf.subarray(3).toString('utf-8'), encoding: 'UTF-8' }
   }
   try {
-    return { content: new TextDecoder('gbk').decode(buf), encoding: 'GBK' }
+    return { content: new TextDecoder('utf-8', { fatal: true }).decode(buf), encoding: 'UTF-8' }
   } catch {
-    return { content: buf.toString('utf-8'), encoding: 'UTF-8' }
+    // 非严格 UTF-8：按 GBK 宽松解码（无 BOM 时的旧行为；GBK 解码永不抛错，
+    // 此分支即为最终兜底，不再需要"宽松 UTF-8"第三分支）
+    return { content: new TextDecoder('gbk').decode(buf), encoding: 'GBK' }
   }
 }
 
@@ -312,29 +336,33 @@ export function registerIpcHandlers(): void {
   // 应用自有图片目录（未保存文档的粘贴图片存储处）始终授信；
   // 它在每个新进程中由保存流程重建信任，此处显式登记避免图片管理面板 404。
   trustDirectory(join(app.getPath('userData'), 'images'), { essential: true })
-  // L8：会话恢复路径预授权——新进程的信任根初始为空，渲染端恢复会话时
+  // 会话恢复路径预授权——新进程的信任根初始为空，渲染端恢复会话时
   // FILE_READ/SEARCH 等必须能命中上次会话已打开的文档与工作区。
-  // H1 修复：散落文档（可能经拖入打开）只恢复"图片读 + 文件级保存"，
-  // 不恢复目录完整信任；工作区目录本身仍授完整信任。
-  void getSetting('session').then((raw) => {
-    const session = raw as
-      | { files?: { path?: string }[]; workspacePath?: string }
-      | undefined
-    const files = session?.files ?? []
-    for (let i = files.length - 1; i >= 0; i--) {
-      const p = files[i]?.path
-      if (typeof p === 'string' && p) {
-        allowImageDirectory(dirname(p))
-        trustFileForSave(p)
+  // H 修复：信任清单来自主进程私有的 trusted-roots.json（用户真实授权后
+  // 由主进程写入，渲染层无法伪造），而非渲染层可写的 settings.json 会话字段——
+  // 否则 XSS 可伪造 workspacePath 使任意目录在重启后获得完整信任。
+  void restoreTrustFromDisk().then((restored) => {
+    if (restored) return
+    // 升级迁移兜底：首次升级无持久化清单时，回退到会话文件的文件级信任
+    // （散档可恢复）；绝不信任会话里的工作区路径——那是渲染层可写的字段
+    void getSetting('session').then((raw) => {
+      const session = raw as { files?: { path?: string }[] } | undefined
+      const files = session?.files ?? []
+      for (let i = files.length - 1; i >= 0; i--) {
+        const p = files[i]?.path
+        if (typeof p === 'string' && p) {
+          allowImageDirectory(dirname(p))
+          trustFileForSave(p)
+        }
       }
-    }
-    if (typeof session?.workspacePath === 'string' && session.workspacePath) {
-      trustDirectory(session.workspacePath, { essential: true })
-    }
+    })
   })
 
-  // pandoc 可用性探测结果缓存（缓存 Promise 本身，避免首次探测期间的并发误报）
+  // pandoc 可用性探测结果缓存（缓存 Promise 本身，避免首次探测期间的并发误报）。
+  // 带 TTL：会话中途安装/修复 pandoc 后能再次探测，不必等重启
   let pandocCheck: Promise<boolean> | null = null
+  let pandocCheckAt = 0
+  const PANDOC_CHECK_TTL_MS = 60_000
   const getImageHostStatus = async (): Promise<{
     provider: 'local' | 'smms'
     configured: boolean
@@ -380,6 +408,7 @@ export function registerIpcHandlers(): void {
       // 该文件本身另加入文件级保存白名单
       trustDirectory(dirname(filePath))
       trustFileForSave(filePath)
+      schedulePersistTrust()
       rememberFileState(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
@@ -392,6 +421,9 @@ export function registerIpcHandlers(): void {
         },
       }
     } catch (err) {
+      if (err instanceof UnsupportedEncodingError) {
+        return { ok: false, error: { code: 'UNSUPPORTED_ENCODING', message: err.message } }
+      }
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
     }
   })
@@ -436,6 +468,8 @@ export function registerIpcHandlers(): void {
         // essential：工作区是本次会话的操作中心，不能因随后打开过 64+ 个
         // 其它目录被容量淘汰而失效（B-M1）
         trustDirectory(folderPath, { essential: true })
+        // 立即持久化：工作区是会话恢复的关键路径，等防抖可能赶上进程退出
+        schedulePersistTrust(true)
         return {
           ok: true,
           data: {
@@ -479,6 +513,7 @@ export function registerIpcHandlers(): void {
       // 该文件本身加入文件级保存白名单——不再因读取一个 .md 而获得目录写/删/搜权限
       allowImageDirectory(dirname(filePath))
       trustFileForSave(filePath)
+      schedulePersistTrust()
       rememberFileState(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
@@ -491,23 +526,89 @@ export function registerIpcHandlers(): void {
         },
       }
     } catch (err) {
+      if (err instanceof UnsupportedEncodingError) {
+        return { ok: false, error: { code: 'UNSUPPORTED_ENCODING', message: err.message } }
+      }
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
     }
   })
 
   // 保存文件（带外部冲突检测：磁盘 mtime 比预期新则拒绝，避免静默覆盖）
+  type SaveArgs = {
+    path: string
+    content: string
+    expectedMtime?: number
+    /** 源文件编码：GBK/UTF-16 文件写回原编码，其余/缺省为 UTF-8 */
+    encoding?: string
+  }
+  type SaveResult =
+    | { ok: true; data: { modifiedTime: number } }
+    | { ok: false; error: { code: string; message?: string } }
+
+  /** FILE_SAVE 的完整写盘流程（stat 校验 → 编码写回 → 更新基线）。
+   *  经 saveLocks 按 path 串行执行，防止同路径双窗口并发保存互相覆盖（T-OCTOU）。 */
+  const performFileSave = async (args: SaveArgs): Promise<SaveResult> => {
+    try {
+      const pre = await stat(args.path).catch(() => null)
+      if (!pre) {
+        return { ok: false, error: { code: 'NOT_FOUND' } }
+      }
+      // 冲突检测（H6）：磁盘 mtime 明显比预期新、或文件尺寸与最近一次读/写不一致，
+      // 均视为被外部修改，拒绝写入避免静默覆盖。
+      // - mtime 容差 500ms 仅吸收本应用连续保存的时间戳抖动（NTFS 纳秒精度无需大容差）；
+      // - 尺寸维度可捕获 FAT32 同时间片内被编辑、以及 git checkout / cp -p 等
+      //   旧 mtime 的外部修改（此前 3 秒无条件容差会让这些修改被静默覆盖）。
+      const known = lastKnownFileState.get(args.path)
+      const conflict =
+        (typeof args.expectedMtime === 'number' &&
+          pre.mtimeMs > args.expectedMtime + 500) ||
+        (known !== undefined && pre.size !== known.size)
+      if (conflict) {
+        return {
+          ok: false,
+          error: { code: 'CONFLICT', message: '文件已被外部修改' },
+        }
+      }
+      // 编码写回：UTF-16 保持原编码（BOM 保留）；GBK 写回原编码并做往返校验，
+      // 无法映射的字符拒绝写入；其余统一 UTF-8
+      if (args.encoding === 'UTF-16LE' || args.encoding === 'UTF-16BE') {
+        const bom =
+          args.encoding === 'UTF-16LE'
+            ? Buffer.from([0xff, 0xfe])
+            : Buffer.from([0xfe, 0xff])
+        const body =
+          args.encoding === 'UTF-16LE'
+            ? Buffer.from(args.content, 'utf16le')
+            : iconv.encode(args.content, 'utf-16be')
+        await writeFileAtomically(args.path, Buffer.concat([bom, body]), pre.mode)
+      } else if (args.encoding === 'GBK') {
+        const encoded = iconv.encode(args.content, 'gbk')
+        // 往返校验：GBK 无法映射的字符（emoji 等）会被 iconv 替换为 '?'，
+        // 静默写入即不可逆数据丢失，拒绝并由渲染端决定降级方案
+        if (iconv.decode(encoded, 'gbk') !== args.content) {
+          return {
+            ok: false,
+            error: {
+              code: 'ENCODING_LOSS',
+              message: '内容包含 GBK 无法表示的字符',
+            },
+          }
+        }
+        await writeFileAtomically(args.path, encoded, pre.mode)
+      } else {
+        await writeFileAtomically(args.path, args.content, pre.mode)
+      }
+      const fileStat = await stat(args.path)
+      rememberFileState(args.path, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
+      return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
+    } catch (err) {
+      return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+    }
+  }
+
   ipcMain.handle(
     CHANNELS.FILE_SAVE,
-    async (
-      _event,
-      args: {
-        path: string
-        content: string
-        expectedMtime?: number
-        /** 源文件编码：GBK 文件写回原编码，其余/缺省为 UTF-8 */
-        encoding?: string
-      },
-    ) => {
+    async (_event, args: SaveArgs) => {
       try {
         // L8：保存目标必须属于已授权根（打开的文档/对话框另存的位置），
         // 或为本应用读取过的 .md 精确文件（拖入/会话恢复，见 trusted-paths.ts）
@@ -522,47 +623,18 @@ export function registerIpcHandlers(): void {
             error: { code: 'TOO_LARGE', message: 'Markdown 文件超过 20MB，无法保存' },
           }
         }
-        const pre = await stat(args.path).catch(() => null)
-        if (!pre) {
-          return { ok: false, error: { code: 'NOT_FOUND' } }
+        // 同路径并发保存互斥：双窗口（同进程）保存同一文件时，双方的冲突检测
+        // stat 都落在对方写入之前，最后写入者会静默覆盖对方内容（T-OCTOU）。
+        // 按 path 串行化完整写盘流程；互斥条目随任务结束清理，不累积。
+        const previous = saveLocks.get(args.path) ?? Promise.resolve()
+        const task = previous.then(() => performFileSave(args))
+        const tracked = task.catch(() => undefined)
+        saveLocks.set(args.path, tracked)
+        try {
+          return await task
+        } finally {
+          if (saveLocks.get(args.path) === tracked) saveLocks.delete(args.path)
         }
-        // 冲突检测（H6）：磁盘 mtime 明显比预期新、或文件尺寸与最近一次读/写不一致，
-        // 均视为被外部修改，拒绝写入避免静默覆盖。
-        // - mtime 容差 500ms 仅吸收本应用连续保存的时间戳抖动（NTFS 纳秒精度无需大容差）；
-        // - 尺寸维度可捕获 FAT32 同时间片内被编辑、以及 git checkout / cp -p 等
-        //   旧 mtime 的外部修改（此前 3 秒无条件容差会让这些修改被静默覆盖）。
-        const known = lastKnownFileState.get(args.path)
-        const conflict =
-          (typeof args.expectedMtime === 'number' &&
-            pre.mtimeMs > args.expectedMtime + 500) ||
-          (known !== undefined && pre.size !== known.size)
-        if (conflict) {
-          return {
-            ok: false,
-            error: { code: 'CONFLICT', message: '文件已被外部修改' },
-          }
-        }
-        // GBK 源文件写回原编码，避免其他编辑器打开乱码；其余统一 UTF-8
-        if (args.encoding === 'GBK') {
-          const encoded = iconv.encode(args.content, 'gbk')
-          // 往返校验：GBK 无法映射的字符（emoji 等）会被 iconv 替换为 '?'，
-          // 静默写入即不可逆数据丢失，拒绝并由渲染端决定降级方案
-          if (iconv.decode(encoded, 'gbk') !== args.content) {
-            return {
-              ok: false,
-              error: {
-                code: 'ENCODING_LOSS',
-                message: '内容包含 GBK 无法表示的字符',
-              },
-            }
-          }
-          await writeFileAtomically(args.path, encoded, pre.mode)
-        } else {
-          await writeFileAtomically(args.path, args.content, pre.mode)
-        }
-        const fileStat = await stat(args.path)
-        rememberFileState(args.path, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
-        return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
       }
@@ -583,9 +655,28 @@ export function registerIpcHandlers(): void {
       const window = BrowserWindow.fromWebContents(event.sender)
       if (!window) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
 
+      // 载荷与参数前置校验（args 为 null 时返回错误结构而非抛错，与全项目约定一致）
+      const content = args?.content
+      if (typeof content !== 'string') {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      const filters = args?.filters ?? [{ name: 'Markdown', extensions: ['md'] }]
+      const defaultPath = args?.defaultPath ?? 'untitled.md'
+      // 另存上限：.md 类与文档打开上限一致；导出（HTML 等，内联图片可远超原文）
+      // 放宽到导出上限，仅阻止失控写出
+      const cap = /\.(md|markdown)$/i.test(defaultPath)
+        ? MAX_DOCUMENT_FILE_SIZE
+        : MAX_EXPORT_FILE_SIZE
+      if (Buffer.byteLength(content, 'utf-8') > cap) {
+        return {
+          ok: false,
+          error: { code: 'TOO_LARGE', message: '导出内容过大，无法保存' },
+        }
+      }
+
       const result = await dialog.showSaveDialog(window, {
-        filters: args.filters ?? [{ name: 'Markdown', extensions: ['md'] }],
-        defaultPath: args.defaultPath ?? 'untitled.md',
+        filters,
+        defaultPath,
       })
 
       if (result.canceled || !result.filePath) {
@@ -595,7 +686,7 @@ export function registerIpcHandlers(): void {
       try {
         // L8：用户经原生对话框选择的位置即授权（写穿与后续保存均可用）
         trustDirectory(dirname(result.filePath))
-        await writeFileAtomically(result.filePath, args.content)
+        await writeFileAtomically(result.filePath, content)
         // 返回真实落盘 mtime（渲染端用于下次保存的冲突检测，比 Date.now() 更准）
         let modifiedTime = 0
         try {
@@ -690,6 +781,7 @@ export function registerIpcHandlers(): void {
           return { ok: false, error: { code: 'NAME_EXHAUSTED' } }
         }
         allowImageDirectory(dir)
+        schedulePersistTrust()
         return { ok: true, data: { path: filePath, name } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -770,7 +862,8 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: { code: 'WINDOW_LIMIT' } }
       }
       // L8：新窗口打开的文件必须已由当前窗口/会话授权
-      if (!ensureTrusted(filePath)) {
+      // （含工作区外散档的文件级保存白名单，如拖入/会话恢复的文档）
+      if (!ensureTrusted(filePath) && !isFileTrustedForSave(filePath)) {
         return { ok: false, error: { code: 'INVALID_PATH' } }
       }
       createWindow(true, filePath)
@@ -803,9 +896,22 @@ export function registerIpcHandlers(): void {
       const parent = BrowserWindow.fromWebContents(event.sender)
       if (!parent) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
 
+      // 载荷与参数前置校验（args 为 null 时返回错误结构而非抛错）
+      const html = args?.html
+      const defaultName = args?.defaultName
+      if (typeof html !== 'string' || typeof defaultName !== 'string' || !defaultName) {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      if (Buffer.byteLength(html, 'utf-8') > MAX_EXPORT_FILE_SIZE) {
+        return {
+          ok: false,
+          error: { code: 'TOO_LARGE', message: '导出内容过大，无法打印 PDF' },
+        }
+      }
+
       const save = await dialog.showSaveDialog(parent, {
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
-        defaultPath: args.defaultName,
+        defaultPath: defaultName,
       })
       if (save.canceled || !save.filePath) {
         return { ok: false, error: { code: 'CANCELLED' } }
@@ -815,7 +921,7 @@ export function registerIpcHandlers(): void {
       // M2：data: URL 在 Chromium 中超过 ~2MB 会被截断/拒绝（内联图片后 HTML 很容易超限），
       // 改为写入临时文件后 loadFile，finally 中清理
       const tmpHtml = join(app.getPath('temp'), `mk-editor-pdf-${Date.now()}-${Math.random().toString(36).slice(2)}.html`)
-      await writeFile(tmpHtml, args.html, 'utf8')
+      await writeFile(tmpHtml, html, 'utf8')
       const printWin = new BrowserWindow({
         show: false,
         // B-M4：与主窗口一致开启沙箱，打印窗口只渲染受信 HTML，无需完整 Node 能力
@@ -1062,7 +1168,8 @@ export function registerIpcHandlers(): void {
 
   // 仅读取文件 mtime（草稿恢复前校验基线新鲜度用，避免整文件重读）
   ipcMain.handle(CHANNELS.FILE_STAT, async (_event, filePath: string) => {
-    if (!ensureTrusted(filePath)) {
+    // 散档（工作区外、仅文件级保存白名单）的草稿恢复同样需要基线校验
+    if (!ensureTrusted(filePath) && !isFileTrustedForSave(filePath)) {
       return { ok: false, error: { code: 'INVALID_PATH' } }
     }
     try {
@@ -1424,11 +1531,28 @@ export function registerIpcHandlers(): void {
       const parent = BrowserWindow.fromWebContents(event.sender)
       if (!parent) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
 
-      // 检测 pandoc 是否可用（首次调用时探测，结果缓存；并发调用共享同一探测）。
+      // 载荷与参数前置校验（args 为 null 时返回错误结构而非抛错）
+      const markdown = args?.markdown
+      const defaultTitle = args?.defaultTitle
+      if (typeof markdown !== 'string' || typeof defaultTitle !== 'string' || !defaultTitle) {
+        return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
+      }
+      if (Buffer.byteLength(markdown, 'utf-8') > MAX_DOCUMENT_FILE_SIZE) {
+        return {
+          ok: false,
+          error: { code: 'TOO_LARGE', message: 'Markdown 超过 20MB，无法导出' },
+        }
+      }
+
+      // 检测 pandoc 是否可用（首次调用时探测，结果缓存带 TTL；并发调用共享同一探测）。
       // L4：探测带 10s 超时——pandoc 挂起时不能阻塞导出入口
-      pandocCheck ??= execFileAsync('pandoc', ['--version'], { timeout: 10_000 })
-        .then(() => true)
-        .catch(() => false)
+      const now = Date.now()
+      if (!pandocCheck || now - pandocCheckAt > PANDOC_CHECK_TTL_MS) {
+        pandocCheckAt = now
+        pandocCheck = execFileAsync('pandoc', ['--version'], { timeout: 10_000 })
+          .then(() => true)
+          .catch(() => false)
+      }
       if (!(await pandocCheck)) {
         return { ok: false, error: { code: 'PANDOC_NOT_FOUND' } }
       }
@@ -1440,7 +1564,7 @@ export function registerIpcHandlers(): void {
           { name: 'LaTeX', extensions: ['tex'] },
           { name: '纯文本', extensions: ['txt'] },
         ],
-        defaultPath: `${args.defaultTitle}.docx`,
+        defaultPath: `${defaultTitle}.docx`,
       })
       if (save.canceled || !save.filePath) {
         return { ok: false, error: { code: 'CANCELLED' } }
@@ -1462,7 +1586,7 @@ export function registerIpcHandlers(): void {
         `mdsoft-${process.pid}-${Date.now()}-${Math.random()}.md`,
       )
       try {
-        await writeFile(tmpIn, args.markdown, 'utf-8')
+        await writeFile(tmpIn, markdown, 'utf-8')
         // L4：60s 超时——大文档或 hung 的 pandoc 进程不能无限阻塞 IPC
         await execFileAsync(
           'pandoc',

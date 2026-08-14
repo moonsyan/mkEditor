@@ -37,8 +37,12 @@ export class SettingsStoreError extends Error {
  *  与文档打开上限（20MB）对齐：drafts 存于本文件，若上限低于单篇文档，
  *  超大文档的草稿保存会被拒绝、下次启动还可能把含大草稿的整个文件判为损坏。 */
 const MAX_FILE_SIZE = 40 * 1024 * 1024
-/** 单个设置值序列化后的最大体积（字节），超限拒绝写入（与文档上限一致） */
-const MAX_VALUE_SIZE = 20 * 1024 * 1024
+/** 单个设置值序列化后的最大体积（字节），超限拒绝写入。
+ *  与文档上限对齐：drafts 存于本文件，若上限低于单篇文档，
+ *  超大文档的草稿保存会被拒绝、下次启动还可能把含大草稿的整个文件判为损坏。
+ *  取文档上限的 1.5 倍：JSON.stringify 有转义膨胀（引号/换行/反斜杠 ×2），
+ *  20MB 文档序列化后可能超 20MB 原始上限而静默拒绝草稿保存 */
+const MAX_VALUE_SIZE = 30 * 1024 * 1024
 /** session.files 上限 */
 const SESSION_MAX_FILES = 200
 /** drafts 保留条数上限（按最近保存时间） */

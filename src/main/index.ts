@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, Menu, ipcMain, protocol } from 'electron'
 import { join } from 'path'
-import { readFileSync } from 'fs'
+import { readFileSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 import { createWindow } from './window/window-manager'
@@ -20,8 +20,15 @@ protocol.registerSchemesAsPrivileged([
 // 需在 app ready 前同步读取设置
 let multiWindowMode = false
 try {
-  const raw = readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf-8')
-  multiWindowMode = (JSON.parse(raw) as { multiWindow?: boolean }).multiWindow === true
+  // 启动前不设体积守卫会让损坏的超大 settings.json 同步 parse 卡死/OOM 启动
+  // （settings-store 才有 40MB 损坏判定与自愈备份，但它不在本路径上）。
+  // 超限文件跳过多窗口判定，交给 store 的异步自愈流程处理
+  const settingsFile = join(app.getPath('userData'), 'settings.json')
+  const settingsStat = statSync(settingsFile)
+  if (settingsStat.size <= 40 * 1024 * 1024) {
+    const raw = readFileSync(settingsFile, 'utf-8')
+    multiWindowMode = (JSON.parse(raw) as { multiWindow?: boolean }).multiWindow === true
+  }
 } catch {
   multiWindowMode = false
 }

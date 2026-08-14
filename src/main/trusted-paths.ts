@@ -36,7 +36,8 @@ export function trustDirectory(
   }
   if (trustedRoots.has(dir)) return
   if (trustedRoots.size >= MAX_TRUSTED_ROOTS) {
-    // 只淘汰可淘汰根：容量打满且全部为保底根时，宁可停止登记新根
+    // 只淘汰可淘汰根：容量打满且全部为保底根时，停止登记新根（L7），
+    // 否则每开一个新工作区都会让集合继续无界增长
     const roots = Array.from(trustedRoots.keys())
     let evicted = false
     for (let i = 0; i < roots.length && !evicted; i++) {
@@ -45,6 +46,7 @@ export function trustDirectory(
         evicted = true
       }
     }
+    if (!evicted) return
   }
   trustedRoots.set(dir, true)
 }
@@ -67,6 +69,11 @@ export function isPathTrusted(filePath: string): boolean {
 
 export function getTrustedRoots(): string[] {
   return Array.from(trustedRoots.keys())
+}
+
+/** 保底信任根（工作区、应用自有目录）：供持久化快照区分可恢复的工作区 */
+export function getEssentialRoots(): string[] {
+  return Array.from(essentialRoots)
 }
 
 /**
@@ -93,4 +100,9 @@ export function trustFileForSave(filePath: string): void {
 export function isFileTrustedForSave(filePath: string): boolean {
   if (!filePath) return false
   return trustedFiles.has(resolve(filePath))
+}
+
+/** 文件级保存白名单全量（供跨启动信任持久化） */
+export function getTrustedFiles(): string[] {
+  return Array.from(trustedFiles.keys())
 }
