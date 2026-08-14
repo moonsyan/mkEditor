@@ -41,6 +41,16 @@ const SEARCH_CACHE_MAX_BYTES = 32 * 1024 * 1024
 const SEARCH_CACHE_FILE_MAX = 512 * 1024
 /** 剪贴板/拖入图片的最大体积，与图床上传限制保持一致 */
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+/**
+ * Base64 载荷严格校验（L6）：Buffer.from 会静默忽略非法字符，
+ * 损坏的剪贴板数据会写出截断图片却报保存成功。要求标准字母表 +
+ * 尾部 0-2 个填充符 + 长度对齐；应用自身生成的 data URL 均为标准
+ * 带填充 base64，过严只影响本就不应存在的损坏数据。
+ */
+const isValidBase64Payload = (payload: string): boolean => {
+  if (!payload || payload.length % 4 !== 0) return false
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(payload)
+}
 /** 单篇 Markdown 文档读取上限，避免误选超大文件拖垮主进程与编辑器。 */
 const MAX_DOCUMENT_FILE_SIZE = 20 * 1024 * 1024
 /** Base64 解码前的长度上限，避免超大 IPC 载荷先造成主进程内存峰值 */
@@ -541,6 +551,10 @@ export function registerIpcHandlers(): void {
             ok: false,
             error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法保存' },
           }
+        }
+        // L6：解码前校验，损坏的 base64 不再静默写出截断图片
+        if (!isValidBase64Payload(match[3])) {
+          return { ok: false, error: { code: 'INVALID_DATA', message: '图片数据损坏，无法保存' } }
         }
         const ext = match[2].toLowerCase().replace('jpeg', 'jpg')
         const buffer = Buffer.from(match[3], 'base64')
@@ -1342,6 +1356,10 @@ export function registerIpcHandlers(): void {
             error: { code: 'TOO_LARGE', message: '图片超过 20MB，无法上传图床' },
           }
         }
+        // L6：解码前校验，损坏数据不再以截断内容上传
+        if (!isValidBase64Payload(match[3])) {
+          return { ok: false, error: { code: 'INVALID_DATA', message: '图片数据损坏，无法上传' } }
+        }
         // 配置存于主进程 settings，避免 token 在渲染进程暴露
         const cfg = (await getSetting('imageHost')) as
           | { provider?: string; token?: string }
@@ -1374,6 +1392,17 @@ export function registerIpcHandlers(): void {
           })
         } finally {
           clearTimeout(timeoutTimer)
+        }
+        // L5：5xx/429 等错误响应不是 JSON，resp.json() 会抛原始解析文本；
+        // 先检查 resp.ok 并给出稳定文案
+        if (!resp.ok) {
+          return {
+            ok: false,
+            error: {
+              code: 'UPLOAD_FAILED',
+              message: `图床服务暂不可用（HTTP ${resp.status}），请稍后重试`,
+            },
+          }
         }
         const json = (await resp.json()) as {
           success?: boolean
