@@ -71,7 +71,9 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
     mainWindow.webContents.reload()
   }
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    if (details.reason !== 'crashed' && details.reason !== 'killed') return
+    // L1：oom 是最常见的内存崩溃，纳入自愈（MAX_AUTO_RELOADS 已限风暴）。
+    // 仅对崩溃类原因重载；clean-exit 等主动退出不在此列。
+    if (details.reason !== 'crashed' && details.reason !== 'killed' && details.reason !== 'oom') return
     attemptReload()
   })
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, _description, _url, isMainFrame) => {
