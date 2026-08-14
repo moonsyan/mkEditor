@@ -206,10 +206,21 @@ interface FolderTreeNode {
 }
 
 const MAX_TREE_DEPTH = 5
+/** 目录树节点总量上限：数万目录时主进程长时间阻塞，全部 IPC 卡死（保存排队、自动保存基线过期） */
+const MAX_TREE_NODES = 2000
+
+interface TreeBudget {
+  nodes: number
+  truncated: boolean
+}
 
 /** 递归扫描目录，只保留 Markdown 文件与含 Markdown 的文件夹 */
-async function walkMarkdownTree(dir: string, depth: number): Promise<FolderTreeNode[]> {
-  if (depth > MAX_TREE_DEPTH) return []
+async function walkMarkdownTree(
+  dir: string,
+  depth: number,
+  budget: TreeBudget,
+): Promise<FolderTreeNode[]> {
+  if (depth > MAX_TREE_DEPTH || budget.truncated) return []
   let entries: Dirent[]
   try {
     entries = await readdir(dir, { withFileTypes: true })
@@ -227,14 +238,26 @@ async function walkMarkdownTree(dir: string, depth: number): Promise<FolderTreeN
 
   const nodes: FolderTreeNode[] = []
   for (const d of dirs) {
-    const children = await walkMarkdownTree(join(dir, d.name), depth + 1)
+    if (budget.truncated) break
+    const children = await walkMarkdownTree(join(dir, d.name), depth + 1, budget)
     // 空文件夹（无 Markdown 内容）不展示
     if (children.length > 0) {
       nodes.push({ name: d.name, path: join(dir, d.name), children })
+      budget.nodes++
+      if (budget.nodes >= MAX_TREE_NODES) {
+        budget.truncated = true
+        break
+      }
     }
   }
+  if (budget.truncated) return nodes
   for (const f of files) {
     nodes.push({ name: f.name, path: join(dir, f.name) })
+    budget.nodes++
+    if (budget.nodes >= MAX_TREE_NODES) {
+      budget.truncated = true
+      break
+    }
   }
   return nodes
 }
@@ -334,7 +357,8 @@ export function registerIpcHandlers(): void {
       }
 
       try {
-        const children = await walkMarkdownTree(folderPath, 0)
+        const budget: TreeBudget = { nodes: 0, truncated: false }
+        const children = await walkMarkdownTree(folderPath, 0, budget)
         allowImageDirectory(folderPath)
         return {
           ok: true,
@@ -342,6 +366,8 @@ export function registerIpcHandlers(): void {
             path: folderPath,
             name: folderPath.split(/[/\\]/).pop() || 'workspace',
             tree: children,
+            // L3：超出节点上限时截断并告知渲染端
+            truncated: budget.truncated,
           },
         }
       } catch (err) {
@@ -994,7 +1020,8 @@ export function registerIpcHandlers(): void {
             }
           }
         }
-        const tree = await walkMarkdownTree(args.dir, 0)
+        // 搜索已有 500 文件上限，树遍历用一次性预算即可
+        const tree = await walkMarkdownTree(args.dir, 0, { nodes: 0, truncated: false })
         // 展平树取全部文件路径
         const paths: string[] = []
         const flatten = (nodes: FolderTreeNode[]) => {
