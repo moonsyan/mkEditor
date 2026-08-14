@@ -273,8 +273,8 @@ export const wikiAutocompletePlugin = $prose(() => {
           if (state) {
             try {
               const sel = view.state.selection
-              // M8：coordsAtPos 返回视口坐标，浮层定位容器也是视口（无定位祖先）；
-              // 减去 view.dom 的 rect 会让浮层整体上移（顶栏 + 属性面板高度），改为直接透传视口坐标
+              // M8/C-4：coordsAtPos 返回视口坐标，直接透传；浮层侧
+              //（Editor/index.tsx）换算到定位祖先(.editor-host)的容器坐标
               const coords = view.coordsAtPos(sel.$from.pos)
               const updated: WikiAutocompleteState = {
                 ...state,

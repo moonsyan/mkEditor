@@ -30,6 +30,11 @@ export function WikiAutocomplete({
   const [activeIndex, setActiveIndex] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // C-8：查询变化时选中项复位到首项，避免 Enter 选中与当前输入无关的旧高亮项
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [query])
+
   // 确保 activeIndex 在 suggestions 范围内
   useEffect(() => {
     if (activeIndex >= suggestions.length) {
@@ -57,6 +62,12 @@ export function WikiAutocomplete({
       // 组合键（Ctrl/Cmd/Alt）不拦截，放行给全局快捷键与编辑器
       if (event.ctrlKey || event.metaKey || event.altKey) return
       if (isImeComposing(event)) return
+      // C-2：零候选时浮层返回 null 但本监听仍注册，不能再吞键
+      if (suggestions.length === 0) return
+      // C-2：焦点移出编辑器（如搜索框、属性面板输入）时按键应交给当前控件，
+      // 不拦截（补全浮层本身不可聚焦，点击项时焦点仍在编辑器内）
+      const active = document.activeElement
+      if (!(active && active.classList.contains('ProseMirror'))) return
       // 捕获阶段拦截（H3）：PM 的 keydown 在编辑器 DOM 冒泡阶段，
       // 若不提前 stopPropagation，↓/↑ 会同时移动文档光标、Enter 会先拆段再插入链接
       if (event.key === 'Escape') {

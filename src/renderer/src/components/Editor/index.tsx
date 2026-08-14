@@ -228,37 +228,55 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     // 从 ProseMirror autocomplete 状态 + 候选文件列表派生 overlay 数据
     const wikiAcOverlay = wikiAcState && wikiLinkFiles && wikiLinkFiles.length > 0
-      ? {
-          query: wikiAcState.query,
-          suggestions: filterWikiSuggestions(
-            wikiLinkFiles as unknown as { name: string; path: string; children?: Array<{ name: string; path: string; children?: unknown[] }> }[],
-            wikiAcState.query,
-          ),
-          x: wikiAcState.coords.left,
-          y: wikiAcState.coords.top,
-          onSelect: (path: string) => {
-            setWikiAcState(null)
-            // 通过事务替换 [[...]] 文本为 wiki_link 节点
-            const ed = editorRef.current
-            if (ed?.status === EditorStatus.Created) {
-              const view = ed.ctx.get(editorViewCtx)
-              const schema = view.state.schema
-              const nodeType = schema.nodes.wiki_link
-              if (nodeType) {
-                const tr = view.state.tr.replaceRangeWith(
-                  wikiAcState.from,
-                  wikiAcState.to,
-                  nodeType.create({
-                    target: path.replace(/\\/g, '/'),
-                    alias: '',
-                  }),
-                )
-                view.dispatch(tr)
+      ? (() => {
+          // C-4：coordsAtPos 返回视口坐标，而浮层 position:absolute 的包含块是
+          // 最近的定位祖先（.editor-host，position:relative）。减去锚点 rect
+          // 换算为容器内坐标，否则浮层整体下移 TabBar 高度、且不随滚动校正
+          const anchor = containerRef.current?.closest('.editor-host')
+          const anchorRect = anchor?.getBoundingClientRect()
+          const x = anchorRect
+            ? wikiAcState.coords.left - anchorRect.left
+            : wikiAcState.coords.left
+          const y = anchorRect
+            ? wikiAcState.coords.top - anchorRect.top
+            : wikiAcState.coords.top
+          return {
+            query: wikiAcState.query,
+            suggestions: filterWikiSuggestions(
+              wikiLinkFiles as unknown as { name: string; path: string; children?: Array<{ name: string; path: string; children?: unknown[] }> }[],
+              wikiAcState.query,
+            ),
+            x,
+            y,
+            onSelect: (path: string) => {
+              setWikiAcState(null)
+              // 通过事务替换 [[...]] 文本为 wiki_link 节点
+              const ed = editorRef.current
+              if (ed?.status === EditorStatus.Created) {
+                const view = ed.ctx.get(editorViewCtx)
+                // C-11：浮层显示后文档可能已变化（退格删掉 [[ 等），
+                // 旧位置越界时丢弃本次选择，避免 replaceRangeWith 抛 RangeError
+                const { from, to } = wikiAcState
+                const docSize = view.state.doc.content.size
+                if (from > docSize || to > docSize) return
+                const schema = view.state.schema
+                const nodeType = schema.nodes.wiki_link
+                if (nodeType) {
+                  const tr = view.state.tr.replaceRangeWith(
+                    from,
+                    to,
+                    nodeType.create({
+                      target: path.replace(/\\/g, '/'),
+                      alias: '',
+                    }),
+                  )
+                  view.dispatch(tr)
+                }
               }
-            }
-          },
-          onClose: () => setWikiAcState(null),
-        }
+            },
+            onClose: () => setWikiAcState(null),
+          }
+        })()
       : null
 
     // 全屏预览下 Esc 关闭
