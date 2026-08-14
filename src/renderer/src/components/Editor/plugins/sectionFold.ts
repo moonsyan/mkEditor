@@ -72,6 +72,9 @@ function buildFoldDecos(state: EditorState, collapsed: Set<number>): DecorationS
         }
       })
     }
+    // L14：widget 工厂与 destroy 回调同级，监听器引用需提升到循环作用域
+    // （基类 Event 自带 preventDefault/stopPropagation，Handler 只需 EventListener 签名）
+    let onMousedown: EventListener | null = null
     decos.push(
       Decoration.widget(
         h.start,
@@ -80,8 +83,11 @@ function buildFoldDecos(state: EditorState, collapsed: Set<number>): DecorationS
           const isCollapsed = collapsed.has(h.start)
           el.className = 'fold-toggle' + (isCollapsed ? ' collapsed' : '')
           el.textContent = isCollapsed ? '▸' : '▾'
-          el.addEventListener('mousedown', (e) => {
+          onMousedown = (e) => {
             e.preventDefault()
+            // L14：replaceAll flush / 编辑器销毁后 widget 可能持有失效视图，
+            // 直接 dispatch 会抛错；已销毁则忽略本次点击
+            if (view.isDestroyed) return
             let tr = view.state.tr
             if (!isCollapsed) {
               // M12：折叠时若光标在将被隐藏的区块内，把选区移到标题文本末尾，
@@ -92,10 +98,19 @@ function buildFoldDecos(state: EditorState, collapsed: Set<number>): DecorationS
               }
             }
             view.dispatch(tr.setMeta(sectionFoldKey, { toggle: h.start }))
-          })
+          }
+          el.addEventListener('mousedown', onMousedown)
           return el
         },
-        { side: -1, ignoreSelection: true, key: 'fold-' + h.start },
+        {
+          side: -1,
+          ignoreSelection: true,
+          key: 'fold-' + h.start,
+          // L14：装饰重建时移除监听，避免闭包持有已失效的 view
+          destroy: (dom) => {
+            if (onMousedown) dom.removeEventListener('mousedown', onMousedown)
+          },
+        },
       ),
     )
   }
