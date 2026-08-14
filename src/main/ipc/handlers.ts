@@ -654,15 +654,17 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: { code: 'CANCELLED' } }
       }
 
-      // 隐藏窗口加载文档 HTML，等待渲染完成后打印
+      // 隐藏窗口加载文档 HTML，等待渲染完成后打印。
+      // M2：data: URL 在 Chromium 中超过 ~2MB 会被截断/拒绝（内联图片后 HTML 很容易超限），
+      // 改为写入临时文件后 loadFile，finally 中清理
+      const tmpHtml = join(app.getPath('temp'), `mk-editor-pdf-${Date.now()}-${Math.random().toString(36).slice(2)}.html`)
+      await writeFile(tmpHtml, args.html, 'utf8')
       const printWin = new BrowserWindow({
         show: false,
         webPreferences: { contextIsolation: true, nodeIntegration: false },
       })
       try {
-        await printWin.loadURL(
-          `data:text/html;charset=utf-8,${encodeURIComponent(args.html)}`,
-        )
+        await printWin.loadFile(tmpHtml)
         // 等图片/字体等资源就绪
         await printWin.webContents.executeJavaScript(
           `new Promise(r => {
@@ -707,6 +709,7 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: { code: 'PDF_ERROR', message: String(err) } }
       } finally {
         printWin.close()
+        unlink(tmpHtml).catch(() => {})
       }
     },
   )
