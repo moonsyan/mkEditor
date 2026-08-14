@@ -240,6 +240,13 @@ export default function App(): JSX.Element {
     imagesOpen ||
     pdfOptsOpen ||
     wsSearchOpen
+  /** 代码块全屏镜像（ref）：全屏 Esc 由编辑器内部监听处理，
+   *  而专注模式的 window Esc 监听器注册更早、每次按键都会先触发，
+   *  若不在此跳过，全屏内按 Esc 会把专注模式一并退出 */
+  const fullscreenOpenRef = useRef(false)
+  const handleFullscreenChange = useCallback((open: boolean) => {
+    fullscreenOpenRef.current = open
+  }, [])
 
   useEffect(() => {
     if (!focusMode) return
@@ -250,6 +257,7 @@ export default function App(): JSX.Element {
       if (searchMode !== 'none' || settingsOpen || helpView || imagesOpen || pdfOptsOpen || wsSearchOpen) {
         return
       }
+      if (fullscreenOpenRef.current) return
       setFocusMode(false)
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -618,6 +626,9 @@ export default function App(): JSX.Element {
             )
           } else if (tries++ < 20) {
             setTimeout(tryApply, 100)
+          } else {
+            // 2 秒仍不可用：不静默失败，给用户可操作的提示
+            setToast('编辑器未就绪，已恢复的文件内容可能未加载，请刷新窗口')
           }
         }
         tryApply()
@@ -1460,6 +1471,8 @@ export default function App(): JSX.Element {
       return
     }
     const { path, name } = result.data
+    // 另存为创建了新文件，纳入最近文件列表（与原打开逻辑一致）
+    recordRecent(path, name)
     const newId = `file-${path}`
     const targetFile =
       newId !== oldId
@@ -1550,7 +1563,7 @@ export default function App(): JSX.Element {
       return
     }
     if (targetAlreadyOpen) setToast('已覆盖并切换到已打开的同名文件')
-  }, [activeFileId, contents, savedMap, clearDraft, saveDraft, replaceEditorContent])
+  }, [activeFileId, contents, savedMap, clearDraft, saveDraft, replaceEditorContent, recordRecent])
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)
@@ -1958,6 +1971,15 @@ img{max-width:100%}
         delete next[srcId]
         return next
       })
+      // savedMap 同步迁移：重命名前刚写回 pending 时磁盘已是该内容，新 id 记为已保存；
+      // 否则沿用旧值。漏迁移会让重命名后的首次 Ctrl+S 误弹"未保存确认"或把已保存标为脏
+      setSavedMap((prev) => {
+        if (prev[srcId] === undefined && pending === undefined) return prev
+        const next = { ...prev }
+        next[newId] = pending !== undefined ? true : (prev[srcId] ?? true)
+        delete next[srcId]
+        return next
+      })
       // H3：重命名 await 期间用户可能已切到其它标签。用 ref 实时判定，
       // 否则完成回调会把活动标签拽回旧文件、编辑器内容串号
       if (activeFileIdRef.current === srcId) {
@@ -1989,6 +2011,11 @@ img{max-width:100%}
         void handleRenameFile(currentFile.path, nextName)
         return
       }
+      if (currentFile && demoFileNames[currentFile.id]) {
+        // 演示文档名由模板固定：改名只改内存、重载即还原，还会与侧栏模板名不一致
+        setToast('演示文档不支持重命名')
+        return
+      }
       setDocTitle(nextName)
       const renamedFiles = openFilesRef.current.map((file) =>
         file.id === activeFileId ? { ...file, name: nextName } : file,
@@ -1996,7 +2023,7 @@ img{max-width:100%}
       openFilesRef.current = renamedFiles
       setOpenFiles(renamedFiles)
     },
-    [activeFileId, docTitle, handleRenameFile, openFiles],
+    [activeFileId, docTitle, demoFileNames, handleRenameFile, openFiles],
   )
 
   const handleDocumentTitleKeyDown = useCallback(
@@ -2141,6 +2168,13 @@ img{max-width:100%}
         const candidate = normalizePathForCompare(value)
         return candidate === sourceForCompare || candidate.startsWith(`${sourceForCompare}/`)
       }
+      const currentActive = activeFileIdRef.current
+      const activeIsMoved = currentActive.startsWith('file-') && isUnder(currentActive.slice(5))
+      // 迁移前先把活动文档实时内容落账（用户可能刚打字，防抖回调未到）。
+      // 必须在 openFilesRef 迁移之前调用：flush 的守卫按 openFilesRef 判定文件
+      // 是否仍存在，迁移后旧 id 已被替换，flush 会静默跳过——末次输入就丢了。
+      // 同时保证下方脏文件循环写入的基线取自最新内容（INITIAL_OR_SAVED 与磁盘一致）
+      if (activeIsMoved) flushEditorContent()
       // 先写回受影响文件的未保存内容，避免移动后编辑丢失（带冲突检测，外部修改过的不静默覆盖）
       const dirty = openFiles.filter(
         (f) => f.path && isUnder(f.path) && savedMap[f.id] === false,
@@ -2173,8 +2207,16 @@ img{max-width:100%}
         return
       }
       const newPath = res.data.path
-      const mapPath = (p: string) =>
-        p === path ? newPath : newPath + p.slice(path.length)
+      // Windows 大小写不敏感：isUnder 已归一化匹配，mapPath 必须用相同的归一化
+      // 逻辑定位前缀，否则记录路径与树路径大小写不同时 slice 错位产生幽灵标签
+      const mapPath = (p: string) => {
+        if (p === path) return newPath
+        const pNorm = normalizePathForCompare(p)
+        const pathNorm = normalizePathForCompare(path)
+        if (pNorm === pathNorm) return newPath
+        if (pNorm.startsWith(`${pathNorm}/`)) return newPath + p.slice(path.length)
+        return p
+      }
       // 迁移已打开文件的 id（file-旧路径 → file-新路径），文件夹移动时子文件一并迁移
       const movedFiles = openFilesRef.current.map((file) => {
         if (!file.path || !isUnder(file.path)) return file
@@ -2201,6 +2243,21 @@ img{max-width:100%}
         }
         return changed ? next : prev
       })
+      // contents 的 ref 镜像同步迁移（setContents 只更新 state）：
+      // 残留旧 id 条目会让后续 liveContentOf 兜底对已移动文件读到空串
+      {
+        let refChanged = false
+        const nextRef: Record<string, string> = {}
+        for (const [id, val] of Object.entries(contentsRef.current)) {
+          if (id.startsWith('file-') && isUnder(id.slice(5))) {
+            nextRef[`file-${mapPath(id.slice(5))}`] = val
+            refChanged = true
+          } else {
+            nextRef[id] = val
+          }
+        }
+        if (refChanged) contentsRef.current = nextRef
+      }
       // 脏检查基线与 mtime 同步迁移
       for (const [id, val] of Object.entries({ ...INITIAL_OR_SAVED.current })) {
         if (id.startsWith('file-') && isUnder(id.slice(5))) {
@@ -2261,16 +2318,14 @@ img{max-width:100%}
       })
       // M2：移动 await 期间用户可能已切到其它标签。用 ref 实时判定：
       // 激活文件已不在被移动范围内时不动编辑器，避免拽回活动标签、覆盖当前编辑
-      const currentActive = activeFileIdRef.current
-      if (currentActive.startsWith('file-') && isUnder(currentActive.slice(5))) {
-        // 完成前把当前文档实时内容落账（用户可能刚打字，防抖回调未到）
-        flushEditorContent()
+      if (activeIsMoved) {
         const nid = `file-${mapPath(currentActive.slice(5))}`
         activeFileIdRef.current = nid
         setActiveFileId(nid)
         // M7：移动改变了文档目录，编辑器内 mdimg 仍按旧目录解析；
-        // 按新目录重新迁移并重渲染，否则下一键保存就把 mdimg:///旧目录/ 绝对路径写进文件
-        replaceEditorContent(nid, contentsRef.current[currentActive] ?? '', 'update')
+        // 按新目录重新迁移并重渲染，否则下一键保存就把 mdimg:///旧目录/ 绝对路径写进文件。
+        // 内容取实时值（上方已 flush 落账，防抖窗口内 state 不再滞后）
+        replaceEditorContent(nid, liveContentOf(currentActive), 'update')
       }
       setToast('已移动')
       await refreshWorkspace()
@@ -2864,6 +2919,7 @@ img{max-width:100%}
               onNotify={setToast}
               wikiLinkFiles={wikiLinkFileList}
               onWikiLinkClick={handleWikiLinkClick}
+              onFullscreenChange={handleFullscreenChange}
               /* frontmatter 属性面板：渲染在正文上方（仿 Obsidian） */
               frontmatterPanel={
                 activeFile?.path && activeContent ? (

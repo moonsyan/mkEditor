@@ -162,6 +162,8 @@ interface EditorProps {
   onWikiLinkClick?: (target: string) => void
   /** 文档属性面板节点（仿 Obsidian：渲染在正文上方，随内容滚动，宽度与正文对齐） */
   frontmatterPanel?: ReactNode
+  /** 代码块全屏开合回调（App 侧用于专注模式 Esc 协调） */
+  onFullscreenChange?: (open: boolean) => void
 }
 
 /**
@@ -183,6 +185,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       wikiLinkFiles,
       onWikiLinkClick,
       frontmatterPanel,
+      onFullscreenChange,
     },
     ref,
   ) {
@@ -299,9 +302,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         })()
       : null
 
-    // 全屏预览下 Esc 关闭
+    // 全屏预览下 Esc 关闭；开合状态上报给 App（专注模式的 window Esc
+    // 监听器注册更早会先触发，App 需知道全屏状态以跳过退出专注模式）
     useEffect(() => {
       if (!fullscreenCode) return
+      onFullscreenChange?.(true)
       const h = (e: KeyboardEvent) => {
         if (isImeComposing(e)) return
         if (e.key === 'Escape') {
@@ -310,8 +315,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         }
       }
       window.addEventListener('keydown', h)
-      return () => window.removeEventListener('keydown', h)
-    }, [fullscreenCode])
+      return () => {
+        onFullscreenChange?.(false)
+        window.removeEventListener('keydown', h)
+      }
+    }, [fullscreenCode, onFullscreenChange])
 
     // 行号开关同步：更新模块级标志并触发装饰重建（编辑器未创建时由 init 读标志）
     useEffect(() => {

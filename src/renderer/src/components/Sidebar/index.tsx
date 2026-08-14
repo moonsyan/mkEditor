@@ -249,18 +249,28 @@ export function Sidebar({
     () => collectFolderKeys([...demoNodes, ...workspaceNodes]),
     [demoNodes, workspaceNodes],
   )
+  // 折叠状态只在“记录形态”变化时重算：无记录→有记录（设置异步加载）、
+  // 匹配状态翻转（换了工作区/树结构大变）。仅 allFolderKeys 重建（重命名/删除
+  // 后刷新工作区）或记录内容微调时不重置——否则会把用户刚手动折叠/展开的
+  // 状态回退到旧记录。内部状态与 App 记录本就在每次 toggleCollapse 时实时同步
+  const foldMatchRef = useRef<{ hasRecord: boolean; matched: boolean } | null>(null)
   useEffect(() => {
     if (allFolderKeys.length === 0) return
     // 注意用 != null：同时排除 undefined（未传 prop）与 null（无记录）
-    if (initialCollapsedKeys != null) {
-      // 空数组 = 用户曾展开全部文件夹，必须保持原样（不能当作"无匹配"处理）
-      const matched =
-        initialCollapsedKeys.length === 0 ||
-        initialCollapsedKeys.some((k) => allFolderKeys.includes(k))
-      setCollapsedKeys(matched ? new Set(initialCollapsedKeys) : new Set(allFolderKeys))
-    } else {
+    const hasRecord = initialCollapsedKeys != null
+    const matched =
+      hasRecord &&
+      (initialCollapsedKeys!.length === 0 ||
+        initialCollapsedKeys!.some((k) => allFolderKeys.includes(k)))
+    const prev = foldMatchRef.current
+    if (prev && prev.hasRecord === hasRecord && prev.matched === matched) return
+    foldMatchRef.current = { hasRecord, matched }
+    if (initialCollapsedKeys == null) {
       // 无记录：全部默认折叠
       setCollapsedKeys(new Set(allFolderKeys))
+    } else {
+      // 空数组 = 用户曾展开全部文件夹，必须保持原样（不能当作"无匹配"处理）
+      setCollapsedKeys(matched ? new Set(initialCollapsedKeys) : new Set(allFolderKeys))
     }
   }, [initialCollapsedKeys, allFolderKeys])
 

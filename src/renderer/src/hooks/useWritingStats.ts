@@ -25,14 +25,15 @@ export function useWritingStats(
   /** 最近一次编辑时间（用于写作时长累计） */
   const lastEditTimeRef = useRef(0)
 
-  // 字数净增追踪：同一文件字数增加才计入今日字数
+  // 字数净增追踪：同一文件字数增加才计入今日字数。
+  // 打开/切换文档、搜索替换、撤销等字数变化并非真实打字，不能计入编辑时间
   useEffect(() => {
     const prev = lastWordCountRef.current[activeFileId]
     lastWordCountRef.current[activeFileId] = wordCount
     if (prev === undefined) return // 首次打开该文件，不计
-    lastEditTimeRef.current = Date.now()
     const delta = wordCount - prev
     if (delta > 0) {
+      lastEditTimeRef.current = Date.now()
       setWritingStats((s) => {
         const rolled = rollStatsDate(s)
         return { ...rolled, words: rolled.words + delta }

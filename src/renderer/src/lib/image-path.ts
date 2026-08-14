@@ -32,7 +32,7 @@ export function toEditorImages(md: string, docDir: string | undefined): string {
 
 /**
  * 存储前：把 mdimg 绝对路径回写为相对路径（保证 .md 可移植，其它编辑器也能显示）
- * 仅回写落在当前文档目录下的图片
+ * 仅回写落在当前文档目录下的图片；目录外的 mdimg 兜底落盘为可移植的绝对路径
  */
 export function toStoredImages(md: string, docDir: string | undefined): string {
   if (!docDir) return md
@@ -47,6 +47,17 @@ export function toStoredImages(md: string, docDir: string | undefined): string {
         return `![${alt}](${decodeURIComponent(rel)})`
       } catch {
         return `![${alt}](${rel})`
+      }
+    })
+  }
+  // 兜底：目录外粘贴/文档移动等场景残留的 mdimg:/// 无法还原为相对路径，
+  // 至少落盘为绝对路径（mdimg 协议对其它 Markdown 工具不可读，绝不允许写进文件）
+  if (result.includes('mdimg:///')) {
+    result = result.replace(/(!\[[^\]]*\]\()mdimg:\/\/([^)]+)(\))/g, (_m, pre: string, encoded: string, post: string) => {
+      try {
+        return `${pre}${decodeURIComponent(encoded)}${post}`
+      } catch {
+        return `${pre}${encoded}${post}`
       }
     })
   }
