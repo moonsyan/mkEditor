@@ -285,6 +285,11 @@ export function Sidebar({
   }
 
   const openTreeFile = (node: UiNode, pinned: boolean) => {
+    // 从搜索结果点选文件时，搜索输入框持有焦点会挡住编辑器焦点恢复（H2），先释放
+    const active = document.activeElement as HTMLElement | null
+    if (active && active !== document.body && active.closest('input, textarea')) {
+      active.blur()
+    }
     if (node.demoId !== undefined) {
       onSelectDemoFile(node.demoId, pinned)
       return
