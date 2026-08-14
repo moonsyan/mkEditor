@@ -69,6 +69,8 @@ import { undoCommand, redoCommand } from '@milkdown/kit/plugin/history'
 import { resolveWikiTarget } from './src/lib/wiki-resolver'
 import { collectMdFiles } from './src/lib/wiki-resolver'
 import {
+  getFrontmatterPropertyKeys,
+  isValidFrontmatterPropertyKey,
   parseFrontmatterYaml,
   setFrontmatterProperty,
   deleteFrontmatterProperty,
@@ -230,6 +232,7 @@ export default function App(): JSX.Element {
   useEffect(() => {
     if (!focusMode) return
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       if (isImeComposing(event)) return
       if (event.key !== 'Escape') return
       if (searchMode !== 'none' || settingsOpen || helpView || imagesOpen || pdfOptsOpen || wsSearchOpen) {
@@ -2667,29 +2670,6 @@ img{max-width:100%}
             onReorder={handleReorderTabs}
           />
           <div className="editor-content">
-            {/* frontmatter 属性面板 */}
-            {activeFile?.path && showFrontmatterProps && activeContent && (
-              <FrontmatterProperties
-                properties={(() => {
-                  const extracted = extractFrontmatterRaw(activeContent)
-                  return extracted ? parseFrontmatterYaml(extracted.text) : null
-                })()}
-                show={true}
-                onToggle={() => setShowFrontmatterProps((v) => !v)}
-                onUpdateProperty={(key, value) => {
-                  const newMarkdown = setFrontmatterProperty(activeContent, key, value)
-                  replaceEditorContent(activeFileId, newMarkdown, 'update')
-                }}
-                onDeleteProperty={(key) => {
-                  const newMarkdown = deleteFrontmatterProperty(activeContent, key)
-                  replaceEditorContent(activeFileId, newMarkdown, 'update')
-                }}
-                onAddProperty={(key, value) => {
-                  const newMarkdown = setFrontmatterProperty(activeContent, key, value)
-                  replaceEditorContent(activeFileId, newMarkdown, 'update')
-                }}
-              />
-            )}
             <Editor
               ref={editorRef}
               initialContent={DEMO_FILES[DEFAULT_FILE_ID].content}
@@ -2701,9 +2681,43 @@ img{max-width:100%}
               onNotify={setToast}
               wikiLinkFiles={wikiLinkFileList}
               onWikiLinkClick={handleWikiLinkClick}
+              /* frontmatter 属性面板：渲染在正文上方（仿 Obsidian） */
+              frontmatterPanel={
+                activeFile?.path && activeContent ? (
+                  <FrontmatterProperties
+                    properties={(() => {
+                      const extracted = extractFrontmatterRaw(activeContent)
+                      return extracted ? parseFrontmatterYaml(extracted.text) : null
+                    })()}
+                    show={showFrontmatterProps}
+                    onToggle={() => setShowFrontmatterProps((v) => !v)}
+                    onUpdateProperty={(key, value) => {
+                      const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                      replaceEditorContent(activeFileId, newMarkdown, 'update')
+                    }}
+                    onDeleteProperty={(key) => {
+                      const newMarkdown = deleteFrontmatterProperty(activeContent, key)
+                      replaceEditorContent(activeFileId, newMarkdown, 'update')
+                    }}
+                    onAddProperty={(key, value) => {
+                      if (!isValidFrontmatterPropertyKey(key)) {
+                        setToast('属性名只能包含字母、数字、下划线和连字符')
+                        return
+                      }
+                      const extracted = extractFrontmatterRaw(activeContent)
+                      if (extracted && getFrontmatterPropertyKeys(extracted.text).includes(key)) {
+                        setToast(`属性“${key}”已存在；请编辑现有属性或正文 YAML`)
+                        return
+                      }
+                      const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                      replaceEditorContent(activeFileId, newMarkdown, 'update')
+                    }}
+                  />
+                ) : undefined
+              }
               imageHints={{
-              documentId: activeFileId,
-              docPath: activeFile?.path,
+                documentId: activeFileId,
+                docPath: activeFile?.path,
                 workspacePath: workspace?.path,
                 imageHost,
               }}

@@ -2,6 +2,7 @@
   "name": "markdown-soft-v3",
   "version": "0.0.1",
   "description": "A minimal, elegant Markdown editor for desktop",
+  "author": "ming",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

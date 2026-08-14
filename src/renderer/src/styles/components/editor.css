@@ -759,11 +759,24 @@
   white-space: nowrap;
 }
 
-/* ====== Frontmatter 属性面板 ====== */
+/* ====== Frontmatter 属性面板（仿 Obsidian：正文上方、随内容滚动） ====== */
+/* 容器与 .editor-inner 同宽居中（跟随 --ecw 设置），水平内边距对齐正文 */
+.fm-panel-wrap {
+  width: var(--ecw);
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 20px 56px 0;
+}
 .frontmatter-props {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
-  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-quote);
+  padding: 8px 12px 10px;
+  margin-bottom: 4px;
+}
+/* 有属性面板时收紧正文顶部留白，让面板与正文衔接更紧凑 */
+.editor-scroll:has(.fm-panel-wrap) .editor-inner {
+  padding-top: 24px;
 }
 .fm-toggle-btn {
   display: flex;
@@ -780,6 +793,13 @@
 }
 .fm-toggle-btn:hover {
   color: var(--text-2);
+}
+.fm-toggle-btn:focus-visible,
+.fm-val-text:focus-visible,
+.fm-rm-btn:focus-visible,
+.fm-add-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .fm-chevron {
   width: 12px;
@@ -823,8 +843,12 @@
 }
 .fm-val-text {
   display: block;
+  width: 100%;
   font-size: 13px;
+  font-family: inherit;
+  text-align: left;
   color: var(--text-1);
+  background: transparent;
   padding: 2px 4px;
   border-radius: 3px;
   cursor: pointer;

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { isImeComposing } from '../../lib/keyboard'
 
 export interface FrontmatterPropertiesProps {
@@ -22,17 +22,17 @@ export function FrontmatterProperties({
   onDeleteProperty,
   onAddProperty,
 }: FrontmatterPropertiesProps): JSX.Element {
-  const [editKey, setEditKey] = useState('')
-  const [editVal, setEditVal] = useState('')
   const [editingField, setEditingField] = useState<string | null>(null)
   const [editBuffer, setEditBuffer] = useState('')
   const [adding, setAdding] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newVal, setNewVal] = useState('')
+  const cancelEditRef = useRef(false)
 
   const entries = properties ? Object.entries(properties) : []
 
   const startEdit = useCallback((key: string, value: string) => {
+    cancelEditRef.current = false
     setEditingField(key)
     setEditBuffer(value)
   }, [])
@@ -49,24 +49,29 @@ export function FrontmatterProperties({
     [editBuffer, properties, onUpdateProperty],
   )
 
+  const cancelAdd = useCallback(() => {
+    setAdding(false)
+    setNewKey('')
+    setNewVal('')
+  }, [])
+
   const commitAdd = useCallback(() => {
     const key = newKey.trim()
     const val = newVal
     if (key) {
       onAddProperty(key, val)
     }
-    setAdding(false)
-    setNewKey('')
-    setNewVal('')
-  }, [newKey, newVal, onAddProperty])
+    cancelAdd()
+  }, [newKey, newVal, onAddProperty, cancelAdd])
 
   return (
     <div className={`frontmatter-props ${show ? 'open' : ''}`}>
       <button
         type="button"
-        className="fm-toggle-btn"
-        onClick={onToggle}
-        title={show ? '收起属性' : '展开属性'}
+      className="fm-toggle-btn"
+      onClick={onToggle}
+      aria-expanded={show}
+      title={show ? '收起属性' : '展开属性'}
       >
         <svg
           className={`fm-chevron ${show ? 'open' : ''}`}
@@ -101,27 +106,39 @@ export function FrontmatterProperties({
                       if (e.key === 'Enter') {
                         e.preventDefault()
                         commitEdit(key)
-                      } else if (e.key === 'Escape') {
+                        return
+                      }
+                      if (e.key === 'Escape') {
                         e.preventDefault()
+                        cancelEditRef.current = true
                         setEditingField(null)
                       }
                     }}
-                    onBlur={() => commitEdit(key)}
+                    onBlur={() => {
+                      if (cancelEditRef.current) {
+                        cancelEditRef.current = false
+                        return
+                      }
+                      commitEdit(key)
+                    }}
                   />
                 ) : (
-                  <span
+                  <button
+                    type="button"
                     className="fm-val-text"
                     onClick={() => startEdit(key, value)}
+                    aria-label={`编辑属性 ${key}`}
                     title="点击编辑"
                   >
                     {value || ' '}
-                  </span>
+                  </button>
                 )}
               </span>
               <button
                 type="button"
                 className="fm-rm-btn"
                 onClick={() => onDeleteProperty(key)}
+                aria-label={`删除属性 ${key}`}
                 title={`删除属性 "${key}"`}
               >
                 ×
@@ -142,9 +159,11 @@ export function FrontmatterProperties({
                   if (e.key === 'Enter') {
                     e.preventDefault()
                     commitAdd()
-                  } else if (e.key === 'Escape') {
+                    return
+                  }
+                  if (e.key === 'Escape') {
                     e.preventDefault()
-                    setAdding(false)
+                    cancelAdd()
                   }
                 }}
               />
@@ -159,13 +178,20 @@ export function FrontmatterProperties({
                   if (e.key === 'Enter') {
                     e.preventDefault()
                     commitAdd()
-                  } else if (e.key === 'Escape') {
+                    return
+                  }
+                  if (e.key === 'Escape') {
                     e.preventDefault()
-                    setAdding(false)
+                    cancelAdd()
                   }
                 }}
               />
-              <button type="button" className="fm-rm-btn" onClick={() => setAdding(false)}>
+              <button
+                type="button"
+                className="fm-rm-btn"
+                onClick={cancelAdd}
+                aria-label="取消添加属性"
+              >
                 ×
               </button>
             </div>

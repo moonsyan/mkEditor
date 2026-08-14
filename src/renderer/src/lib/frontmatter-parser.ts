@@ -1,9 +1,65 @@
 /* ==================== YAML Frontmatter 简单解析器 ==================== */
 
+const FRONTMATTER_KEY_PATTERN = /^[A-Za-z0-9_-]+$/
+
+type ScalarQuote = 'single' | 'double' | null
+
+interface SafePropertyLine {
+  key: string
+  value: string
+  quote: ScalarQuote
+}
+
+export function isValidFrontmatterPropertyKey(key: string): boolean {
+  return FRONTMATTER_KEY_PATTERN.test(key)
+}
+
+const parseSafePropertyLine = (line: string): SafePropertyLine | null => {
+  const match = /^([A-Za-z0-9_-]+)[ \t]*:(?:[ \t]+(.*))?$/.exec(line)
+  if (!match) return null
+
+  const rawValue = match[2]?.trim() ?? ''
+  if (!rawValue) return null
+  if (/^(?:\[|\{|[|>&*!?]|-\s)/.test(rawValue)) return null
+
+  if (rawValue.startsWith('"')) {
+    if (!rawValue.endsWith('"') || rawValue.length < 2 || rawValue.includes('\\')) return null
+    if (rawValue.slice(1, -1).includes('"')) return null
+    return {
+      key: match[1],
+      value: rawValue.slice(1, -1),
+      quote: 'double',
+    }
+  }
+
+  if (rawValue.startsWith("'")) {
+    if (!rawValue.endsWith("'") || rawValue.length < 2) return null
+    const innerValue = rawValue.slice(1, -1)
+    if (innerValue.replace(/''/g, '').includes("'")) return null
+    return {
+      key: match[1],
+      value: innerValue.replace(/''/g, "'"),
+      quote: 'single',
+    }
+  }
+
+  // 行内注释和映射样式值无法在轻量表单中无损往返，留在原始 YAML 中编辑。
+  if (/(?:^|\s)#/.test(rawValue) || /:\s/.test(rawValue)) return null
+
+  return { key: match[1], value: rawValue, quote: null }
+}
+
+const findTopLevelPropertyIndex = (lines: string[], key: string): number => {
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^([A-Za-z0-9_-]+)[ \t]*:/.exec(lines[i])
+    if (match?.[1] === key) return i
+  }
+  return -1
+}
+
 /**
  * 解析 YAML frontmatter 文本为键值对记录。
- * 支持：简单键值对（key: value）、引号包裹的值、单行数组 [a, b, c]
- * 嵌套对象/多行数组等复杂结构作为原始文本保留。
+ * 只返回可无损行级写回的顶层单行标量；数组、对象和多行值保留在原始 YAML 中。
  */
 export function parseFrontmatterYaml(text: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -11,36 +67,22 @@ export function parseFrontmatterYaml(text: string): Record<string, string> {
 
   const lines = text.split('\n')
   for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-
-    const colonIdx = trimmed.indexOf(':')
-    if (colonIdx < 0) continue
-
-    // 不可能是键值对的情况：之后是另一个冒号之前没有非空格
-    // 确保冒号后至少有一个空格（标准 YAML 要求）
-    if (colonIdx + 1 >= trimmed.length) continue
-
-    const key = trimmed.slice(0, colonIdx).trim()
-    if (!key || key.includes(' ')) continue // 嵌套情况跳过
-
-    let value = trimmed.slice(colonIdx + 1).trim()
-
-    // 去除前后引号
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-
-    // 解析转义引号
-    value = value.replace(/\\"/g, '"').replace(/\\'/g, "'")
-
-    result[key] = value
+    const property = parseSafePropertyLine(line.replace(/\r$/, ''))
+    if (!property) continue
+    result[property.key] = property.value
   }
 
   return result
+}
+
+/** 返回所有可识别的顶层属性名，包括未在属性面板展示的复杂属性。 */
+export function getFrontmatterPropertyKeys(text: string): string[] {
+  const keys: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^([A-Za-z0-9_-]+)[ \t]*:/.exec(line)
+    if (match) keys.push(match[1])
+  }
+  return keys
 }
 
 /**
@@ -54,6 +96,7 @@ export function formatFrontmatterYaml(props: Record<string, string>): string {
   return entries
     .map(([key, value]) => {
       const needsQuotes =
+        value.length === 0 ||
         /[:\n#"']/.test(value) ||
         value.startsWith(' ') ||
         value.endsWith(' ') ||
@@ -74,8 +117,22 @@ function getLineBreak(text: string): '\r\n' | '\n' {
   return text.includes('\r\n') ? '\r\n' : '\n'
 }
 
-function formatFrontmatterLine(key: string, value: string): string {
+function formatFrontmatterLine(
+  key: string,
+  value: string,
+  preferredQuote: ScalarQuote = null,
+): string {
+  if (preferredQuote === 'single') {
+    return `${key}: '${value.replace(/'/g, "''")}'`
+  }
+
+  if (preferredQuote === 'double') {
+    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    return `${key}: "${escaped}"`
+  }
+
   const needsQuotes =
+    value.length === 0 ||
     /[:\n#"']/.test(value) ||
     value.startsWith(' ') ||
     value.endsWith(' ') ||
@@ -88,17 +145,6 @@ function formatFrontmatterLine(key: string, value: string): string {
     return `${key}: "${escaped}"`
   }
   return `${key}: ${value}`
-}
-
-function findFrontmatterKeyIndex(lines: string[], key: string): number {
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line || line.startsWith('#')) continue
-    const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line)
-    if (!match) continue
-    if (match[1] === key) return i
-  }
-  return -1
 }
 
 /**
@@ -155,20 +201,24 @@ export function setFrontmatterProperty(
   key: string,
   value: string,
 ): string {
+  if (!isValidFrontmatterPropertyKey(key)) return markdown
+
   const existing = extractFrontmatterRaw(markdown)
   const lineBreak = getLineBreak(markdown)
-  const nextLine = formatFrontmatterLine(key, value)
 
   if (!existing) {
+    const nextLine = formatFrontmatterLine(key, value)
     return `---${lineBreak}${nextLine}${lineBreak}---${lineBreak}${lineBreak}${markdown}`
   }
 
   const lines = existing.text.split(/\r?\n/)
-  const index = findFrontmatterKeyIndex(lines, key)
+  const index = findTopLevelPropertyIndex(lines, key)
   if (index >= 0) {
-    lines[index] = nextLine
+    const property = parseSafePropertyLine(lines[index])
+    if (!property) return markdown
+    lines[index] = formatFrontmatterLine(key, value, property.quote)
   } else {
-    lines.push(nextLine)
+    lines.push(formatFrontmatterLine(key, value))
   }
   const replacement = `---${lineBreak}${lines.join(lineBreak)}${lineBreak}---`
   return replacement + markdown.slice(existing.end)
@@ -178,16 +228,23 @@ export function setFrontmatterProperty(
  * 删除 frontmatter 中的单个属性，尽量保留其余原始 YAML 行与注释。
  */
 export function deleteFrontmatterProperty(markdown: string, key: string): string {
+  if (!isValidFrontmatterPropertyKey(key)) return markdown
+
   const existing = extractFrontmatterRaw(markdown)
   if (!existing) return markdown
 
   const lineBreak = getLineBreak(markdown)
   const lines = existing.text.split(/\r?\n/)
-  const index = findFrontmatterKeyIndex(lines, key)
+  const index = findTopLevelPropertyIndex(lines, key)
   if (index < 0) return markdown
+  if (!parseSafePropertyLine(lines[index])) return markdown
 
   lines.splice(index, 1)
-  if (lines.length === 0) {
+  const hasYamlContent = lines.some((line) => {
+    const trimmed = line.trim()
+    return trimmed.length > 0 && !trimmed.startsWith('#')
+  })
+  if (!hasYamlContent) {
     const rest = markdown.slice(existing.end)
     if (rest.startsWith('\r\n')) return rest.slice(2)
     if (rest.startsWith('\n')) return rest.slice(1)

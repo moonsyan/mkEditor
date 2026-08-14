@@ -284,6 +284,14 @@ export function Sidebar({
     setCtxMenu({ x: e.clientX, y: e.clientY, node })
   }
 
+  const openTreeFile = (node: UiNode, pinned: boolean) => {
+    if (node.demoId !== undefined) {
+      onSelectDemoFile(node.demoId, pinned)
+      return
+    }
+    if (node.path) onSelectWorkspaceFile(node.path, pinned)
+  }
+
   const renderTreeNode = (node: UiNode, depth: number): JSX.Element => {
     const indent = 8 + depth * 14
     // 层级引导线：每个祖先层级一条竖线（与箭头列对齐）
@@ -298,11 +306,20 @@ export function Sidebar({
       // 工作区文件夹支持拖入移动（U5）
       const droppable = !!workspace && !!node.path
       return (
-        <div key={node.key}>
+        <div key={node.key} role="none">
           <div
             className={`tree-row tree-folder-row ${dropKey === node.key ? 'drop-target' : ''}`}
             style={{ paddingLeft: indent }}
+            role="treeitem"
+            tabIndex={0}
+            aria-expanded={open}
             onClick={() => toggleCollapse(node.key)}
+            onKeyDown={(event) => {
+              if (isImeComposing(event.nativeEvent)) return
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              toggleCollapse(node.key)
+            }}
             onContextMenu={(e) => openCtxMenu(e, node)}
             draggable={droppable}
             onDragStart={(e) => {
@@ -338,7 +355,11 @@ export function Sidebar({
             <FolderIcon />
             <span className="tree-name">{node.name}</span>
           </div>
-          {open && node.children?.map((child) => renderTreeNode(child, depth + 1))}
+          {open && (
+            <div role="group">
+              {node.children?.map((child) => renderTreeNode(child, depth + 1))}
+            </div>
+          )}
         </div>
       )
     }
@@ -387,13 +408,16 @@ export function Sidebar({
         key={node.key}
         className={`tree-row tree-file-row ${isActive ? 'active' : ''}`}
         style={{ paddingLeft: indent }}
-        onClick={() => {
-          if (node.demoId !== undefined) onSelectDemoFile(node.demoId, false)
-          else if (node.path) onSelectWorkspaceFile(node.path, false)
-        }}
-        onDoubleClick={() => {
-          if (node.demoId !== undefined) onSelectDemoFile(node.demoId, true)
-          else if (node.path) onSelectWorkspaceFile(node.path, true)
+        role="treeitem"
+        tabIndex={0}
+        aria-selected={isActive}
+        onClick={() => openTreeFile(node, false)}
+        onDoubleClick={() => openTreeFile(node, true)}
+        onKeyDown={(event) => {
+          if (isImeComposing(event.nativeEvent)) return
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          openTreeFile(node, false)
         }}
         onContextMenu={(e) => openCtxMenu(e, node)}
         draggable={!!workspace && !!node.path}
@@ -424,9 +448,22 @@ export function Sidebar({
     const isActive = node.idx === activeOutlineIndex
     return (
       <div key={node.idx} className="outline-node">
-        <div
+        <button
+          type="button"
           className={`outline-row outline-h${node.level} ${isActive ? 'active' : ''}`}
           onClick={() => onOutlineClick(node.idx)}
+          onKeyDown={(event) => {
+            if (!hasChildren) return
+            if (event.key === 'ArrowRight' && collapsed) {
+              event.preventDefault()
+              toggleHeading(node.idx)
+            }
+            if (event.key === 'ArrowLeft' && !collapsed) {
+              event.preventDefault()
+              toggleHeading(node.idx)
+            }
+          }}
+          aria-expanded={hasChildren ? !collapsed : undefined}
           title={node.text}
         >
           {hasChildren ? (
@@ -445,7 +482,7 @@ export function Sidebar({
             <span className="outline-caret outline-caret-empty" />
           )}
           <span className="outline-text">{node.text}</span>
-        </div>
+        </button>
         {hasChildren && !collapsed && (
           <div className="outline-sub">{node.children.map(renderOutlineNode)}</div>
         )}
@@ -456,45 +493,63 @@ export function Sidebar({
   return (
     <div className="sidebar">
       {/* Tab 切换 */}
-      <div className="sidebar-tabs">
-        <div
+      <div className="sidebar-tabs" role="tablist" aria-label="侧栏视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'files'}
+          aria-controls="sidebar-files-panel"
           className={`sidebar-tab ${activeTab === 'files' ? 'active' : ''}`}
           onClick={() => setActiveTab('files')}
         >
           文件
-        </div>
-        <div
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'outline'}
+          aria-controls="sidebar-outline-panel"
           className={`sidebar-tab ${activeTab === 'outline' ? 'active' : ''}`}
           onClick={() => setActiveTab('outline')}
         >
           大纲
-        </div>
+        </button>
       </div>
 
       <div className="sidebar-body">
         {/* ===== 文件树面板 ===== */}
         {activeTab === 'files' && (
-          <div className="panel active">
+          <div
+            id="sidebar-files-panel"
+            className="panel active"
+            role="tabpanel"
+            aria-label="文件"
+          >
             {/* 已打开工作区：只显示当前文件夹；否则显示演示树 + 外部文件 */}
             {workspace ? (
-              <>
+              <div role="tree" aria-label="文件列表">
                 {workspaceNodes.length > 0 ? (
                   workspaceNodes.map((node) => renderTreeNode(node, 0))
                 ) : (
                   <div className="tree-empty">文件夹为空，已新建空白文档</div>
                 )}
-              </>
+              </div>
             ) : (
-              <>
+              <div role="tree" aria-label="文件列表">
                 {demoNodes.map((node) => renderTreeNode(node, 0))}
-              </>
+              </div>
             )}
           </div>
         )}
 
         {/* ===== 大纲面板 ===== */}
         {activeTab === 'outline' && (
-          <div className="panel active">
+          <div
+            id="sidebar-outline-panel"
+            className="panel active"
+            role="tabpanel"
+            aria-label="大纲"
+          >
             {outlineTree.length === 0 ? (
               <div className="outline-empty">暂无标题</div>
             ) : (

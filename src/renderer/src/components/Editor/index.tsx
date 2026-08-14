@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useState, useEffect, type ReactNode } from 'react'
 import {
   Editor as MilkdownCore,
   EditorStatus,
@@ -157,6 +157,8 @@ interface EditorProps {
   wikiLinkFiles?: WikiSuggestion[]
   /** Wiki 链接点击回调（target 为 [[...]] 中的 target 字符串） */
   onWikiLinkClick?: (target: string) => void
+  /** 文档属性面板节点（仿 Obsidian：渲染在正文上方，随内容滚动，宽度与正文对齐） */
+  frontmatterPanel?: ReactNode
 }
 
 /**
@@ -177,6 +179,7 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       onNotify,
       wikiLinkFiles,
       onWikiLinkClick,
+      frontmatterPanel,
     },
     ref,
   ) {
@@ -835,6 +838,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             setTablePanel(null)
           }}
         >
+          {/* 文档属性面板：随内容滚动，宽度与正文对齐 */}
+          {frontmatterPanel && <div className="fm-panel-wrap">{frontmatterPanel}</div>}
           <div
             className="editor-inner"
             onKeyDown={handleKeyDown}
