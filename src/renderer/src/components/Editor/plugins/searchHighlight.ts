@@ -68,6 +68,22 @@ export const searchPlugin = new Plugin({
     apply(tr, prev) {
       const meta = tr.getMeta(searchKey)
       if (meta !== undefined) return meta as DecorationSet
+      if (tr.docChanged) {
+        // M9：搜索后编辑文档会让 searchState.hits 位置过期，
+        // 与装饰同样经 tr.mapping 重映射，保证 next/替换落在编辑后的正确位置
+        searchState.hits = searchState.hits
+          .map((hit) => {
+            // 与 DecorationSet.map 的偏置一致（两端 -1），保证命中范围与高亮范围重合
+            const fromResult = tr.mapping.mapResult(hit.from, -1)
+            const toResult = tr.mapping.mapResult(hit.to, -1)
+            if (fromResult.deleted || toResult.deleted) return null
+            return { from: fromResult.pos, to: toResult.pos }
+          })
+          .filter((hit): hit is SearchHit => hit !== null)
+        if (searchState.current >= searchState.hits.length) {
+          searchState.current = searchState.hits.length - 1
+        }
+      }
       return (prev as DecorationSet).map(tr.mapping, tr.doc)
     },
   },
