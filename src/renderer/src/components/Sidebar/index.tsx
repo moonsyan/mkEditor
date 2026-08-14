@@ -174,8 +174,8 @@ export function Sidebar({
   }, [ctxMenu])
 
   // 菜单触发切到大纲。
-  // 用 ref 记录已消费的 tick：侧栏折叠后组件会重新挂载，
-  // 若不记录，旧的 tick 会被重复消费导致 Tab 错误停在大纲。
+  // 用 ref 记录已消费的 tick：L16 后组件折叠不再卸载，
+  // 但仍需防止旧 tick 在后续渲染中被重复消费导致 Tab 错误停在大纲。
   const lastOutlineTickRef = useRef(focusOutlineTick)
   useEffect(() => {
     if (focusOutlineTick > lastOutlineTickRef.current) {
