@@ -116,9 +116,23 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
       // 保存全部后关闭（destroy 绕过 beforeunload）；saveAll 返回保存失败的文件名清单。
       // 失败文件（外部冲突等）的未保存内容已由渲染端写入草稿兜底，
       // 此时再次确认告知用户；选"取消"则保留窗口手动处理
-      wc.executeJavaScript(
+      // M3：渲染端卡死时 executeJavaScript 永不返回，关窗流程会挂死，
+      // 用 15s 超时兜底，超时按"无法保存"分支提示用户
+      const savePromise: Promise<unknown> = wc.executeJavaScript(
         'window.__markdownsoft_saveAll ? window.__markdownsoft_saveAll() : Promise.resolve([])',
       )
+      // 渲染端卡死时 executeJavaScript 永不返回，15s 后按"无法保存"分支处理
+      const withTimeout = (p: Promise<unknown>, ms: number): Promise<unknown> => {
+        let timer: ReturnType<typeof setTimeout> | null = null
+        const timeout: Promise<never> = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('saveAll timeout (renderer hung)')), ms)
+        })
+        p.finally(() => {
+          if (timer) clearTimeout(timer)
+        })
+        return Promise.race([p, timeout])
+      }
+      withTimeout(savePromise, 15_000)
         .then((failed: unknown) => {
           if (Array.isArray(failed) && failed.length > 0) {
             const names = failed.filter((n): n is string => typeof n === 'string')
