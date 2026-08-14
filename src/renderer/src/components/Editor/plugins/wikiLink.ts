@@ -62,6 +62,9 @@ export const wikiLinkInputRule = $inputRule((ctx) => {
     (state, match, start, end) => {
       const type = schema.nodes.wiki_link
       if (!type) return null
+      // C-6：反引号内输入 [[x]] 不转换（与 convertWikiText 一致），
+      // 否则链接节点被插进 code mark，往返后反引号内容被改写
+      if (state.selection.$from.marks().some((m) => m.type.name === 'code')) return null
       const target = (match[1] ?? '').trim()
       const alias = (match[2] ?? '').trim()
       if (!target) return null
@@ -102,6 +105,9 @@ function convertWikiText(view: EditorView) {
 
     // 只在文本节点中查找（跳过代码块和 frontmatter）
     if (!node.isText) return
+    // C-6：行内代码（code mark）内的 [[...]] 是字面文本，转换会把 wiki_link
+    // 原子节点插进 code mark，序列化后反引号内容被改写为真实链接（内容静默损坏）
+    if (node.marks.some((m) => m.type.name === 'code')) return
     // 跳过在代码块或 frontmatter 中的文本
     const $pos = state.doc.resolve(pos)
     let skip = false

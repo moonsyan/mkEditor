@@ -56,7 +56,9 @@ export function analyzeDecorationChange(tr: Transaction): DecorationChangeInfo {
         const child = n as { type?: { name?: string; isBlock?: boolean }; isText?: boolean; marks?: { type?: { name?: string } }[] }
         if (child.type?.isBlock && child.type.name) info.sliceBlocks.add(child.type.name)
         if (child.isText && child.marks?.some((m) => m.type?.name === 'code')) info.hasCodeMark = true
-        return false
+        // C-7：必须返回 true 才能继续下探子节点；返回 false 会跳过整棵子树，
+        // 粘贴进列表/引用块的代码块、行内 code、标题都检测不到，装饰不重建
+        return true
       })
     })
   }
