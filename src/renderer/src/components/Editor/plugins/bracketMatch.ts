@@ -11,8 +11,16 @@ const CLOSERS: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
 /** 引号视为"开放"的前导字符（空白/结构符号/起始） */
 const QUOTE_OPEN_RE = /[\s([{<,;:，；：。"'‘（【]/
 
-/** 在文本块内，从索引 idx 出发寻找与之配对的另一端（括号或引号） */
-function matchPairAt(text: string, blockStart: number, idx: number): { a: [number, number]; b: [number, number] } | null {
+/**
+ * 在文本块内，从索引 idx 出发寻找与之配对的另一端（括号或引号）。
+ * toDoc 把组合文本索引换算为文档坐标：块内含原子节点（脚注引用/wiki 链接/
+ * 公式等）时 textContent 不含原子文本，直接 blockStart + idx 会错位
+ */
+function matchPairAt(
+  text: string,
+  toDoc: (textIdx: number) => number,
+  idx: number,
+): { a: [number, number]; b: [number, number] } | null {
   const ch = text[idx]
   // 括号（L9：按类型配对，栈式匹配，(] 不再误配对，([)] 不再错配）
   if (OPENERS[ch] || CLOSERS[ch]) {
@@ -27,7 +35,7 @@ function matchPairAt(text: string, blockStart: number, idx: number): { a: [numbe
           if (c !== expected[expected.length - 1]) return null
           expected.pop()
           if (expected.length === 0) {
-            return { a: [blockStart + idx, blockStart + idx + 1], b: [blockStart + i, blockStart + i + 1] }
+            return { a: [toDoc(idx), toDoc(idx) + 1], b: [toDoc(i), toDoc(i) + 1] }
           }
         }
       }
@@ -40,7 +48,7 @@ function matchPairAt(text: string, blockStart: number, idx: number): { a: [numbe
         else if (OPENERS[c]) {
           if (expected.length === 0) {
             if (OPENERS[c] !== ch) return null
-            return { a: [blockStart + i, blockStart + i + 1], b: [blockStart + idx, blockStart + idx + 1] }
+            return { a: [toDoc(i), toDoc(i) + 1], b: [toDoc(idx), toDoc(idx) + 1] }
           }
           if (OPENERS[c] !== expected[expected.length - 1]) return null
           expected.pop()
@@ -61,7 +69,7 @@ function matchPairAt(text: string, blockStart: number, idx: number): { a: [numbe
         if (QUOTE_OPEN_RE.test(p)) depth++
         else {
           depth--
-          if (depth === 0) return { a: [blockStart + idx, blockStart + idx + 1], b: [blockStart + i, blockStart + i + 1] }
+          if (depth === 0) return { a: [toDoc(idx), toDoc(idx) + 1], b: [toDoc(i), toDoc(i) + 1] }
         }
       }
     } else {
@@ -72,7 +80,7 @@ function matchPairAt(text: string, blockStart: number, idx: number): { a: [numbe
         if (QUOTE_OPEN_RE.test(p)) depth++
         else {
           depth--
-          if (depth === 0) return { a: [blockStart + i, blockStart + i + 1], b: [blockStart + idx, blockStart + idx + 1] }
+          if (depth === 0) return { a: [toDoc(i), toDoc(i) + 1], b: [toDoc(idx), toDoc(idx) + 1] }
         }
       }
     }
@@ -85,14 +93,50 @@ function buildBracketDecos(state: EditorState): DecorationSet {
   const sel = state.selection
   if (!sel.empty) return DecorationSet.empty
   const $from = sel.$from
-  const text = $from.parent.textContent
+  const parent = $from.parent
   const blockStart = $from.start()
-  const cursor = $from.parentOffset
+  // L7：逐子节点累加文档偏移，text 索引与文档坐标正确换算。
+  // 块内含原子节点（footnote_ref/wiki_link/math 等）时其文本不在
+  // textContent 里，按子节点遍历取每个文本片段的起始位置
+  const textParts: string[] = []
+  const partOffsets: number[] = []
+  parent.forEach((child, offset) => {
+    if (child.isText) {
+      partOffsets.push(blockStart + offset)
+      textParts.push(child.text ?? '')
+    }
+  })
+  const text = textParts.join('')
+  /** 组合文本索引 → 文档坐标 */
+  const toDoc = (textIdx: number): number => {
+    let acc = 0
+    for (let p = 0; p < textParts.length; p++) {
+      const next = acc + textParts[p].length
+      if (textIdx < next) return partOffsets[p] + (textIdx - acc)
+      acc = next
+    }
+    return blockStart + textIdx
+  }
+  // 光标（父容器内文档偏移）→ 组合文本索引
+  const cursorRel = $from.parentOffset
+  let cursorTextIdx = text.length
+  {
+    let acc = 0
+    for (let p = 0; p < textParts.length; p++) {
+      const partStart = partOffsets[p] - blockStart
+      const partLen = textParts[p].length
+      if (cursorRel <= partStart + partLen) {
+        cursorTextIdx = acc + Math.max(0, Math.min(partLen, cursorRel - partStart))
+        break
+      }
+      acc += partLen
+    }
+  }
   const tryIdx = (i: number): { a: [number, number]; b: [number, number] } | null => {
     if (i < 0 || i >= text.length) return null
-    return matchPairAt(text, blockStart, i)
+    return matchPairAt(text, toDoc, i)
   }
-  const r = tryIdx(cursor - 1) || tryIdx(cursor)
+  const r = tryIdx(cursorTextIdx - 1) || tryIdx(cursorTextIdx)
   if (!r) return DecorationSet.empty
   return DecorationSet.create(state.doc, [
     Decoration.inline(r.a[0], r.a[1], { class: 'bracket-match' }),

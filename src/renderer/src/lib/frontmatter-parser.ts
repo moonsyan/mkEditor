@@ -23,11 +23,32 @@ const parseSafePropertyLine = (line: string): SafePropertyLine | null => {
   if (/^(?:\[|\{|[|>&*!?]|-\s)/.test(rawValue)) return null
 
   if (rawValue.startsWith('"')) {
-    if (!rawValue.endsWith('"') || rawValue.length < 2 || rawValue.includes('\\')) return null
-    if (rawValue.slice(1, -1).includes('"')) return null
+    if (!rawValue.endsWith('"') || rawValue.length < 2) return null
+    // L10：此前值里含 \ 或 " 一律拒绝（→ null），formatFrontmatterLine 写入的
+    // "a\nb"（换行转义）读不回来，属性从面板消失且无法再编辑。
+    // 改为解码常见转义（\\、\"、\n、\t、\r），未知转义原样保留——往返无损
+    const inner = rawValue.slice(1, -1)
+    let decoded = ''
+    for (let k = 0; k < inner.length; k++) {
+      const c = inner[k]
+      if (c !== '\\' || k + 1 >= inner.length) {
+        decoded += c
+        continue
+      }
+      const n = inner[k + 1]
+      if (n === 'n') decoded += '\n'
+      else if (n === 't') decoded += '\t'
+      else if (n === 'r') decoded += '\r'
+      else if (n === '"') decoded += '"'
+      else if (n === '\\') decoded += '\\'
+      else {
+        decoded += c + n // 未知转义（如 \u、\x）保留原样
+      }
+      k++
+    }
     return {
       key: match[1],
-      value: rawValue.slice(1, -1),
+      value: decoded,
       quote: 'double',
     }
   }
@@ -111,8 +132,7 @@ export function formatFrontmatterYaml(props: Record<string, string>): string {
         value.startsWith('{')
 
       if (needsQuotes) {
-        const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        return `${key}: "${escaped}"`
+        return `${key}: "${escapeDoubleQuoted(value)}"`
       }
       return `${key}: ${value}`
     })
@@ -123,18 +143,30 @@ function getLineBreak(text: string): '\r\n' | '\n' {
   return text.includes('\r\n') ? '\r\n' : '\n'
 }
 
+/** 双引号转义（L10：换行/回车必须转义，否则值里的真实换行会把单行
+ *  YAML 撑成多行，解析器按行拆分后属性丢失） */
+const escapeDoubleQuoted = (value: string): string =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+
 function formatFrontmatterLine(
   key: string,
   value: string,
   preferredQuote: ScalarQuote = null,
 ): string {
   if (preferredQuote === 'single') {
+    if (/[\r\n]/.test(value)) {
+      // 单引号内无法表示换行，含换行的值改用双引号 + \n 转义
+      return `${key}: "${escapeDoubleQuoted(value)}"`
+    }
     return `${key}: '${value.replace(/'/g, "''")}'`
   }
 
   if (preferredQuote === 'double') {
-    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    return `${key}: "${escaped}"`
+    return `${key}: "${escapeDoubleQuoted(value)}"`
   }
 
   const needsQuotes =
@@ -147,8 +179,7 @@ function formatFrontmatterLine(
     value.startsWith('{')
 
   if (needsQuotes) {
-    const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    return `${key}: "${escaped}"`
+    return `${key}: "${escapeDoubleQuoted(value)}"`
   }
   return `${key}: ${value}`
 }
@@ -230,11 +261,34 @@ export function setFrontmatterProperty(
   }
 
   const lines = existing.text.split(/\r?\n/)
-  const index = findLastPropertyIndex(lines, key)
+  let index = findLastPropertyIndex(lines, key)
   if (index >= 0) {
-    const property = parseSafePropertyLine(lines[index])
-    if (!property) return markdown
-    lines[index] = formatFrontmatterLine(key, value, property.quote)
+    let property = parseSafePropertyLine(lines[index])
+    if (!property) {
+      // L10：最后一行是不可行级回写的复杂值（tags: [a, b]、| 多行块、
+      // https:// 等），面板改值此前静默失败、什么也不发生。向上找最近
+      // 一个可解析的同键旧行覆盖；都没有则追加新行（last-wins，语义正确）
+      let fallback = -1
+      for (let j = index - 1; j >= 0; j--) {
+        const m = /^([A-Za-z0-9_-]+)[ \t]*:/.exec(lines[j])
+        if (m?.[1] !== key) continue
+        const p = parseSafePropertyLine(lines[j])
+        if (p) {
+          fallback = j
+          property = p
+          break
+        }
+      }
+      if (fallback < 0) {
+        lines.push(formatFrontmatterLine(key, value))
+        const replacement = `---${lineBreak}${lines.join(lineBreak)}${lineBreak}---`
+        return replacement + markdown.slice(existing.end)
+      }
+      index = fallback
+    }
+    // 到达此处时 property 必非空：要么初值可解析，要么 fallback 循环
+    // 已赋值（fallback < 0 分支提前 return 了）
+    lines[index] = formatFrontmatterLine(key, value, property!.quote)
   } else {
     lines.push(formatFrontmatterLine(key, value))
   }
@@ -255,7 +309,10 @@ export function deleteFrontmatterProperty(markdown: string, key: string): string
   const lines = existing.text.split(/\r?\n/)
   const index = findLastPropertyIndex(lines, key)
   if (index < 0) return markdown
-  if (!parseSafePropertyLine(lines[index])) return markdown
+  // L10：仅块标量（| 或 > 开头，多行值）不能只删键行——会留下孤立的
+  // 缩进行、破坏 frontmatter 结构。其余单行值（数组/映射/URL/注释等）
+  // 此前因 parseSafePropertyLine 返回 null 而拒删，属性无法从面板删除
+  if (/^[A-Za-z0-9_-]+[ \t]*:[ \t]*[|>]/.test(lines[index])) return markdown
 
   lines.splice(index, 1)
   const hasYamlContent = lines.some((line) => {

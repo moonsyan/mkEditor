@@ -41,8 +41,9 @@ export const nodeAttrsPlugin = new Plugin({
         info.sliceBlocks.has('code_block') ||
         info.sliceBlocks.has('frontmatter') ||
         info.sliceBlocks.has('image') ||
-        (info.atBoundary &&
-          (info.blockAt === 'code_block' || info.blockAt === 'frontmatter' || info.blockAt === 'image'))
+        // blockAt 只可能是块节点类型；image 是行内节点（在段落内），
+        // 其增删已由 sliceBlocks 的 'image' 分支覆盖，此处不会命中
+        (info.atBoundary && (info.blockAt === 'code_block' || info.blockAt === 'frontmatter'))
       if (!needsRebuild) return (prev as DecorationSet).map(tr.mapping, tr.doc)
       return buildNodeAttrDecos(tr.doc)
     },

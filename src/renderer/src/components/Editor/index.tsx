@@ -10,7 +10,13 @@ import {
   remarkPluginsCtx,
 } from '@milkdown/kit/core'
 import type { CmdKey } from '@milkdown/kit/core'
-import { Selection, TextSelection, Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import {
+  Selection,
+  TextSelection,
+  Plugin,
+  PluginKey,
+  type Transaction,
+} from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
@@ -31,7 +37,6 @@ import {
   insert,
   getHTML,
   getMarkdown,
-  forceUpdate,
   callCommand,
   $prose,
 } from '@milkdown/kit/utils'
@@ -80,7 +85,7 @@ import {
   type TablePanelState,
 } from './EditorOverlays'
 import { createSearchController } from './searchController'
-import { useImageInsertion, type EditorImageHints } from './useImageInsertion'
+import { useImageInsertion, MAX_IMAGE_SIZE, type EditorImageHints } from './useImageInsertion'
 
 /* ==================== 组件 ==================== */
 
@@ -422,7 +427,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use($prose(() => searchPlugin))
         // M11：剪贴板同时带 <img> 与图片文件（网页"复制图片"）时，
         // PM 原生 handlePaste 会解析 HTML 先插一张图，React 侧再保存文件插一张。
-        // 有图片文件时返回 true 消费粘贴，交给 React 侧唯一插入
+        // 有图片文件时返回 true 消费粘贴，交给 React 侧唯一插入。
+        // M4：仅当 React 侧确实能插入图片时才消费——无 desktopAPI 或全部图片
+        // 超限时放行 PM 默认粘贴，让剪贴板里的文字/HTML 正常插入
         .use(
           $prose(() => {
             const key = new PluginKey('block-pm-image-paste')
@@ -432,10 +439,13 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
                 handlePaste: (_view, event) => {
                   const dt = event.clipboardData
                   if (!dt) return false
-                  const hasImageFile = Array.from(dt.items).some(
-                    (item) => item.kind === 'file' && item.type.startsWith('image/'),
-                  )
-                  return hasImageFile
+                  if (!window.desktopAPI) return false
+                  const files = Array.from(dt.files)
+                  for (let i = 0; i < files.length; i++) {
+                    const f = files[i]
+                    if (f.type.startsWith('image/') && f.size <= MAX_IMAGE_SIZE) return true
+                  }
+                  return false
                 },
               },
             })
@@ -463,8 +473,18 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use(
           $prose(() => {
             const key = new PluginKey('cursor-report')
+            // L6：最近一次事务（state.apply 在 view.update 之前执行）。
+            // update 只拿到新旧 state、拿不到 tr，事务范围判定只能经此中转
+            let lastTr: Transaction | null = null
             return new Plugin({
               key,
+              state: {
+                init: () => null,
+                apply(tr) {
+                  lastTr = tr
+                  return null
+                },
+              },
               view: () => {
                 let raf = 0
                 /**
@@ -578,6 +598,29 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
                 }
                 return {
                   update: (view, prevState) => {
+                    // L6：光标块上方文档变化（搜索 replaceAll、wiki 自动转换、
+                    // 属性面板保存等会改上方行数与标题）时，选区未动也能经
+                    // blockStart 判缓存命中而沿用旧值，状态栏行号/所属标题过期。
+                    // 事务起点在光标块之前即作废缓存并调度重算；起点在本块内/之后
+                    // 不影响上方内容，保持 O(块) 快速路径
+                    if (lastTr && lastTr.docChanged && blockCache) {
+                      let changedAbove = false
+                      for (let i = 0; i < lastTr.steps.length && !changedAbove; i++) {
+                        const step = lastTr.steps[i] as { from?: number } | undefined
+                        if (typeof step?.from === 'number' && step.from < blockCache.blockStart) {
+                          changedAbove = true
+                        }
+                      }
+                      if (changedAbove) {
+                        blockCache = null
+                        if (!raf) {
+                          raf = requestAnimationFrame(() => {
+                            raf = 0
+                            report(view)
+                          })
+                        }
+                      }
+                    }
                     if (prevState.selection.eq(view.state.selection)) return
                     // 已有调度则跳过，回调时读最新 state
                     if (raf) return

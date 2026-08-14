@@ -123,6 +123,14 @@ export const footnoteRefInputRule = $inputRule((ctx) => {
     const type = schema.nodes.footnote_ref
     if (!type) return null
     const label = match[1]
+    // M3：`[^1]: 定义` 键入时，ref 规则在 `]` 落地的瞬间抢先触发，def 规则
+    // （要求行首 `[^…]: ` 整体匹配）就永远等不到了——先得到上标引用 + 字面
+    // `: 定义` 文本，保存重开还会被 micromark 解析成定义、内容静默变化。
+    // `]` 后紧跟 `:` 视为正在输入定义，本次不转换，等 `: ` 敲出后由 def
+    // 规则整段转成定义块；mid-paragraph 的 `[^x]:`（micromark 中也不是
+    // 合法引用/定义）保持字面文本，与加载路径行为一致
+    const after = state.doc.textBetween(end, end + 1)
+    if (after === ':') return null
     return state.tr.replaceRangeWith(
       start,
       end,

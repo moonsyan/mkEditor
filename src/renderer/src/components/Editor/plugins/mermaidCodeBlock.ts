@@ -320,13 +320,31 @@ export const mermaidPreviewPlugin = new Plugin({
           blocks: mapBlocks(previousState.blocks, tr),
         }
       }
-      // M13：段落内打字不触碰代码块，直接映射复用，避免每次按键全文档扫描
+      // M13：段落内打字不触碰代码块，直接映射复用，避免每次按键全文档扫描。
+      // 但映射对“删除起点恰为代码块起点”的 ReplaceStep 会误报存活：
+      // StepMap.mapResult(pos, -1) 在 pos == 删除起点时不置 deleted（Ctrl+A
+      // 后输入、选中块起点删除都会命中），陈旧块/幽灵预览残留到新内容上。
+      // 快速路径下对每个映射后的块做 nodeAt 校验（每次按键仅数次 O(1) 查找），
+      // 校验失败即按新 doc 重建并丢弃陈旧块
       const info = analyzeDecorationChange(tr)
       if (info.blockAt !== 'code_block' && !info.sliceBlocks.has('code_block')) {
-        return {
-          decorations: previousState.decorations.map(tr.mapping, tr.doc),
-          blocks: mapBlocks(previousState.blocks, tr),
+        const mappedBlocks = mapBlocks(previousState.blocks, tr)
+        let stale = false
+        for (let i = 0; i < mappedBlocks.length; i++) {
+          const node = state.doc.nodeAt(mappedBlocks[i].pos)
+          if (!node || node.type.name !== 'code_block' || !isMermaidLanguage(node.attrs.language)) {
+            stale = true
+            break
+          }
         }
+        if (!stale) {
+          return {
+            decorations: previousState.decorations.map(tr.mapping, tr.doc),
+            blocks: mappedBlocks,
+          }
+        }
+        const blocks = getMermaidBlocks(state.doc)
+        return { decorations: buildMermaidDecorations(state.doc, blocks), blocks }
       }
       const blocks = getMermaidBlocks(state.doc)
       const mappedBlocks = mapBlocks(previousState.blocks, tr)

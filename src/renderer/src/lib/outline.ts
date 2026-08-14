@@ -41,12 +41,17 @@ export const parseOutline = (content: string): OutlineNode[] => {
       if (/^---\s*$/.test(line)) inFrontmatter = false
       continue
     }
-    if (/^\s*```/.test(line)) {
+    // L9：围栏行可带 0-3 空格缩进（CommonMark）且可嵌在块引用内
+    //（> ```），此前只认纯 ``` 开头——引用块里的代码围栏开闭都漏掉，
+    // 其内部 `> # 伪标题` 被当成引用标题进入大纲
+    if (/^(?:\s{0,3})(?:>\s*)*(?:```+|~~~+)/.test(line)) {
       inFence = !inFence
       continue
     }
     if (inFence) continue
-    const match = line.match(/^\s*(?:>\s*)*(#{1,4})\s+(.+)$/)
+    // L9：标题前最多允许 3 个空格缩进——4 空格缩进的代码块里的
+    // `    # 伪标题` 是缩进代码不是标题（CommonMark 同样限制 3 空格）
+    const match = line.match(/^\s{0,3}(?:>\s*)*(#{1,4})\s+(.+)$/)
     if (match) headings.push({ level: match[1].length, text: match[2] })
   }
   return buildOutlineTree(headings)

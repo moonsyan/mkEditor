@@ -15,7 +15,8 @@ interface UseImageInsertionOptions {
   notify: (message: string) => void
 }
 
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+/** 单张图片大小上限（与主进程一致） */
+export const MAX_IMAGE_SIZE = 20 * 1024 * 1024
 
 const readAsDataUrl = (file: File): Promise<string | null> =>
   new Promise((resolve) => {
@@ -93,13 +94,33 @@ export function useImageInsertion({
 
   const handlePaste = useCallback(
     (event: React.ClipboardEvent) => {
-      const items = Array.from(event.clipboardData?.items ?? [])
-      const file = items.find((item) => item.type.startsWith('image/'))?.getAsFile()
-      if (!file) return
+      const dt = event.clipboardData
+      // M4：一次性插入剪贴板中的全部图片（此前只取第一张，多图复制其余丢失）
+      const files = Array.from(dt?.files ?? []).filter((file) =>
+        file.type.startsWith('image/'),
+      )
+      if (files.length === 0) return
       event.preventDefault()
-      insertImageFile(file)
+      // M4：PM 消费了图片粘贴后，网页复制的"图片+文字"里的正文会一起被吞掉。
+      // 消费前先把 text/html 的纯文本提取出来插入；
+      // 纯图片复制（html 只有 <img> 标签）提取结果为空，自然跳过
+      const html = dt?.getData('text/html') ?? ''
+      if (html.trim()) {
+        const text = html
+          .replace(/<[^>]*>/g, '')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/&lt;/gi, '<')
+          .replace(/&gt;/gi, '>')
+          .replace(/&quot;/gi, '"')
+          .replace(/&#39;/gi, "'")
+          .replace(/\s+/g, ' ')
+          .trim()
+        if (text) insertMarkdown(text)
+      }
+      files.forEach(insertImageFile)
     },
-    [insertImageFile],
+    [insertImageFile, insertMarkdown],
   )
 
   const handleDrop = useCallback(

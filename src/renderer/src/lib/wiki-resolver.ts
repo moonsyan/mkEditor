@@ -34,27 +34,68 @@ export function collectMdFiles(tree: FolderTreeNode[]): string[] {
   return result
 }
 
-/** 在工作区中按名称查找文件（大小写不敏感） */
+/**
+ * 规范化路径中的 ./ 与 ../ 段（纯字符串处理，不触文件系统）。
+ * 保留前导 /（POSIX 绝对）与盘符（D:/），`..` 越出根时被忽略
+ */
+function normalizePathSegments(p: string): string {
+  const isAbs = p.startsWith('/')
+  const out: string[] = []
+  const segs = p.split('/')
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i]
+    if (s === '' || s === '.') continue
+    if (s === '..') {
+      if (out.length > 0) out.pop()
+      continue
+    }
+    out.push(s)
+  }
+  return (isAbs ? '/' : '') + out.join('/')
+}
+
+/**
+ * 在工作区中按名称查找文件（大小写不敏感）。
+ * L8：多个同名文件并存时按与 currentDir 的目录距离排序（同目录 > 父目录 > 其它），
+ * 而不是按树遍历顺序"先到先得"——两个目录各有一个同名 .md 时可能打开错误文件
+ */
 export function findFileByName(
   tree: FolderTreeNode[],
   name: string,
+  currentDir?: string,
 ): string | null {
   const targetName = name.endsWith('.md') ? name : `${name}.md`
   const lower = targetName.toLowerCase()
-  const walk = (nodes: FolderTreeNode[]): string | null => {
+  const matches: string[] = []
+  const walk = (nodes: FolderTreeNode[]) => {
     for (const node of nodes) {
       if (node.children) {
-        const found = walk(node.children)
-        if (found) return found
-      } else {
-        if (node.name.toLowerCase() === lower) {
-          return node.path
-        }
+        walk(node.children)
+      } else if (node.name.toLowerCase() === lower) {
+        matches.push(node.path)
       }
     }
-    return null
   }
-  return walk(tree)
+  walk(tree)
+  if (matches.length === 0) return null
+  if (matches.length === 1 || !currentDir) return matches[0]
+  // 距离 = 与当前文件目录公共前缀之外的目录段数；同距离保持树顺序（稳定排序）
+  const base = currentDir.replace(/\\/g, '/')
+  const depth = (p: string): number => {
+    const segs = p.replace(/\\/g, '/').split('/').filter(Boolean)
+    const baseSegs = base.split('/').filter(Boolean)
+    let common = 0
+    while (
+      common < segs.length &&
+      common < baseSegs.length &&
+      segs[common] === baseSegs[common]
+    ) {
+      common++
+    }
+    return segs.length - common
+  }
+  matches.sort((a, b) => depth(a) - depth(b))
+  return matches[0]
 }
 
 /**
@@ -74,21 +115,30 @@ export function resolveWikiTarget(
 
   const normalizedTarget = target.replace(/\\/g, '/')
 
-  // 1. 若以 / 开头，从工作区根目录拼接
+  // 1. Windows 绝对路径 target（[[D:/notes/a.md]]，跨工作区）：规范化后
+  //    在本工作区树中精确查找；不在本工作区内的直接判定未解析
+  if (/^[A-Za-z]:\//.test(normalizedTarget)) {
+    const abs = normalizePathSegments(normalizedTarget)
+    const withExt = abs.endsWith('.md') ? abs : `${abs}.md`
+    const found = findFileByPathInTree(tree, withExt) ?? findFileByPathInTree(tree, abs)
+    if (found) return { resolved: true, path: found }
+    return { resolved: false, path: '' }
+  }
+
+  // 2. 若以 / 开头，从工作区根目录拼接（../ 与 ./ 段规范化）
   if (normalizedTarget.startsWith('/')) {
     const rel = normalizedTarget.slice(1)
-    const withExt = rel.endsWith('.md') ? rel : `${rel}.md`
-    const abs = `${workspacePath.replace(/\\/g, '/')}/${withExt}`
-    const found = findFileByPathInTree(tree, abs)
+    const abs = normalizePathSegments(`${workspacePath.replace(/\\/g, '/')}/${rel}`)
+    const withExt = abs.endsWith('.md') ? abs : `${abs}.md`
+    const found = findFileByPathInTree(tree, withExt)
     if (found) return { resolved: true, path: found }
     // 尝试不加扩展名（允许指向非 .md 文件）
-    const absNoExt = `${workspacePath.replace(/\\/g, '/')}/${rel}`
-    const foundNoExt = findFileByPathInTree(tree, absNoExt)
+    const foundNoExt = findFileByPathInTree(tree, abs)
     if (foundNoExt) return { resolved: true, path: foundNoExt }
     return { resolved: false, path: '' }
   }
 
-  // 2. 在当前文件目录及上级目录中查找
+  // 3. 在当前文件目录及上级目录中查找
   const searchDirs: string[] = []
   if (currentFilePath) {
     const normalized = currentFilePath.replace(/\\/g, '/')
@@ -108,25 +158,31 @@ export function resolveWikiTarget(
   for (const dir of searchDirs) {
     // 精确 target（已有扩展名）
     if (normalizedTarget.includes('.')) {
-      const candidate = `${dir}/${normalizedTarget}`
+      // L8：../ 与 ./ 段规范化——此前 `${dir}/../x` 的 `..` 是字面量，
+      // 树内路径不含 `..` 段，[[../x]] 永远匹配不上
+      const candidate = normalizePathSegments(`${dir}/${normalizedTarget}`)
       const found = findFileByPathInTree(tree, candidate)
       if (found) return { resolved: true, path: found }
     } else {
       // target 不含扩展名
       // 先尝试作为目录下的 index.md
-      const indexPath = `${dir}/${normalizedTarget}/index.md`
+      const indexPath = normalizePathSegments(`${dir}/${normalizedTarget}/index.md`)
       const indexFound = findFileByPathInTree(tree, indexPath)
       if (indexFound) return { resolved: true, path: indexFound }
 
       // 再尝试 target.md
-      const mdPath = `${dir}/${normalizedTarget}.md`
+      const mdPath = normalizePathSegments(`${dir}/${normalizedTarget}.md`)
       const mdFound = findFileByPathInTree(tree, mdPath)
       if (mdFound) return { resolved: true, path: mdFound }
     }
   }
 
-  // 3. 全树逐文件模糊匹配（大小写不敏感的文件名匹配）
-  const nameMatch = findFileByName(tree, normalizedTarget)
+  // 4. 全树逐文件模糊匹配（大小写不敏感的文件名匹配；
+  //    L8：同名文件多个时返回距离当前文件目录最近的）
+  const currentDir = currentFilePath
+    ? currentFilePath.replace(/\\/g, '/').replace(/[^/]+$/, '')
+    : undefined
+  const nameMatch = findFileByName(tree, normalizedTarget, currentDir)
   if (nameMatch) return { resolved: true, path: nameMatch }
 
   return { resolved: false, path: '' }

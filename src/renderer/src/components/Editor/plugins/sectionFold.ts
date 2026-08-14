@@ -73,45 +73,70 @@ function buildFoldDecos(state: EditorState, collapsed: Set<number>): DecorationS
       })
     }
     // L14：widget 工厂与 destroy 回调同级，监听器引用需提升到循环作用域
-    // （基类 Event 自带 preventDefault/stopPropagation，Handler 只需 EventListener 签名）
-    let onMousedown: EventListener | null = null
+    // （基类 Event 自带 preventDefault/stopPropagation，Handler 只需 EventListener 签名）。
+    // M2：不再给 widget 加 key——PM 按 key 复用 DOM 且不重跑工厂，重建后
+    // 箭头方向/点击闭包全成了旧快照。无 key 时每次 buildFoldDecos（折叠切换、
+    // 标题增删、文档切换）都重建 DOM 与监听器，方向永远正确；
+    // 经 DecorationSet.map 复用 DOM 的路径（段落内打字）由 handler 实时
+    // getPos + 读最新插件状态兜底
     decos.push(
-      Decoration.widget(
-        h.start,
-        (view: EditorView) => {
-          const el = document.createElement('span')
-          const isCollapsed = collapsed.has(h.start)
-          el.className = 'fold-toggle' + (isCollapsed ? ' collapsed' : '')
-          el.textContent = isCollapsed ? '▸' : '▾'
-          onMousedown = (e) => {
-            e.preventDefault()
-            // L14：replaceAll flush / 编辑器销毁后 widget 可能持有失效视图，
-            // 直接 dispatch 会抛错；已销毁则忽略本次点击
-            if (view.isDestroyed) return
-            let tr = view.state.tr
-            if (!isCollapsed) {
-              // M12：折叠时若光标在将被隐藏的区块内，把选区移到标题文本末尾，
-              // 否则光标落进 display:none 的内容里，后续打字全是盲改
-              const sel = view.state.selection
-              if (h.end > h.nodeEnd && sel.from >= h.nodeEnd && sel.from < h.end) {
-                tr = tr.setSelection(TextSelection.create(tr.doc, h.nodeEnd - 1))
+      (() => {
+        let removeListener: (() => void) | null = null
+        return Decoration.widget(
+          h.start,
+          (view: EditorView, getPos: () => number | undefined) => {
+            const el = document.createElement('span')
+            const isCollapsed = collapsed.has(h.start)
+            el.className = 'fold-toggle' + (isCollapsed ? ' collapsed' : '')
+            el.textContent = isCollapsed ? '▸' : '▾'
+            const onMousedown: EventListener = (e) => {
+              e.preventDefault()
+              // L14：replaceAll flush / 编辑器销毁后 widget 可能持有失效视图，
+              // 直接 dispatch 会抛错；已销毁则忽略本次点击
+              if (view.isDestroyed) return
+              // M2：DOM 经映射复用后，闭包里的 h.start 是旧坐标、isCollapsed 是
+              // 旧状态。点击时实时取当前位置与最新折叠状态，映射后的箭头才能
+              // 正确折叠/展开，并自修正因复用而过期的箭头方向
+              const pos = getPos()
+              if (typeof pos !== 'number') return
+              const pluginState = sectionFoldKey.getState(view.state) as
+                | { collapsed: Set<number> }
+                | undefined
+              const isNowCollapsed = pluginState?.collapsed.has(pos) ?? false
+              el.classList.toggle('collapsed', !isNowCollapsed)
+              el.textContent = isNowCollapsed ? '▸' : '▾'
+              let tr = view.state.tr
+              if (!isNowCollapsed) {
+                // M12：折叠时若光标在将被隐藏的区块内，把选区移到标题文本末尾，
+                // 否则光标落进 display:none 的内容里，后续打字全是盲改
+                const sel = view.state.selection
+                const ranges = computeFoldRanges(view.state.doc)
+                for (let i = 0; i < ranges.length; i++) {
+                  const r = ranges[i]
+                  if (r.start !== pos) continue
+                  if (r.end > r.nodeEnd && sel.from >= r.nodeEnd && sel.from < r.end) {
+                    tr = tr.setSelection(TextSelection.create(tr.doc, r.nodeEnd - 1))
+                  }
+                  break
+                }
               }
+              view.dispatch(tr.setMeta(sectionFoldKey, { toggle: pos }))
             }
-            view.dispatch(tr.setMeta(sectionFoldKey, { toggle: h.start }))
-          }
-          el.addEventListener('mousedown', onMousedown)
-          return el
-        },
-        {
-          side: -1,
-          ignoreSelection: true,
-          key: 'fold-' + h.start,
-          // L14：装饰重建时移除监听，避免闭包持有已失效的 view
-          destroy: (dom) => {
-            if (onMousedown) dom.removeEventListener('mousedown', onMousedown)
+            el.addEventListener('mousedown', onMousedown)
+            removeListener = () => el.removeEventListener('mousedown', onMousedown)
+            return el
           },
-        },
-      ),
+          {
+            side: -1,
+            ignoreSelection: true,
+            // L14：装饰重建时移除监听，避免闭包持有已失效的 view
+            destroy: () => {
+              removeListener?.()
+              removeListener = null
+            },
+          },
+        )
+      })(),
     )
   }
   return DecorationSet.create(doc, decos)
@@ -151,7 +176,36 @@ export const sectionFoldPlugin = new Plugin({
       // 避免每次按键全文档扫描重建（新增/删除标题时切片含 heading，才需重建）
       const info = analyzeDecorationChange(tr)
       if (!info.sliceBlocks.has('heading')) {
-        return { collapsed, decos: previous.decos.map(tr.mapping, tr.doc) }
+        // M2 补丁：删除起点恰为标题起点的纯删除/替换事务（选中标题起点向后
+        // 删除、Ctrl+A 后输入等）不会让 StepMap 把该标题的折叠箭头标记为删除
+        // （mapResult(pos, -1) 对 pos == 删除起点不置 deleted），映射后箭头
+        // 悬在非标题位置成为幽灵。逐个检查各步插入点：该处若存在 widget 装饰
+        // 但新 doc 上不是标题，即按新 doc 重建丢弃陈旧箭头。
+        // 常规打字/删字的插入点要么没有折叠箭头、要么仍在标题上，不重建
+        const mappedDecos = previous.decos.map(tr.mapping, tr.doc)
+        let ghost = false
+        for (let i = 0; i < tr.steps.length && !ghost; i++) {
+          const step = tr.steps[i] as { from?: number } | undefined
+          if (typeof step?.from !== 'number') continue
+          const ins = tr.mapping.map(step.from)
+          if (ins < 0 || ins > tr.doc.content.size) continue
+          const at = mappedDecos.find(ins, ins + 1)
+          let hasWidget = false
+          for (let j = 0; j < at.length; j++) {
+            // widget 是 prosemirror-view 的运行时 getter（WidgetType 实例），
+            // 类型声明未暴露，按结构访问
+            if ((at[j] as unknown as { widget: unknown }).widget) {
+              hasWidget = true
+              break
+            }
+          }
+          if (!hasWidget) continue
+          const node = tr.doc.nodeAt(ins)
+          if (!node || node.type.name !== 'heading') ghost = true
+        }
+        if (!ghost) {
+          return { collapsed, decos: mappedDecos }
+        }
       }
       return { collapsed, decos: buildFoldDecos(newState, collapsed) }
     },

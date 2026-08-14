@@ -57,8 +57,11 @@ export const wikiLinkSchema = $node('wiki_link', () => ({
 
 export const wikiLinkInputRule = $inputRule((ctx) => {
   const schema = ctx.get(schemaCtx)
+  // L12：target 用懒惰量词（与加载转换一致）——`[[a|b|c]]` 应解析为
+  // target='a'、alias='b|c'；贪婪量词会把整个 'a|b|c' 当作 target，
+  // 键入与加载两种路径解析结果不一致、点击跳转目标也不同
   return new InputRule(
-    /\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]$/,
+    /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]$/,
     (state, match, start, end) => {
       const type = schema.nodes.wiki_link
       if (!type) return null
@@ -96,13 +99,14 @@ function convertWikiText(view: EditorView) {
   const type = state.schema.nodes.wiki_link
   if (!type) return
 
-  const tr = state.tr
-  let found = false
+  // L5：先全文档扫描收集全部命中，再单事务内逆序替换。
+  // 此前每个链接一次 dispatch + 一次全文档扫描 + setTimeout(0) 链，
+  // 数百 [[...]] 的文档加载时每个事务都触发全部插件 apply 与 prism 重高亮，
+  // 卡顿数秒且与用户输入交错；逆序替换（先改靠后的位置）保证坐标不漂移
+  const hits: { start: number; end: number; target: string; alias: string }[] = []
   const RE = /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]/g
 
   state.doc.descendants((node, pos) => {
-    if (found) return false // 事务已有一个替换，不再继续避免位置漂移
-
     // 只在文本节点中查找（跳过代码块和 frontmatter）
     if (!node.isText) return
     // C-6：行内代码（code mark）内的 [[...]] 是字面文本，转换会把 wiki_link
@@ -122,25 +126,29 @@ function convertWikiText(view: EditorView) {
 
     const text = node.text ?? ''
     RE.lastIndex = 0
-    const m = RE.exec(text)
-    if (m) {
+    let m: RegExpExecArray | null
+    while ((m = RE.exec(text))) {
       const target = m[1]?.trim() ?? ''
-      const alias = (m[2] ?? '').trim()
-      const start = pos + m.index
-      const end = start + m[0].length
-      tr.replaceRangeWith(start, end, type.create({ target, alias }))
-      found = true
+      if (!target) continue
+      hits.push({
+        start: pos + m.index,
+        end: pos + m.index + m[0].length,
+        target,
+        alias: (m[2] ?? '').trim(),
+      })
     }
   })
 
-  if (found) {
-    // 自动转换不是用户操作，不进 undo 历史
-    // （否则多次 Ctrl+Z 会把 wiki 链接还原为文本，破坏用户输入记录）
-    tr.setMeta('addToHistory', false)
-    dispatch(tr)
-    // 继续扫描，使用 setTimeout 批量转换
-    setTimeout(() => convertWikiText(view), 0)
+  if (hits.length === 0) return
+  const tr = state.tr
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i]
+    tr.replaceRangeWith(h.start, h.end, type.create({ target: h.target, alias: h.alias }))
   }
+  // 自动转换不是用户操作，不进 undo 历史
+  // （否则多次 Ctrl+Z 会把 wiki 链接还原为文本，破坏用户输入记录）
+  tr.setMeta('addToHistory', false)
+  dispatch(tr)
 }
 
 export const wikiTextConvertPlugin = $prose(() => {
