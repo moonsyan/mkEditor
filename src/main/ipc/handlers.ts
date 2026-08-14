@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
-import { chmod, readFile, writeFile, stat, readdir, mkdir, rename, unlink, realpath } from 'fs/promises'
+import { chmod, readFile, writeFile, stat, lstat, readdir, mkdir, rename, unlink, realpath } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { join, dirname, basename, sep, extname } from 'path'
 import { execFile } from 'child_process'
@@ -192,16 +192,28 @@ async function writeFileAtomically(
   content: string | Uint8Array,
   mode?: number,
 ): Promise<void> {
+  // L7：符号链接保存写穿——rename 替换的是链接本身，真实目标收不到新内容。
+  // 检测到链接时解析真实路径，原子替换真实目标，链接保持不变。
+  let target = filePath
+  try {
+    const linkStat = await lstat(filePath)
+    if (linkStat.isSymbolicLink()) {
+      const real = await realpath(filePath).catch(() => null)
+      if (real) target = real
+    }
+  } catch {
+    /* 文件不存在则按普通文件处理 */
+  }
   const tempPath = join(
-    dirname(filePath),
-    `.${basename(filePath)}.${process.pid}-${Date.now()}-${Math.random()}.tmp`,
+    dirname(target),
+    `.${basename(target)}.${process.pid}-${Date.now()}-${Math.random()}.tmp`,
   )
   try {
     await writeFile(tempPath, content)
     if (mode !== undefined && process.platform !== 'win32') {
       await chmod(tempPath, mode & 0o777).catch(() => {})
     }
-    await rename(tempPath, filePath)
+    await rename(tempPath, target)
   } catch (err) {
     await unlink(tempPath).catch(() => {})
     throw err
