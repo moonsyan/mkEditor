@@ -60,6 +60,11 @@ interface SidebarProps {
   activeTab?: 'files' | 'outline'
   /** 标签页切换回调 */
   onActiveTabChange?: (tab: 'files' | 'outline') => void
+  /**
+   * L16：折叠时不卸载组件（保留滚动位置/重命名状态），只缩到宽度 0。
+   * 折叠期间用 inert 阻止 Tab 聚焦被裁切的内容。
+   */
+  collapsed?: boolean
 }
 
 /** 统一的树节点模型（演示树与工作区树归一化后渲染） */
@@ -120,6 +125,7 @@ export function Sidebar({
   onCollapsedKeysChange,
   activeTab: controlledTab,
   onActiveTabChange,
+  collapsed = false,
 }: SidebarProps): JSX.Element {
   const deferredContent = useDeferredValue(content)
   const [localActiveTab, setLocalActiveTab] = useState<'files' | 'outline'>('files')
@@ -136,6 +142,16 @@ export function Sidebar({
   // 文件树拖拽移动（U5）：正在拖动的节点与当前悬停的投放目标
   const [dragNode, setDragNode] = useState<{ path: string; kind: 'file' | 'folder' } | null>(null)
   const [dropKey, setDropKey] = useState<string | null>(null)
+
+  // L16：折叠时不卸载组件，只把宽度缩到 0（保留滚动位置/重命名状态）。
+  // inert 阻止 Tab 聚焦到被裁切的内容（React 18 不识别 inert prop，用 ref 设置）。
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = sidebarRef.current
+    if (!el) return
+    if (collapsed) el.setAttribute('inert', '')
+    else el.removeAttribute('inert')
+  }, [collapsed])
 
   /** 判断当前拖动的节点能否放入目标文件夹 */
   const canDropInto = (target: UiNode): boolean => {
@@ -496,7 +512,11 @@ export function Sidebar({
   }
 
   return (
-    <div className="sidebar">
+    <div
+      ref={sidebarRef}
+      className={`sidebar ${collapsed ? 'collapsed' : ''}`}
+      aria-hidden={collapsed}
+    >
       {/* Tab 切换 */}
       <div className="sidebar-tabs" role="tablist" aria-label="侧栏视图">
         <button

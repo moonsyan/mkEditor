@@ -2669,11 +2669,10 @@ img{max-width:100%}
         ref={editorAreaRef}
         style={{ '--sidebar-w': `${sidebarWidth}px` } as CSSProperties}
       >
-        {sidebarCollapsed ? (
-          <div className="sidebar collapsed" />
-        ) : (
-          <Sidebar
-            demoTree={DEMO_TREE}
+        {/* L16：侧栏始终挂载，折叠只改宽度（保留滚动位置/重命名状态） */}
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          demoTree={DEMO_TREE}
             demoFileNames={demoFileNames}
             workspace={workspace}
             openFiles={openFiles}
@@ -2696,7 +2695,6 @@ img{max-width:100%}
             activeTab={sidebarActiveTab}
             onActiveTabChange={setSidebarActiveTab}
           />
-        )}
         <button
           type="button"
           className={`sidebar-toggle ${sidebarCollapsed ? 'flipped' : ''}`}
