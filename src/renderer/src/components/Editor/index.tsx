@@ -622,7 +622,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         lastPreRef.current = null
         return
       }
-      if (pre.classList.contains('mermaid-source')) {
+      // L13：mermaid 源码块有自己的"编辑源码"工具栏，不再叠加通用代码面板；
+      // 装饰类名是 mermaid-source-block（此前写 mermaid-source，守卫永不生效）
+      if (pre.classList.contains('mermaid-source-block')) {
         setCodePanel(null)
         setTablePanel(null)
         return
