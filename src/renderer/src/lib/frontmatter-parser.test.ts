@@ -26,4 +26,17 @@ describe('frontmatter 属性编辑', () => {
 
     expect(deleteFrontmatterProperty(markdown, 'title')).toBe('正文')
   })
+
+  it('L17:删除最后属性时连 frontmatter 后的分隔空行一起去掉', () => {
+    // rest 为 "\n\nbody"，只去一个 \n 会残留 "\nbody"
+    const withLf = '---\ntitle: A\n---\n\n# 标题'
+    expect(deleteFrontmatterProperty(withLf, 'title')).toBe('# 标题')
+
+    const withCrlf = '---\r\ntitle: A\r\n---\r\n\r\n# 标题'
+    expect(deleteFrontmatterProperty(withCrlf, 'title')).toBe('# 标题')
+
+    // 作者多留一个空行（两个空行）时保留一个
+    const extraGap = '---\ntitle: A\n---\n\n\n# 标题'
+    expect(deleteFrontmatterProperty(extraGap, 'title')).toBe('\n# 标题')
+  })
 })

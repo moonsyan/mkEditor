@@ -165,6 +165,21 @@ export function extractFrontmatterRaw(
 }
 
 /**
+ * L17：移除整个 frontmatter 后处理紧邻的分隔空行——
+ * `---\n...\n---\n\nbody` 的 rest 是 `\n\nbody`，只去一个 \n 会残留 `\nbody`。
+ * 最多去掉两个换行（frontmatter 与正文之间的一行空行），正文前不留空行；
+ * 作者多留的空行保留一个。
+ */
+const stripFrontmatterGap = (rest: string): string => {
+  let out = rest
+  if (out.startsWith('\r\n')) out = out.slice(2)
+  else if (out.startsWith('\n')) out = out.slice(1)
+  if (out.startsWith('\r\n')) out = out.slice(2)
+  else if (out.startsWith('\n')) out = out.slice(1)
+  return out
+}
+
+/**
  * 替换 Markdown 中的 frontmatter 为新的 YAML 文本。
  */
 export function replaceFrontmatter(
@@ -182,12 +197,9 @@ export function replaceFrontmatter(
     return replacement + '\n\n' + markdown
   }
 
-  // 空属性：移除 frontmatter
+  // 空属性：移除 frontmatter（连分隔空行一起，见 stripFrontmatterGap）
   if (existing) {
-    const rest = markdown.slice(existing.end)
-    if (rest.startsWith('\r\n')) return rest.slice(2)
-    if (rest.startsWith('\n')) return rest.slice(1)
-    return rest
+    return stripFrontmatterGap(markdown.slice(existing.end))
   }
 
   return markdown
@@ -245,10 +257,8 @@ export function deleteFrontmatterProperty(markdown: string, key: string): string
     return trimmed.length > 0 && !trimmed.startsWith('#')
   })
   if (!hasYamlContent) {
-    const rest = markdown.slice(existing.end)
-    if (rest.startsWith('\r\n')) return rest.slice(2)
-    if (rest.startsWith('\n')) return rest.slice(1)
-    return rest
+    // L17：连分隔空行一起去掉（见 stripFrontmatterGap）
+    return stripFrontmatterGap(markdown.slice(existing.end))
   }
 
   const replacement = `---${lineBreak}${lines.join(lineBreak)}${lineBreak}---`
