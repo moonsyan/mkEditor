@@ -2856,11 +2856,12 @@ img{max-width:100%}
                     show={showFrontmatterProps}
                     onToggle={() => setShowFrontmatterProps((v) => !v)}
                     onUpdateProperty={(key, value) => {
-                      const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                      // A-M1：面板基于实时编辑器内容计算，否则防抖窗口内刚打的字被回退
+                      const newMarkdown = setFrontmatterProperty(liveContentOf(activeFileId), key, value)
                       replaceEditorContent(activeFileId, newMarkdown, 'update')
                     }}
                     onDeleteProperty={(key) => {
-                      const newMarkdown = deleteFrontmatterProperty(activeContent, key)
+                      const newMarkdown = deleteFrontmatterProperty(liveContentOf(activeFileId), key)
                       replaceEditorContent(activeFileId, newMarkdown, 'update')
                     }}
                     onAddProperty={(key, value) => {
@@ -2868,12 +2869,12 @@ img{max-width:100%}
                         setToast('属性名只能包含字母、数字、下划线和连字符')
                         return
                       }
-                      const extracted = extractFrontmatterRaw(activeContent)
+                      const extracted = extractFrontmatterRaw(liveContentOf(activeFileId))
                       if (extracted && getFrontmatterPropertyKeys(extracted.text).includes(key)) {
                         setToast(`属性“${key}”已存在；请编辑现有属性或正文 YAML`)
                         return
                       }
-                      const newMarkdown = setFrontmatterProperty(activeContent, key, value)
+                      const newMarkdown = setFrontmatterProperty(liveContentOf(activeFileId), key, value)
                       replaceEditorContent(activeFileId, newMarkdown, 'update')
                     }}
                   />
