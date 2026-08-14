@@ -10,6 +10,9 @@ const THEMES = [
   { id: 'dark', name: '墨夜', color: '#171614' },
   { id: 'ocean', name: '海雾', color: '#EFF4F9' },
   { id: 'rose', name: '玫砂', color: '#FBF5F3' },
+  { id: 'github', name: '星夜', color: '#0d1117' },
+  { id: 'atom', name: '原子', color: '#272B34' },
+  { id: 'typewriter', name: '纸墨', color: '#FCF5E4' },
 ]
 
 export function ThemeSwitcher({ currentTheme, onThemeChange }: ThemeSwitcherProps): JSX.Element {

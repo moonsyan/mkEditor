@@ -3,6 +3,9 @@ export const THEMES = [
   { id: 'dark', name: '墨夜', color: '#171614', desc: '深邃暗色' },
   { id: 'ocean', name: '海雾', color: '#EFF4F9', desc: '冷调蓝灰' },
   { id: 'rose', name: '玫砂', color: '#FBF5F3', desc: '温暖粉棕' },
+  { id: 'github', name: '星夜', color: '#0d1117', desc: '蓝调暗色（GitHub Dark）' },
+  { id: 'atom', name: '原子', color: '#272B34', desc: '靛蓝暗色（Atom）' },
+  { id: 'typewriter', name: '纸墨', color: '#FCF5E4', desc: '暖纸亮色（Typewriter）' },
 ]
 
 export const FONT_PRESETS: { label: string; value: number }[] = [

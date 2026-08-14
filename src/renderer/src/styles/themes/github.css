@@ -1,0 +1,23 @@
+/* ====== GitHub Theme (星夜) ====== */
+/* 配色参考 Obsidian GitHub Theme（GitHub Dark） */
+[data-theme="github"] {
+  --bg-app: #0d1117;
+  --bg-surface: #0d1117;
+  --bg-sidebar: #161b22;
+  --bg-hover: rgba(177,186,196,.12);
+  --bg-active: rgba(177,186,196,.2);
+  --bg-menu: #161b22;
+  --bg-code: #161b22;
+  --bg-quote: rgba(177,186,196,.05);
+  --text-1: #c9d1d9;
+  --text-2: #8b949e;
+  --text-3: #6e7681;
+  --text-4: #484f58;
+  --accent: #58a6ff;
+  --accent-h: #79c0ff;
+  --accent-bg: rgba(88,166,255,.12);
+  --border: #30363d;
+  --border-m: rgba(240,246,252,.14);
+  --shadow-m: 0 8px 32px rgba(0,0,0,.45);
+  --shadow-s: 0 1px 3px rgba(0,0,0,.3);
+}

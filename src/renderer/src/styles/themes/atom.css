@@ -1,0 +1,23 @@
+/* ====== Atom Theme (原子) ====== */
+/* 配色参考 Obsidian Atom 主题（Atom One Dark） */
+[data-theme="atom"] {
+  --bg-app: #20242b;
+  --bg-surface: #272b34;
+  --bg-sidebar: #20242b;
+  --bg-hover: rgba(76,121,205,.12);
+  --bg-active: rgba(76,121,205,.2);
+  --bg-menu: #20242b;
+  --bg-code: #20242b;
+  --bg-quote: #23272f;
+  --text-1: #dcddde;
+  --text-2: #8e8e90;
+  --text-3: #6b6f7a;
+  --text-4: #51555f;
+  --accent: #4c79cd;
+  --accent-h: #325fb3;
+  --accent-bg: rgba(76,121,205,.14);
+  --border: #424958;
+  --border-m: rgba(66,73,88,.55);
+  --shadow-m: 0 8px 32px rgba(0,0,0,.4);
+  --shadow-s: 0 1px 3px rgba(0,0,0,.25);
+}

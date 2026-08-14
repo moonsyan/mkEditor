@@ -84,6 +84,9 @@ const TITLEBAR_COLORS: Record<string, { bg: string; symbol: string }> = {
   dark: { bg: '#1A1918', symbol: '#A09B93' },
   ocean: { bg: '#E6ECF3', symbol: '#4A6070' },
   rose: { bg: '#F5EDED', symbol: '#6B4F4F' },
+  github: { bg: '#161B22', symbol: '#8B949E' },
+  atom: { bg: '#20242B', symbol: '#8E8E90' },
+  typewriter: { bg: '#E4DCC8', symbol: '#595959' },
 }
 
 /** 初始只打开「欢迎」一篇样例文档；其余样例文件留在左侧文件夹树中点击打开，

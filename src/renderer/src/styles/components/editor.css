@@ -492,30 +492,30 @@
   color: #b06060;
 }
 /* 深色主题提亮 */
-[data-theme='dark'] .milkdown pre code .token.string,
-[data-theme='dark'] .milkdown pre code .token.char,
-[data-theme='dark'] .milkdown pre code .token.attr-value,
-[data-theme='dark'] .milkdown pre code .token.inserted {
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.string,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.char,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.attr-value,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.inserted {
   color: #92c496;
 }
-[data-theme='dark'] .milkdown pre code .token.number,
-[data-theme='dark'] .milkdown pre code .token.boolean,
-[data-theme='dark'] .milkdown pre code .token.constant {
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.number,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.boolean,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.constant {
   color: #d3a575;
 }
-[data-theme='dark'] .milkdown pre code .token.function,
-[data-theme='dark'] .milkdown pre code .token.function-name {
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.function,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.function-name {
   color: #96a8d4;
 }
-[data-theme='dark'] .milkdown pre code .token.class-name,
-[data-theme='dark'] .milkdown pre code .token.type,
-[data-theme='dark'] .milkdown pre code .token.tag,
-[data-theme='dark'] .milkdown pre code .token.property {
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.class-name,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.type,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.tag,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.property {
   color: #cda583;
 }
-[data-theme='dark'] .milkdown pre code .token.attr-name,
-[data-theme='dark'] .milkdown pre code .token.variable,
-[data-theme='dark'] .milkdown pre code .token.parameter {
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.attr-name,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.variable,
+[data-theme='dark'], [data-theme='github'], [data-theme='atom'] .milkdown pre code .token.parameter {
   color: #bd9fc9;
 }
 
