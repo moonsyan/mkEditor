@@ -85,8 +85,10 @@ import { useImageInsertion, type EditorImageHints } from './useImageInsertion'
 
 /** 编辑器对外暴露的命令式接口 */
 export interface EditorHandle {
-  /** 整体替换文档内容（切换文件时使用） */
+  /** 整体替换文档内容（切换文件时使用，flush 重建、清空撤销历史） */
   replaceContent: (markdown: string) => void
+  /** 程序性更新内容（属性面板等）：事务替换保留撤销历史，恢复选区与滚动 */
+  updateContentPreservingHistory: (markdown: string) => void
   /** 获取当前编辑器状态对应的 Markdown；编辑器未就绪时返回 null */
   getMarkdown: () => string | null
   /** 在光标处插入 Markdown 片段 */
@@ -736,6 +738,25 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           convertWikiTextInDoc(view)
           // 清空折叠状态（兜底：replaceAll 解析失败时也把旧文档的折叠映射清除）
           view.dispatch(view.state.tr.setMeta(sectionFoldKey, { reset: true }))
+        },
+        /** 属性面板等程序性更新：事务替换保留撤销历史，并恢复选区与滚动位置 */
+        updateContentPreservingHistory: (markdown) => {
+          const ed = ready()
+          if (!ed) return
+          const view = ed.ctx.get(editorViewCtx)
+          const prevFrom = view.state.selection.from
+          const scrollParent = containerRef.current?.querySelector<HTMLElement>('.editor-scroll')
+          const prevScroll = scrollParent?.scrollTop ?? 0
+          // flush=false：dispatch 单条全文替换事务，undo/redo 历史保留（Ctrl+Z 可回退本次修改）
+          ed.action(replaceAll(markdown, false))
+          convertWikiTextInDoc(view)
+          // 恢复选区与滚动位置，避免光标跳回文档开头
+          const { state, dispatch } = view
+          const pos = Math.min(prevFrom, state.doc.content.size)
+          dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos))))
+          requestAnimationFrame(() => {
+            if (scrollParent) scrollParent.scrollTop = prevScroll
+          })
         },
         getMarkdown: () => {
           const ed = ready()

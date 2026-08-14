@@ -1035,7 +1035,13 @@ export default function App(): JSX.Element {
         setSavedMap((prev) => ({ ...prev, [fileId]: isSaved }))
         if (!isSaved) pinPreviewTab(fileId)
       }
-      editorRef.current.replaceContent(toEditorImages(content, dirOfFile(fileId)))
+      // update 模式（属性面板等程序性更新）：保留撤销历史并恢复光标；
+      // 其余模式（切换/打开文件）flush 重建，避免旧文档内容混入撤销栈
+      if (mode === 'update') {
+        editorRef.current.updateContentPreservingHistory(toEditorImages(content, dirOfFile(fileId)))
+      } else {
+        editorRef.current.replaceContent(toEditorImages(content, dirOfFile(fileId)))
+      }
     },
     [dirOfFile, pinPreviewTab],
   )
