@@ -45,7 +45,7 @@ import { lineNumKey, setLineNumbersEnabled, lineNumPlugin } from './plugins/code
 import { blockContextPlugin } from './plugins/blockContext'
 import { bracketMatchPlugin } from './plugins/bracketMatch'
 import { sectionFoldKey, sectionFoldPlugin } from './plugins/sectionFold'
-import { customCodeFenceRule } from './plugins/customCodeFence'
+import { customCodeFenceRule, customCodeFenceKeymap } from './plugins/customCodeFence'
 import {
   footnoteRemarkPlugin,
   footnoteRefSchema,
@@ -346,6 +346,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         })
         // frontmatter 内 Enter 行为（须先于 commonmark 预设注册才能抢先其 Enter 绑定）
         .use(frontmatterKeymap)
+        // 围栏 Enter 建代码块同样须先于 commonmark 的 Enter 绑定
+        .use(customCodeFenceKeymap)
         .use(commonmark)
         .use(gfm)
         .use(history)
@@ -363,9 +365,10 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         ])
         // YAML frontmatter 元数据块（对标 Typora）
         .use(frontmatterSchema)
+        // 围栏输入规则（空格建代码块；Enter 键位已在前方优先注册）
+        .use(customCodeFenceRule)
         // 表格列宽可视化拖拽（视图级，不写入 Markdown）
         .use($prose(() => tableColResizePlugin))
-        .use(customCodeFenceRule)
         // 搜索高亮插件
         .use($prose(() => searchPlugin))
         // M11：剪贴板同时带 <img> 与图片文件（网页"复制图片"）时，
