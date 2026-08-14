@@ -16,6 +16,7 @@ import {
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
 import { allowImageDirectory } from '../image-protocol'
+import { trustDirectory } from '../trusted-paths'
 import { setWebContentsUnsaved } from '../unsaved'
 
 const execFileAsync = promisify(execFile)
@@ -239,6 +240,10 @@ async function walkMarkdownTree(dir: string, depth: number): Promise<FolderTreeN
 }
 
 export function registerIpcHandlers(): void {
+  // 应用自有图片目录（未保存文档的粘贴图片存储处）始终授信；
+  // 它在每个新进程中由保存流程重建信任，此处显式登记避免图片管理面板 404。
+  trustDirectory(join(app.getPath('userData'), 'images'))
+
   // pandoc 可用性探测结果缓存（缓存 Promise 本身，避免首次探测期间的并发误报）
   let pandocCheck: Promise<boolean> | null = null
   const getImageHostStatus = async (): Promise<{
@@ -910,8 +915,10 @@ export function registerIpcHandlers(): void {
       if (scanned.has(dir)) continue
       scanned.add(dir)
       try {
+        // L2：不再对任意传入目录授信。图片目录都是工作区/文档目录或
+        // userData/images 的子路径，打开文档/工作区与保存图片时已授信，
+        // 信任根对子路径自动覆盖，此处无需（也不应）扩展授权。
         const entries = await readdir(dir, { withFileTypes: true })
-        allowImageDirectory(dir)
         for (const e of entries) {
           if (!e.isFile()) continue
           if (!/\.(png|jpe?g|gif|webp|bmp)$/i.test(e.name)) continue

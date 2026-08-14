@@ -2,15 +2,12 @@ import { net } from 'electron'
 import { realpath } from 'fs/promises'
 import { extname, isAbsolute, relative, resolve } from 'path'
 import { pathToFileURL } from 'url'
+import { getTrustedRoots, isPathTrusted, trustDirectory } from './trusted-paths'
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
-const allowedImageRoots = new Set<string>()
 
-/** 仅允许已由用户打开的文档或工作区目录作为本地图片来源。 */
-export function allowImageDirectory(directory: string): void {
-  if (!directory) return
-  allowedImageRoots.add(resolve(directory))
-}
+/** 仅允许已由用户打开的文档或工作区目录作为本地图片来源（信任根见 trusted-paths.ts）。 */
+export const allowImageDirectory = trustDirectory
 
 function isPathWithinRoot(filePath: string, rootPath: string): boolean {
   const pathFromRoot = relative(rootPath, filePath)
@@ -36,10 +33,12 @@ export async function fetchAllowedImage(requestUrl: string): Promise<Response> {
     }
     const resolvedPath = resolve(filePath)
     if (!IMAGE_EXTENSIONS.has(extname(resolvedPath).toLowerCase())) return notFound()
+    // L2：先做词汇级信任检查快速拒绝，再走 realpath 防符号链接逃逸
+    if (!isPathTrusted(resolvedPath)) return notFound()
 
     const realFilePath = await realpath(resolvedPath)
     const roots = await Promise.all(
-      Array.from(allowedImageRoots, async (root) => realpath(root).catch(() => null)),
+      getTrustedRoots().map(async (root) => realpath(root).catch(() => null)),
     )
     if (!roots.some((root) => root && isPathWithinRoot(realFilePath, root))) {
       return notFound()
