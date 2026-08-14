@@ -1374,7 +1374,12 @@ export default function App(): JSX.Element {
   const handleSaveAs = useCallback(async () => {
     if (!window.desktopAPI) return
     const oldId = activeFileId
-    const content = contents[oldId] ?? ''
+    // M1：与 handleSave 一致，从编辑器同步读取最新内容
+    const editorMd = editorRef.current?.isReady() ? editorRef.current.getMarkdown() : null
+    const content =
+      editorMd != null
+        ? toStoredImages(editorMd, dirOfFile(oldId))
+        : (contents[oldId] ?? '')
     const result = await window.desktopAPI.document.saveAs(content)
     if (!result.ok || !result.data) {
       if (result.error?.code !== 'CANCELLED') {
@@ -1472,8 +1477,19 @@ export default function App(): JSX.Element {
 
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.id === activeFileId)
-    const content = contents[activeFileId] ?? ''
+    // M1：Milkdown onChange 经过防抖，contents state 可能滞后最后几键。
+    // 保存时直接从编辑器同步读取最新内容（回写 mdimg 相对路径），避免丢失末次输入
+    const editorMd = editorRef.current?.isReady() ? editorRef.current.getMarkdown() : null
+    const content =
+      editorMd != null
+        ? toStoredImages(editorMd, dirOfFile(activeFileId))
+        : (contents[activeFileId] ?? '')
     if (!file) return
+    // 同步回填 state，保证后续 savedMap/INITIAL_OR_SAVED 比对基于最新内容
+    if (contentsRef.current[activeFileId] !== content) {
+      contentsRef.current = { ...contentsRef.current, [activeFileId]: content }
+      setContents((prev) => (prev[activeFileId] === content ? prev : { ...prev, [activeFileId]: content }))
+    }
 
     // 有磁盘路径：直接保存（带外部冲突检测）
     if (file.path && window.desktopAPI) {
@@ -1523,7 +1539,15 @@ export default function App(): JSX.Element {
     const failed: string[] = []
     const dirty = openFiles.filter((f) => savedMap[f.id] === false)
     for (const f of dirty) {
-      const content = contents[f.id] ?? ''
+      // M1：活动文件的编辑器内容可能尚未走到 state，关闭窗口前同步读取
+      let content = contents[f.id] ?? ''
+      if (f.id === activeFileIdRef.current && editorRef.current?.isReady()) {
+        const editorMd = editorRef.current.getMarkdown()
+        if (editorMd != null) content = toStoredImages(editorMd, dirOfFile(f.id))
+      }
+      if (contentsRef.current[f.id] !== content) {
+        contentsRef.current = { ...contentsRef.current, [f.id]: content }
+      }
       let ok = false
       if (f.path) {
         const res = await saveWithEncodingFallback(f.path, content, fileMtime[f.id], f.id)
