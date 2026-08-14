@@ -13,6 +13,13 @@ import { dirname, join } from 'path'
  */
 
 let cache: Record<string, unknown> | null = null
+/**
+ * M14：多窗口（多主进程）下，其他窗口写入的 settings.json 无法通知本进程。
+ * 读路径短 TTL 失效：缓存超过该时长后重新读盘，保证图床 token、主题等
+ * 配置变更能及时生效，又不至于每次 getSetting 都读盘。
+ */
+const CACHE_TTL_MS = 1500
+let cacheLoadedAt = 0
 
 export class SettingsStoreError extends Error {
   constructor(
@@ -156,8 +163,10 @@ async function readSettingsFile(): Promise<Record<string, unknown>> {
 }
 
 async function load(): Promise<Record<string, unknown>> {
-  if (cache) return cache
+  const now = Date.now()
+  if (cache && now - cacheLoadedAt < CACHE_TTL_MS) return cache
   cache = await readSettingsFile()
+  cacheLoadedAt = now
   return cache
 }
 
@@ -247,6 +256,7 @@ async function writeSettingUpdate(key: string, update: SettingUpdater): Promise<
   }
   // 仅在磁盘落盘成功后更新缓存，避免写失败时内存与文件状态不一致。
   cache = next
+  cacheLoadedAt = Date.now()
 }
 
 async function applySettingUpdate(key: string, update: SettingUpdater): Promise<void> {
