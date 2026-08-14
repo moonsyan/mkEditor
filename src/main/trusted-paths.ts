@@ -9,16 +9,42 @@ import { isAbsolute, relative, resolve } from 'path'
 
 const trustedRoots = new Map<string, true>()
 
-/** 信任根数量上限：超出时淘汰最早加入的（Map 保持插入顺序） */
+/** 可淘汰信任根数量上限：超出时淘汰最早加入的（Map 保持插入顺序） */
 const MAX_TRUSTED_ROOTS = 64
+/** 保底信任根（工作区、应用图片目录）：永不被容量淘汰 */
+const essentialRoots = new Set<string>()
 
-export function trustDirectory(directory: string): void {
+export interface TrustDirectoryOptions {
+  /**
+   * 保底根：只登记不淘汰。用于工作区与应用自有目录——
+   * 若这些根因"打开过 64+ 个其它目录"被最早淘汰，
+   * 工作区内的保存/搜索将开始返回 INVALID_PATH（B-M1）。
+   */
+  essential?: boolean
+}
+
+export function trustDirectory(
+  directory: string,
+  options?: TrustDirectoryOptions,
+): void {
   if (!directory) return
   const dir = resolve(directory)
+  if (options?.essential) {
+    trustedRoots.set(dir, true)
+    essentialRoots.add(dir)
+    return
+  }
   if (trustedRoots.has(dir)) return
   if (trustedRoots.size >= MAX_TRUSTED_ROOTS) {
-    const oldest = trustedRoots.keys().next().value
-    if (oldest !== undefined) trustedRoots.delete(oldest)
+    // 只淘汰可淘汰根：容量打满且全部为保底根时，宁可停止登记新根
+    const roots = Array.from(trustedRoots.keys())
+    let evicted = false
+    for (let i = 0; i < roots.length && !evicted; i++) {
+      if (!essentialRoots.has(roots[i])) {
+        trustedRoots.delete(roots[i])
+        evicted = true
+      }
+    }
   }
   trustedRoots.set(dir, true)
 }

@@ -20,7 +20,6 @@ export const CHANNELS = {
   FILE_LIST_IMAGES: 'file:list-images',
   FILE_DELETE_IMAGE: 'file:delete-image',
   FILE_SEARCH_WORKSPACE: 'file:search-workspace',
-  FILE_WATCH: 'file:watch',
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
   SETTINGS_UPSERT_DRAFT: 'settings:upsert-draft',

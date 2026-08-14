@@ -41,6 +41,22 @@ const searchLineCache = new Map<
 /** 最近读取/写入的文件状态（保存冲突检测用）：path → { mtimeMs, size }。
  *  主进程是唯一读写入口，读时建立、写后更新；mtime 或 size 与记录不符即为外部修改。 */
 const lastKnownFileState = new Map<string, { mtimeMs: number; size: number }>()
+/** 冲突检测状态条目上限：防止长会话里被改名/删除的旧路径无限累积 */
+const MAX_FILE_STATE_ENTRIES = 4096
+const rememberFileState = (
+  path: string,
+  state: { mtimeMs: number; size: number },
+): void => {
+  if (lastKnownFileState.has(path)) {
+    lastKnownFileState.set(path, state)
+    return
+  }
+  if (lastKnownFileState.size >= MAX_FILE_STATE_ENTRIES) {
+    const oldest = lastKnownFileState.keys().next().value
+    if (oldest !== undefined) lastKnownFileState.delete(oldest)
+  }
+  lastKnownFileState.set(path, state)
+}
 /** 缓存条目上限：超出时淘汰最早插入的条目（Map 保持插入顺序） */
 const SEARCH_CACHE_MAX = 1000
 /** 搜索行缓存总大小上限，防止大量中等大小 Markdown 长期占用主进程内存 */
@@ -295,7 +311,7 @@ async function walkMarkdownTree(
 export function registerIpcHandlers(): void {
   // 应用自有图片目录（未保存文档的粘贴图片存储处）始终授信；
   // 它在每个新进程中由保存流程重建信任，此处显式登记避免图片管理面板 404。
-  trustDirectory(join(app.getPath('userData'), 'images'))
+  trustDirectory(join(app.getPath('userData'), 'images'), { essential: true })
   // L8：会话恢复路径预授权——新进程的信任根初始为空，渲染端恢复会话时
   // FILE_READ/SEARCH 等必须能命中上次会话已打开的文档与工作区。
   // H1 修复：散落文档（可能经拖入打开）只恢复"图片读 + 文件级保存"，
@@ -313,7 +329,7 @@ export function registerIpcHandlers(): void {
       }
     }
     if (typeof session?.workspacePath === 'string' && session.workspacePath) {
-      trustDirectory(session.workspacePath)
+      trustDirectory(session.workspacePath, { essential: true })
     }
   })
 
@@ -364,7 +380,7 @@ export function registerIpcHandlers(): void {
       // 该文件本身另加入文件级保存白名单
       trustDirectory(dirname(filePath))
       trustFileForSave(filePath)
-      lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
+      rememberFileState(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
         data: {
@@ -416,8 +432,10 @@ export function registerIpcHandlers(): void {
       try {
         const budget: TreeBudget = { nodes: 0, truncated: false }
         const children = await walkMarkdownTree(folderPath, 0, budget)
-        // H1 修复：工作区目录授完整信任（树内文件需读/写/删/搜/图）
-        trustDirectory(folderPath)
+        // H1 修复：工作区目录授完整信任（树内文件需读/写/删/搜/图）。
+        // essential：工作区是本次会话的操作中心，不能因随后打开过 64+ 个
+        // 其它目录被容量淘汰而失效（B-M1）
+        trustDirectory(folderPath, { essential: true })
         return {
           ok: true,
           data: {
@@ -461,7 +479,7 @@ export function registerIpcHandlers(): void {
       // 该文件本身加入文件级保存白名单——不再因读取一个 .md 而获得目录写/删/搜权限
       allowImageDirectory(dirname(filePath))
       trustFileForSave(filePath)
-      lastKnownFileState.set(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
+      rememberFileState(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
       return {
         ok: true,
         data: {
@@ -495,6 +513,14 @@ export function registerIpcHandlers(): void {
         // 或为本应用读取过的 .md 精确文件（拖入/会话恢复，见 trusted-paths.ts）
         if (!ensureTrusted(args.path) && !isFileTrustedForSave(args.path)) {
           return { ok: false, error: { code: 'INVALID_PATH' } }
+        }
+        // L6：写入前校验体积，与打开上限保持一致——
+        // 渲染端异常（内存溢出回写、循环拼接）不能写出超限文件
+        if (Buffer.byteLength(args.content ?? '', 'utf-8') > MAX_DOCUMENT_FILE_SIZE) {
+          return {
+            ok: false,
+            error: { code: 'TOO_LARGE', message: 'Markdown 文件超过 20MB，无法保存' },
+          }
         }
         const pre = await stat(args.path).catch(() => null)
         if (!pre) {
@@ -535,7 +561,7 @@ export function registerIpcHandlers(): void {
           await writeFileAtomically(args.path, args.content, pre.mode)
         }
         const fileStat = await stat(args.path)
-        lastKnownFileState.set(args.path, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
+        rememberFileState(args.path, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
         return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -575,7 +601,7 @@ export function registerIpcHandlers(): void {
         try {
           const fileStat = await stat(result.filePath)
           modifiedTime = fileStat.mtimeMs
-          lastKnownFileState.set(result.filePath, {
+          rememberFileState(result.filePath, {
             mtimeMs: fileStat.mtimeMs,
             size: fileStat.size,
           })
@@ -716,9 +742,17 @@ export function registerIpcHandlers(): void {
     },
   )
 
-  // 新建窗口（fresh 模式：不恢复/不写入会话，避免多窗口互相覆盖）
+  // 新建窗口（fresh 模式：不恢复/不写入会话，避免多窗口互相覆盖）。
+  // L2：窗口数量上限——多窗口各自持有主进程 IPC/索引，数量失控会放大内存与文件句柄占用
+  const MAX_WINDOWS = 8
+  const windowCapacityOk = (): boolean =>
+    BrowserWindow.getAllWindows().length < MAX_WINDOWS
+
   ipcMain.handle(CHANNELS.WINDOW_NEW, () => {
     try {
+      if (!windowCapacityOk()) {
+        return { ok: false, error: { code: 'WINDOW_LIMIT' } }
+      }
       createWindow(true)
       return { ok: true }
     } catch {
@@ -731,6 +765,9 @@ export function registerIpcHandlers(): void {
     try {
       if (!filePath || typeof filePath !== 'string') {
         return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
+      if (!windowCapacityOk()) {
+        return { ok: false, error: { code: 'WINDOW_LIMIT' } }
       }
       // L8：新窗口打开的文件必须已由当前窗口/会话授权
       if (!ensureTrusted(filePath)) {
@@ -781,12 +818,14 @@ export function registerIpcHandlers(): void {
       await writeFile(tmpHtml, args.html, 'utf8')
       const printWin = new BrowserWindow({
         show: false,
-        webPreferences: { contextIsolation: true, nodeIntegration: false },
+        // B-M4：与主窗口一致开启沙箱，打印窗口只渲染受信 HTML，无需完整 Node 能力
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
       })
       try {
         await printWin.loadFile(tmpHtml)
-        // 等图片/字体等资源就绪
-        await printWin.webContents.executeJavaScript(
+        // 等图片/字体等资源就绪；M4：加载挂起的资源会让 executeJavaScript
+        // 永不 resolve（图片 onload/onerror 都不触发时），15s 超时兜底后继续打印
+        const waitImages = printWin.webContents.executeJavaScript(
           `new Promise(r => {
             const imgs = Array.from(document.images)
             if (imgs.length === 0) return r(true)
@@ -795,6 +834,10 @@ export function registerIpcHandlers(): void {
             }))).then(() => r(true))
           })`,
         )
+        await Promise.race([
+          waitImages,
+          new Promise((resolve) => setTimeout(resolve, 15_000)),
+        ])
         // 页边距档位 → 英寸（Chromium printToPDF 单位）
         const marginsByLevel = {
           narrow: { top: 0.3, bottom: 0.3, left: 0.35, right: 0.35 },
@@ -942,9 +985,17 @@ export function registerIpcHandlers(): void {
       }
       try {
         await rename(args.path, target)
-        // 返回重命名后的 mtime，供渲染端更新冲突检测基线，避免误报"外部修改"
-        const modifiedTime = (await stat(target).catch(() => null))?.mtimeMs ?? 0
-        return { ok: true, data: { path: target, name, modifiedTime } }
+        // 返回重命名后的 mtime，供渲染端更新冲突检测基线，避免误报"外部修改"；
+        // 旧路径的冲突检测条目一并迁移，防止残留条目与重建文件尺寸不符而误报冲突
+        const targetStat = await stat(target).catch(() => null)
+        lastKnownFileState.delete(args.path)
+        if (targetStat) {
+          rememberFileState(target, { mtimeMs: targetStat.mtimeMs, size: targetStat.size })
+        }
+        return {
+          ok: true,
+          data: { path: target, name, modifiedTime: targetStat?.mtimeMs ?? 0 },
+        }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
       }
@@ -994,10 +1045,14 @@ export function registerIpcHandlers(): void {
           if (exists) return { ok: false, error: { code: 'EXISTS' } }
         }
         await rename(src, target)
-        const modifiedTime = (await stat(target).catch(() => null))?.mtimeMs ?? 0
+        lastKnownFileState.delete(src)
+        const targetStat = await stat(target).catch(() => null)
+        if (targetStat) {
+          rememberFileState(target, { mtimeMs: targetStat.mtimeMs, size: targetStat.size })
+        }
         return {
           ok: true,
-          data: { path: target, name: basename(target), modifiedTime },
+          data: { path: target, name: basename(target), modifiedTime: targetStat?.mtimeMs ?? 0 },
         }
       } catch (err) {
         return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -1031,6 +1086,8 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: { code: 'NOT_FILE' } }
       }
       await shell.trashItem(filePath)
+      // 清理冲突检测条目，避免旧路径被外部重建时误报"外部修改"
+      lastKnownFileState.delete(filePath)
       return { ok: true, data: { name: basename(filePath) } }
     } catch (err) {
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
@@ -1367,8 +1424,9 @@ export function registerIpcHandlers(): void {
       const parent = BrowserWindow.fromWebContents(event.sender)
       if (!parent) return { ok: false, error: { code: 'WINDOW_NOT_FOUND' } }
 
-      // 检测 pandoc 是否可用（首次调用时探测，结果缓存；并发调用共享同一探测）
-      pandocCheck ??= execFileAsync('pandoc', ['--version'])
+      // 检测 pandoc 是否可用（首次调用时探测，结果缓存；并发调用共享同一探测）。
+      // L4：探测带 10s 超时——pandoc 挂起时不能阻塞导出入口
+      pandocCheck ??= execFileAsync('pandoc', ['--version'], { timeout: 10_000 })
         .then(() => true)
         .catch(() => false)
       if (!(await pandocCheck)) {
@@ -1405,15 +1463,20 @@ export function registerIpcHandlers(): void {
       )
       try {
         await writeFile(tmpIn, args.markdown, 'utf-8')
-        await execFileAsync('pandoc', [
-          '-f',
-          'markdown',
-          '-t',
-          fmt,
-          tmpIn,
-          '-o',
-          save.filePath,
-        ])
+        // L4：60s 超时——大文档或 hung 的 pandoc 进程不能无限阻塞 IPC
+        await execFileAsync(
+          'pandoc',
+          [
+            '-f',
+            'markdown',
+            '-t',
+            fmt,
+            tmpIn,
+            '-o',
+            save.filePath,
+          ],
+          { timeout: 60_000 },
+        )
         return { ok: true, data: { path: save.filePath } }
       } catch (err) {
         return { ok: false, error: { code: 'PANDOC_ERROR', message: String(err) } }

@@ -33,10 +33,12 @@ export class SettingsStoreError extends Error {
   }
 }
 
-/** settings.json 允许的最大体积（字节），超限视为损坏 */
-const MAX_FILE_SIZE = 8 * 1024 * 1024
-/** 单个设置值序列化后的最大体积（字节），超限拒绝写入 */
-const MAX_VALUE_SIZE = 4 * 1024 * 1024
+/** settings.json 允许的最大体积（字节），超限视为损坏。
+ *  与文档打开上限（20MB）对齐：drafts 存于本文件，若上限低于单篇文档，
+ *  超大文档的草稿保存会被拒绝、下次启动还可能把含大草稿的整个文件判为损坏。 */
+const MAX_FILE_SIZE = 40 * 1024 * 1024
+/** 单个设置值序列化后的最大体积（字节），超限拒绝写入（与文档上限一致） */
+const MAX_VALUE_SIZE = 20 * 1024 * 1024
 /** session.files 上限 */
 const SESSION_MAX_FILES = 200
 /** drafts 保留条数上限（按最近保存时间） */
