@@ -368,6 +368,27 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
         .use(customCodeFenceRule)
         // 搜索高亮插件
         .use($prose(() => searchPlugin))
+        // M11：剪贴板同时带 <img> 与图片文件（网页"复制图片"）时，
+        // PM 原生 handlePaste 会解析 HTML 先插一张图，React 侧再保存文件插一张。
+        // 有图片文件时返回 true 消费粘贴，交给 React 侧唯一插入
+        .use(
+          $prose(() => {
+            const key = new PluginKey('block-pm-image-paste')
+            return new Plugin({
+              key,
+              props: {
+                handlePaste: (_view, event) => {
+                  const dt = event.clipboardData
+                  if (!dt) return false
+                  const hasImageFile = Array.from(dt.items).some(
+                    (item) => item.kind === 'file' && item.type.startsWith('image/'),
+                  )
+                  return hasImageFile
+                },
+              },
+            })
+          }),
+        )
         // 代码块 spellcheck 排除 + 图片 draggable（装饰方式，避免 DOM 变异乒乓）
         .use($prose(() => nodeAttrsPlugin))
         // Mermaid 预览使用装饰组件，源码始终保留为 Milkdown 原生代码块。
