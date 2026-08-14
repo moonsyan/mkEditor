@@ -5,7 +5,9 @@ import type { EditorView } from '@milkdown/kit/prose/view'
  * 鼠标靠近表格列边缘时显示拖拽手柄，按住左右拖动调整该列宽度。
  * 列宽仅保存在表格 DOM（data-colwidths），不写入 Markdown 文本
  * （GFM 无列宽语法，与 Typora 的纯视图级调整行为一致）。
- * ProseMirror 重建单元格后，下次交互会依据 data-colwidths 自愈恢复。 */
+ * ProseMirror 重建单元格后，下次交互会依据 data-colwidths 自愈恢复。
+ * L15：增删行列后 PM 重建单元格，新行/新列不再继承列宽——
+ * 宽度写所有行 + 列数变化时以实测值重归档 + 结构变化自愈恢复。 */
 
 /** 边缘命中容差（px） */
 const EDGE_TOLERANCE = 5
@@ -29,6 +31,8 @@ export const tableColResizePlugin = new Plugin({
     let hover: { table: HTMLTableElement; colIndex: number } | null = null
     let raf = 0
     let lastMove: MouseEvent | null = null
+    /** L15：表格结构变化（增删行列）后 PM 重建单元格，观察新增 tr/td 立即自愈列宽 */
+    let structureObserver: MutationObserver | null = null
 
     const scrollEl = (): HTMLElement | null =>
       editorView.dom.closest('.editor-scroll') as HTMLElement | null
@@ -51,15 +55,19 @@ export const tableColResizePlugin = new Plugin({
       return out
     }
 
-    /** 应用列宽：写首行单元格 + 表格总宽 + data-colwidths 存档 */
+    /** 应用列宽：写所有行单元格 + 表格总宽 + data-colwidths 存档 */
     const applyWidths = (table: HTMLTableElement, widths: number[]) => {
-      const row = table.rows[0]
-      if (!row) return
-      const n = Math.min(row.cells.length, widths.length)
+      const rows = table.rows
+      if (!rows.length) return
+      const n = Math.min(rows[0].cells.length, widths.length)
       let total = 0
-      for (let i = 0; i < n; i++) {
-        ;(row.cells[i] as HTMLElement).style.width = `${widths[i]}px`
-        total += widths[i]
+      for (let i = 0; i < n; i++) total += widths[i]
+      // L15：只写首行会导致增删行后新行单元格没有宽度样式，列宽按内容撑开，
+      // 视觉上"自定义宽度丢失"。所有行统一写，增行后新行也能继承列宽。
+      for (let r = 0; r < rows.length; r++) {
+        for (let i = 0; i < n; i++) {
+          ;(rows[r].cells[i] as HTMLElement).style.width = `${widths[i]}px`
+        }
       }
       table.style.width = `${total}px`
       table.setAttribute(
@@ -78,18 +86,14 @@ export const tableColResizePlugin = new Plugin({
         .split(',')
         .map((s) => Number(s))
         .filter((n) => Number.isFinite(n) && n > 0)
-      // 列数变化（增删列）时存档失效，直接丢弃
+      // L15：列数变化（增删列）时旧存档与当前列错位，不能直接丢弃——
+      // 以首行实测宽度重新归档（存活的列仍保留原宽度，新增列取内容宽度），
+      // 避免一次增列就把全部自定义宽度清空。列数一致时走存档恢复。
       if (widths.length !== row.cells.length) {
-        table.removeAttribute('data-colwidths')
-        table.style.width = ''
+        applyWidths(table, currentWidths(table))
         return
       }
-      let total = 0
-      for (let i = 0; i < widths.length; i++) {
-        ;(row.cells[i] as HTMLElement).style.width = `${widths[i]}px`
-        total += widths[i]
-      }
-      table.style.width = `${total}px`
+      applyWidths(table, widths)
     }
 
     const hideHandle = () => {
@@ -200,9 +204,35 @@ export const tableColResizePlugin = new Plugin({
     editorView.dom.addEventListener('mousedown', onMouseDown)
     editorView.dom.addEventListener('mouseleave', onMouseLeave)
 
+    /** L15：新增行/列立即恢复已保存列宽，而不是等下次悬停才自愈 */
+    const selfHealWidths = (mutations: MutationRecord[]) => {
+      for (const mutation of mutations) {
+        if (mutation.type !== 'childList') continue
+        const added = mutation.addedNodes
+        for (let i = 0; i < added.length; i++) {
+          const node = added[i]
+          if (!(node instanceof HTMLElement)) continue
+          // 只处理表格结构变化（新增 tr/td/th）；普通文本节点直接跳过
+          const cells = node.querySelectorAll('tr, td, th')
+          if (!cells.length) continue
+          const first = cells[0]
+          const tr = first.tagName === 'TR' ? first : first.closest('tr')
+          const table = tr?.closest?.('table') as HTMLTableElement | null
+          if (!table || !editorView.dom.contains(table)) continue
+          if (!table.hasAttribute('data-colwidths')) continue
+          // 恢复会写 style（attribute 变更），不会再次触发 childList，无循环
+          restoreWidths(table)
+        }
+      }
+    }
+    structureObserver = new MutationObserver(selfHealWidths)
+    structureObserver.observe(editorView.dom, { childList: true, subtree: true })
+
     return {
       destroy() {
         if (raf) cancelAnimationFrame(raf)
+        structureObserver?.disconnect()
+        structureObserver = null
         editorView.dom.removeEventListener('mousemove', onMouseMove)
         editorView.dom.removeEventListener('mousedown', onMouseDown)
         editorView.dom.removeEventListener('mouseleave', onMouseLeave)
