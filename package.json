@@ -25,6 +25,11 @@
       "out/**/*",
       "resources/icon.png"
     ],
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
+    "compression": "maximum",
     "win": {
       "icon": "resources/icon.png",
       "target": [
@@ -56,12 +61,22 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
+    "iconv-lite": "^0.7.3"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
     "@milkdown/kit": "^7.22.0",
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/plugin-prism": "^7.22.0",
     "@milkdown/react": "^7.22.0",
-    "electron-updater": "^6.8.9",
-    "iconv-lite": "^0.7.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
     "katex": "^0.18.2",
     "mdast-util-footnote": "^1.1.1",
     "mdast-util-frontmatter": "^2.0.1",
@@ -69,17 +84,7 @@
     "micromark-extension-footnote": "^1.0.2",
     "micromark-extension-frontmatter": "^2.0.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@electron-toolkit/preload": "^3.0.1",
-    "@electron-toolkit/utils": "^3.0.0",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^43.3.0",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
+    "react-dom": "^18.3.1",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",
     "vitest": "^2.1.9"
