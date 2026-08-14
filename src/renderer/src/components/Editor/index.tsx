@@ -467,7 +467,8 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       const { $from } = state.selection
       for (let d = $from.depth; d > 0; d--) {
         const node = $from.node(d)
-        if (node.type.name !== 'code_block') continue
+        // frontmatter 与 code_block 同样支持方向键跳出（H5）
+        if (node.type.name !== 'code_block' && node.type.name !== 'frontmatter') continue
         const start = $from.before(d)
         const end = start + node.nodeSize
         const text = node.textContent
@@ -491,6 +492,11 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             target = Selection.findFrom(tr.doc.resolve(start - 1), -1)
           }
           if (!target) {
+            if (node.type.name === 'frontmatter') {
+              // frontmatter 必须保持文档首位：不插段落，直接回到文档开头
+              dispatch(tr.setSelection(TextSelection.create(tr.doc, 0)).scrollIntoView())
+              return true
+            }
             const para = state.schema.nodes.paragraph.create()
             tr = tr.insert(start, para)
             target = TextSelection.create(tr.doc, start + 1)
@@ -503,12 +509,34 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       return false
     }
 
+    /** 从 frontmatter 之后的正文首块按 ↑ 进入 frontmatter 末尾（H5：isolating 挡住反向穿越） */
+    const enterFrontmatter = (): boolean => {
+      const ed =
+        editorRef.current?.status === EditorStatus.Created ? editorRef.current : null
+      if (!ed) return false
+      const view = ed.ctx.get(editorViewCtx)
+      const { state, dispatch } = view
+      const { $from } = state.selection
+      if ($from.depth !== 1) return false
+      const first = state.doc.child(0)
+      if (first.type.name !== 'frontmatter') return false
+      // 仅当光标在紧随 frontmatter 的正文首块最前面时触发
+      if ($from.pos !== first.nodeSize + 1) return false
+      dispatch(
+        state.tr
+          .setSelection(TextSelection.create(state.doc, first.nodeSize - 1))
+          .scrollIntoView(),
+      )
+      return true
+    }
+
     /** 编辑区键盘拦截：方向键退出代码块 */
     const handleKeyDown = (e: React.KeyboardEvent) => {
       if (isImeComposing(e.nativeEvent)) return
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       if (e.key === 'ArrowDown' && exitCodeBlock('down')) e.preventDefault()
       else if (e.key === 'ArrowUp' && exitCodeBlock('up')) e.preventDefault()
+      else if (e.key === 'ArrowUp' && enterFrontmatter()) e.preventDefault()
     }
 
     /** 点击正文下方空白区：光标定位到文末（Typora 同款，可在设置关闭，U8） */
