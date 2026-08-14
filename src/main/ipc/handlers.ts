@@ -16,10 +16,18 @@ import {
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
 import { allowImageDirectory } from '../image-protocol'
-import { trustDirectory } from '../trusted-paths'
+import { isPathTrusted, trustDirectory } from '../trusted-paths'
 import { setWebContentsUnsaved } from '../unsaved'
 
 const execFileAsync = promisify(execFile)
+
+/**
+ * L8：路径必须属于已授权根（已打开的文档/工作区、会话恢复路径、
+ * 用户经原生对话框选择的目录、应用自有目录）。渲染进程无法自行授权，
+ * 阻断未来 XSS 把文件 IPC 变成全盘读写删。
+ */
+const ensureTrusted = (path: unknown): boolean =>
+  typeof path === 'string' && path.length > 0 && isPathTrusted(path)
 
 /**
  * 工作区搜索行缓存（基础索引）：path → { mtimeMs, size, lines }。
@@ -288,6 +296,22 @@ export function registerIpcHandlers(): void {
   // 应用自有图片目录（未保存文档的粘贴图片存储处）始终授信；
   // 它在每个新进程中由保存流程重建信任，此处显式登记避免图片管理面板 404。
   trustDirectory(join(app.getPath('userData'), 'images'))
+  // L8：会话恢复路径预授权——新进程的信任根初始为空，渲染端恢复会话时
+  // FILE_READ/SEARCH 等必须能命中上次会话已打开的文档与工作区。
+  // 逆序登记、工作区最后，超限淘汰时优先淘汰最旧的散落文件目录。
+  void getSetting('session').then((raw) => {
+    const session = raw as
+      | { files?: { path?: string }[]; workspacePath?: string }
+      | undefined
+    const files = session?.files ?? []
+    for (let i = files.length - 1; i >= 0; i--) {
+      const p = files[i]?.path
+      if (typeof p === 'string' && p) trustDirectory(dirname(p))
+    }
+    if (typeof session?.workspacePath === 'string' && session.workspacePath) {
+      trustDirectory(session.workspacePath)
+    }
+  })
 
   // pandoc 可用性探测结果缓存（缓存 Promise 本身，避免首次探测期间的并发误报）
   let pandocCheck: Promise<boolean> | null = null
@@ -370,6 +394,10 @@ export function registerIpcHandlers(): void {
       if (typeof folderPath !== 'string' || !folderPath) {
         return { ok: false, error: { code: 'INVALID_PATH' } }
       }
+      // L8：带路径打开（会话恢复）必须属于已授权根；对话框选择的目录在下方授信
+      if (args?.path && !ensureTrusted(folderPath)) {
+        return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
       const folderStat = await stat(folderPath).catch(() => null)
       if (!folderStat) {
         return { ok: false, error: { code: 'NOT_FOUND' } }
@@ -401,6 +429,12 @@ export function registerIpcHandlers(): void {
   // 按路径读取文件（会话恢复用，不弹对话框）
   ipcMain.handle(CHANNELS.FILE_READ, async (_event, filePath: string) => {
     if (typeof filePath !== 'string' || !filePath) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
+    // L8：仅 .md/.markdown 允许"拖入/会话恢复"的首次授信路径
+    // （真实 OS 拖拽才带 File.path，会话路径已在启动时预授权）；
+    // 其余扩展名必须已属于授权根
+    if (!/\.(md|markdown)$/i.test(filePath) && !ensureTrusted(filePath)) {
       return { ok: false, error: { code: 'INVALID_PATH' } }
     }
     try {
@@ -446,6 +480,10 @@ export function registerIpcHandlers(): void {
       },
     ) => {
       try {
+        // L8：保存目标必须属于已授权根（打开的文档/对话框另存的位置）
+        if (!ensureTrusted(args.path)) {
+          return { ok: false, error: { code: 'INVALID_PATH' } }
+        }
         const pre = await stat(args.path).catch(() => null)
         if (!pre) {
           return { ok: false, error: { code: 'NOT_FOUND' } }
@@ -517,6 +555,8 @@ export function registerIpcHandlers(): void {
       }
 
       try {
+        // L8：用户经原生对话框选择的位置即授权（写穿与后续保存均可用）
+        trustDirectory(dirname(result.filePath))
         await writeFileAtomically(result.filePath, args.content)
         // 返回真实落盘 mtime（渲染端用于下次保存的冲突检测，比 Date.now() 更准）
         let modifiedTime = 0
@@ -552,6 +592,13 @@ export function registerIpcHandlers(): void {
       args: { dataUrl: string; docPath?: string; workspacePath?: string },
     ) => {
       try {
+        // L8：文档/工作区路径必须已授信；未提供（未保存文档）时回退用户数据目录
+        if (args.docPath && !ensureTrusted(args.docPath)) {
+          return { ok: false, error: { code: 'INVALID_PATH' } }
+        }
+        if (args.workspacePath && !ensureTrusted(args.workspacePath)) {
+          return { ok: false, error: { code: 'INVALID_PATH' } }
+        }
         const match = args.dataUrl.match(
           /^data:(image\/(png|jpe?g|gif|webp|bmp));base64,(.+)$/i,
         )
@@ -671,6 +718,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(CHANNELS.WINDOW_NEW_WITH_FILE, (_event, filePath: string) => {
     try {
       if (!filePath || typeof filePath !== 'string') {
+        return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
+      // L8：新窗口打开的文件必须已由当前窗口/会话授权
+      if (!ensureTrusted(filePath)) {
         return { ok: false, error: { code: 'INVALID_PATH' } }
       }
       createWindow(true, filePath)
@@ -814,6 +865,10 @@ export function registerIpcHandlers(): void {
       if (!args || typeof args.dir !== 'string' || !args.dir) {
         return { ok: false, error: { code: 'INVALID_TARGET' } }
       }
+      // L8：创建位置必须属于已授权根（工作区树节点目录）
+      if (!ensureTrusted(args.dir)) {
+        return { ok: false, error: { code: 'INVALID_TARGET' } }
+      }
       const base = safeName(args.name)
       if (!base) return { ok: false, error: { code: 'INVALID_NAME' } }
       const dirStat = await stat(args.dir).catch(() => null)
@@ -857,6 +912,10 @@ export function registerIpcHandlers(): void {
       if (!args || typeof args.path !== 'string' || !args.path) {
         return { ok: false, error: { code: 'INVALID_PATH' } }
       }
+      // L8：重命名源必须已授权（目标位于同一目录，同受信任根覆盖）
+      if (!ensureTrusted(args.path)) {
+        return { ok: false, error: { code: 'INVALID_PATH' } }
+      }
       const name = safeName(args.newName)
       if (!name) return { ok: false, error: { code: 'INVALID_NAME' } }
       const target = join(dirname(args.path), name)
@@ -892,6 +951,10 @@ export function registerIpcHandlers(): void {
           typeof args.targetDir !== 'string' ||
           !args.targetDir
         ) {
+          return { ok: false, error: { code: 'INVALID_TARGET' } }
+        }
+        // L8：源与目标目录都必须属于已授权根（工作区内移动）
+        if (!ensureTrusted(args.path) || !ensureTrusted(args.targetDir)) {
           return { ok: false, error: { code: 'INVALID_TARGET' } }
         }
         const src = args.path
@@ -932,6 +995,9 @@ export function registerIpcHandlers(): void {
 
   // 仅读取文件 mtime（草稿恢复前校验基线新鲜度用，避免整文件重读）
   ipcMain.handle(CHANNELS.FILE_STAT, async (_event, filePath: string) => {
+    if (!ensureTrusted(filePath)) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
     try {
       const st = await stat(filePath)
       return { ok: true, data: { modifiedTime: st.mtimeMs } }
@@ -942,6 +1008,9 @@ export function registerIpcHandlers(): void {
 
   // 删除（移入回收站）
   ipcMain.handle(CHANNELS.FILE_DELETE, async (_event, filePath: string) => {
+    if (!ensureTrusted(filePath)) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
     try {
       await shell.trashItem(filePath)
       return { ok: true, data: { name: basename(filePath) } }
@@ -955,7 +1024,10 @@ export function registerIpcHandlers(): void {
     if (
       !Array.isArray(dirs) ||
       dirs.length > MAX_IMAGE_LIST_DIRS ||
-      dirs.some((dir) => typeof dir !== 'string' || !dir || dir.length > 4096)
+      dirs.some(
+        (dir) =>
+          typeof dir !== 'string' || !dir || dir.length > 4096 || !ensureTrusted(dir),
+      )
     ) {
       return { ok: false, error: { code: 'INVALID_ARGUMENT' } }
     }
@@ -990,6 +1062,9 @@ export function registerIpcHandlers(): void {
 
   // 删除图片（移入回收站）
   ipcMain.handle(CHANNELS.FILE_DELETE_IMAGE, async (_event, filePath: string) => {
+    if (!ensureTrusted(filePath)) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
     try {
       await shell.trashItem(filePath)
       return { ok: true }
@@ -1017,6 +1092,10 @@ export function registerIpcHandlers(): void {
           !args.dir ||
           typeof args.query !== 'string'
         ) {
+          return { ok: false, error: { code: 'INVALID_TARGET' } }
+        }
+        // L8：搜索根必须属于已授权根（工作区/文档目录）
+        if (!ensureTrusted(args.dir)) {
           return { ok: false, error: { code: 'INVALID_TARGET' } }
         }
         const dirStat = await stat(args.dir).catch(() => null)
@@ -1331,6 +1410,8 @@ export function registerIpcHandlers(): void {
     }
     try {
       const filePath = result.filePaths[0]
+      // L8：用户经原生对话框选择即授权（文件在对话框之外不可读）
+      trustDirectory(dirname(filePath))
       const fileStat = await stat(filePath)
       if (!fileStat.isFile()) {
         return { ok: false, error: { code: 'IO_ERROR', message: '选择的不是普通文件' } }
