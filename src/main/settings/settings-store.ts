@@ -152,12 +152,21 @@ async function readSettingsFile(): Promise<Record<string, unknown>> {
       return {}
     }
     const raw = await readFile(path, 'utf-8')
-    const parsed = JSON.parse(raw) as Record<string, unknown>
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>
+    } catch {
+      // M2：JSON 损坏（截断/手改）时先备份原文件再返回空——
+      // 否则下一次写入会把仅含新键的 {} 原子写回，草稿/图床 token/全部设置永久丢失
+      await backupCorrupt(path).catch(() => {})
+      return {}
+    }
     for (const key of Object.keys(parsed)) {
       parsed[key] = sanitize(key, parsed[key])
     }
     return parsed
   } catch {
+    // 文件不存在等读取失败：无备份可言，直接返回空
     return {}
   }
 }

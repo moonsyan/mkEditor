@@ -1024,6 +1024,12 @@ export function registerIpcHandlers(): void {
       return { ok: false, error: { code: 'INVALID_PATH' } }
     }
     try {
+      // M3：仅允许删除文件——trashItem 对目录会整棵移入回收站，
+      // 渲染端只对文件调用删除，防御未来的误用
+      const st = await stat(filePath)
+      if (!st.isFile()) {
+        return { ok: false, error: { code: 'NOT_FILE' } }
+      }
       await shell.trashItem(filePath)
       return { ok: true, data: { name: basename(filePath) } }
     } catch (err) {
@@ -1081,6 +1087,11 @@ export function registerIpcHandlers(): void {
       return { ok: false, error: { code: 'INVALID_PATH' } }
     }
     try {
+      // M3：仅允许删除文件（同 FILE_DELETE）
+      const st = await stat(filePath)
+      if (!st.isFile()) {
+        return { ok: false, error: { code: 'NOT_FILE' } }
+      }
       await shell.trashItem(filePath)
       return { ok: true }
     } catch (err) {
