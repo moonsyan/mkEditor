@@ -83,6 +83,12 @@ let currentView: EditorView | null = null
 function convertWikiText(view: EditorView) {
   // 编辑器已销毁或已重建：停止链式 setTimeout 循环
   if (currentView !== view) return
+  // L11：组合输入期间 dispatch 会打断 IME 提交（候选词被撤销/错位），
+  // 延迟到 compositionend 之后再继续转换
+  if (view.composing) {
+    setTimeout(() => convertWikiText(view), 50)
+    return
+  }
   const { state, dispatch } = view
   const type = state.schema.nodes.wiki_link
   if (!type) return
