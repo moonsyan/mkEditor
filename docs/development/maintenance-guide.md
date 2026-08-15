@@ -65,6 +65,21 @@ npm run build:win
 
 PowerShell 环境若因执行策略拒绝 `npm.ps1`，使用 `npm.cmd run build` 等同命令即可。
 
+## 发布新版本（含自动更新）
+
+客户端升级依赖 GitHub Release 上的 `latest.yml` + 安装包（`electron-updater` 启动时自动检查、下载、覆盖安装，AppData 数据保留）。流程：
+
+1. **升级版本号**：`package.json` 的 `version` 改为新版本（如 `0.2.1` → `0.3.0`），提交并推送。
+2. **打 tag**：`git tag v0.3.0 && git push origin master --tags && git push github master:main --tags`——`v*` tag 推送触发 Actions 构建三平台，并自动创建 **GitHub Release 草稿**（`electron-builder --publish always`，`publish` 配置为 github provider + `draft: true`），上传安装包 + `latest.yml` + `blockmap`。
+3. **人工发布**：GitHub Release 页面审核草稿（含版本说明）后点击发布——发布前客户端检查不到该版本。
+4. **（可选）同步 gitee 国内镜像**：本地先 `npm run build:win` 产出 `release/<version>/` 产物，然后：
+   ```bash
+   GITEE_TOKEN=<私人令牌> node scripts/sync-gitee.js
+   ```
+   脚本把安装包、blockmap、latest.yml 上传到 gitee 同名 Release；gitee 令牌在 gitee 设置 → 私人令牌中创建（勾选 projects 权限）。重复执行会跳过已存在的附件。
+
+更新源变更：客户端更新地址来自打包时注入的 `app-update.yml`（由 `publish` 配置生成）。若日后切 gitee 为主源（国内下载更快），把 `package.json` 的 `publish` 改为 `{"provider": "generic", "url": "https://gitee.com/MingProject/mk-editormkEditor/releases/download/<tag目录>"}` 后重新打包；gitee 直链行为需实测一次。
+
 ## 常见修改入口
 
 | 需求 | 位置 |

@@ -68,7 +68,7 @@
 | 侧栏宽度拖拽 | ✅ 已完成 | 侧栏右缘拖拽调整 180–480px，持久化；带 zoom 补偿计算 |
 | 文件树引导线 | ✅ 已完成 | 层级竖线对齐箭头列，与大纲引导线风格统一 |
 | 安装包打包 | ✅ 已验证 | electron-builder（NSIS）：`npm run build:win` 实测通过，产出安装包（约 129MB）与 **latest.yml 更新元数据**；win-unpacked 版实机启动验证内存稳定零崩溃 |
-| 自动更新 | ✅ 已接线 | electron-updater：生产启动时静默检查更新（checkForUpdatesAndNotify，失败不影响使用）；将 package.json 的 publish.url 改为真实发布地址后即可启用 |
+| 自动更新 | ✅ 已启用 | electron-updater：生产启动时静默检查更新（checkForUpdatesAndNotify，失败不影响使用）；发布源为 GitHub Releases（`publish` = github provider，Actions 打 tag 自动建 Release 草稿并上传安装包 + latest.yml + blockmap，审核发布后客户端即可检测）。国内镜像：`node scripts/sync-gitee.js` 同步到 gitee Release |
 | 空白区点击聚焦 | ✅ 已完成 | 点击正文下方空白区，光标定位到文末（Typora 同款） |
 | 空文档占位 | ✅ 已完成 | 新建/清空文档时显示"开始书写…"提示 |
 | 图片粘贴/拖入 | ✅ 已完成 | 剪贴板图片 Ctrl+V 或拖入文件自动存到文档旁 `attachments/`；单张最大 20MB，存储为相对路径（.md 可移植），渲染时解析为 `mdimg://` 本地协议；保存失败时按错误码明确提示（超限/权限或磁盘空间）；文档内图片可拖拽重定位（装饰方式设置 draggable） |
