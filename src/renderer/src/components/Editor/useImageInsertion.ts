@@ -71,7 +71,15 @@ export function useImageInsertion({
         docPath: imageHints?.docPath,
         workspacePath: imageHints?.workspacePath,
       })
-      if (!result.ok || !result.data) return
+      if (!result.ok || !result.data) {
+        // F：保存失败静默返回会让用户以为图片已插入——给出明确反馈
+        notify(
+          result.error?.code === 'TOO_LARGE'
+            ? '图片超过 20MB，无法插入'
+            : '图片保存失败，请检查文件权限或磁盘空间',
+        )
+        return
+      }
       if (imageHintsRef.current?.documentId !== documentId) {
         notify('已切换文档，图片已保存但未插入')
         return
