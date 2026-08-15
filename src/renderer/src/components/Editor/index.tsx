@@ -1088,11 +1088,17 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
           clone.querySelectorAll('pre[data-language]').forEach((el) => {
             if (el.getAttribute('data-language')?.trim().toLowerCase() !== 'mermaid') return
             const prev = el.previousElementSibling
+            const mermaidBlock =
+              prev instanceof Element && prev.classList.contains('mermaid-block')
+            // G-M1：渲染失败（错误态）/ 4s 超时未完成时块内无 svg、也不在源码
+            // 编辑态——原判定只认 is-editing-source，错误态源码 pre 被误删，
+            // 导出内容只剩错误/加载文案，mermaid 源码从导出中丢失。
+            // 块内无渲染 SVG 时一律保留源码 pre（以源码文本导出，内容不丢）
             const stillSourceEditing =
-              prev instanceof Element &&
-              prev.classList.contains('mermaid-block') &&
-              prev.classList.contains('is-editing-source')
-            // 预览态删除 pre（SVG 已展示）；源码态保留 pre（以源码文本导出）
+              mermaidBlock &&
+              (prev.classList.contains('is-editing-source') ||
+                !prev.querySelector('.mermaid-preview svg'))
+            // 预览态且有渲染 SVG 时删除 pre（SVG 已展示）；否则保留 pre
             if (!stillSourceEditing) el.remove()
           })
           return clone.innerHTML
