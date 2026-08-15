@@ -923,7 +923,13 @@ export function registerIpcHandlers(): void {
       // M2：data: URL 在 Chromium 中超过 ~2MB 会被截断/拒绝（内联图片后 HTML 很容易超限），
       // 改为写入临时文件后 loadFile，finally 中清理
       const tmpHtml = join(app.getPath('temp'), `mk-editor-pdf-${Date.now()}-${Math.random().toString(36).slice(2)}.html`)
-      await writeFile(tmpHtml, html, 'utf8')
+      // F-L2：临时文件写入原在 try 外，磁盘满/权限不足时异常直接抛出 IPC，
+      // 渲染层收不到错误结构。移入保护并返回结构化错误
+      try {
+        await writeFile(tmpHtml, html, 'utf8')
+      } catch {
+        return { ok: false, error: { code: 'IO_ERROR', message: '无法写入临时文件' } }
+      }
       const printWin = new BrowserWindow({
         show: false,
         // B-M4：与主窗口一致开启沙箱，打印窗口只渲染受信 HTML，无需完整 Node 能力
