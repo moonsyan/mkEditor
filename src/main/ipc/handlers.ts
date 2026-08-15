@@ -258,6 +258,32 @@ class UnsupportedEncodingError extends Error {
 }
 
 /**
+ * 无 BOM UTF-16 探测（Y-L2）：0x00 字节占比集中在一侧时判定为 UTF-16。
+ * 无 BOM UTF-16 文件若落入 GBK 宽松解码会乱码，保存时写回 GBK 编码把
+ * 原文件不可逆损坏。抽样前 8KB 统计（大文件全量统计收益有限）。
+ * UTF-16LE 的零字节在奇数位（ASCII/标点的高字节），BE 反之。
+ */
+function detectUtf16NoBom(buf: Buffer): 'UTF-16LE' | 'UTF-16BE' | null {
+  if (buf.length < 4 || buf.length % 2 !== 0) return null
+  const sampleLen = Math.min(buf.length, 8192)
+  let evenZeros = 0
+  let oddZeros = 0
+  const pairs = Math.floor(sampleLen / 2)
+  for (let i = 0; i < pairs; i++) {
+    if (buf[i * 2] === 0) evenZeros++
+    if (buf[i * 2 + 1] === 0) oddZeros++
+  }
+  const le = oddZeros / pairs
+  const be = evenZeros / pairs
+  // 一侧占主导（≥30%）且另一侧 ≤5%：ASCII/中文混合 UTF-16 的零字节
+  // 集中在同一侧；纯中文场景零字节占比低（仅换行符），由 GBK 分支的
+  // NUL 兜底检测补上
+  if (le >= 0.3 && be <= 0.05) return 'UTF-16LE'
+  if (be >= 0.3 && le <= 0.05) return 'UTF-16BE'
+  return null
+}
+
+/**
  * 自动探测编码读取文本：优先按 BOM 判定（UTF-8 / UTF-16LE / UTF-16BE / UTF-32），
  * 无 BOM 时先按严格 UTF-8 解码，失败则按 GBK 宽松解码（带替换符）。
  * UTF-16 正确解码并标记编码，保存时写回原编码（BOM 保留）；UTF-32 无法用
@@ -281,14 +307,38 @@ async function readTextAutoEncoding(
     return { content: iconv.decode(buf.subarray(2), 'utf-16be'), encoding: 'UTF-16BE' }
   }
   if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-    return { content: buf.subarray(3).toString('utf-8'), encoding: 'UTF-8' }
+    // Y-L1：带 BOM 的 UTF-8 记独立编码，保存时写回 BOM——
+    // 原实现剥 BOM 后按 'UTF-8' 保存，BOM 被静默丢弃（字节级改写文件，
+    // 依赖 BOM 的工具链会误判编码）
+    return { content: buf.subarray(3).toString('utf-8'), encoding: 'UTF-8-BOM' }
+  }
+  // Y-L2：无 BOM 的 UTF-16（Windows 记事本"UTF-16 LE"另存等来源）
+  const utf16 = detectUtf16NoBom(buf)
+  if (utf16 === 'UTF-16LE') {
+    return { content: buf.toString('utf16le'), encoding: 'UTF-16LE' }
+  }
+  if (utf16 === 'UTF-16BE') {
+    return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
   }
   try {
     return { content: new TextDecoder('utf-8', { fatal: true }).decode(buf), encoding: 'UTF-8' }
   } catch {
+    const decoded = new TextDecoder('gbk').decode(buf)
+    // Y-L2 兜底：GBK 解码出 NUL 控制字符 = 原始字节含大量 0x00（UTF-16 特征）。
+    // 纯中文无 BOM UTF-16 零字节占比低（仅换行符 0A 00），直接探测漏检，
+    // 但 GBK 解码必产生 NUL；正常 GBK 文件不含 NUL
+    if (decoded.includes('\u0000')) {
+      const fallback = detectUtf16NoBom(buf)
+      if (fallback === 'UTF-16LE') {
+        return { content: buf.toString('utf16le'), encoding: 'UTF-16LE' }
+      }
+      if (fallback === 'UTF-16BE') {
+        return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
+      }
+    }
     // 非严格 UTF-8：按 GBK 宽松解码（无 BOM 时的旧行为；GBK 解码永不抛错，
     // 此分支即为最终兜底，不再需要"宽松 UTF-8"第三分支）
-    return { content: new TextDecoder('gbk').decode(buf), encoding: 'GBK' }
+    return { content: decoded, encoding: 'GBK' }
   }
 }
 
@@ -654,8 +704,11 @@ export function registerIpcHandlers(): void {
         }
       }
       // 编码写回：UTF-16 保持原编码（BOM 保留）；GBK 写回原编码并做往返校验，
-      // 无法映射的字符拒绝写入；其余统一 UTF-8
-      if (args.encoding === 'UTF-16LE' || args.encoding === 'UTF-16BE') {
+      // 无法映射的字符拒绝写入；带 BOM 的 UTF-8 写回 BOM（Y-L1，读取时记
+      // 'UTF-8-BOM' 保存时不丢失）；其余统一 UTF-8
+      if (args.encoding === 'UTF-8-BOM') {
+        await writeFileAtomically(args.path, `\uFEFF${args.content}`, pre.mode)
+      } else if (args.encoding === 'UTF-16LE' || args.encoding === 'UTF-16BE') {
         const bom =
           args.encoding === 'UTF-16LE'
             ? Buffer.from([0xff, 0xfe])

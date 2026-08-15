@@ -62,7 +62,7 @@ export function StatusBar({
       <div className="st-item">{wordCount} 字</div>
       <div className="st-item">{lineCount} 行</div>
       <div className="st-item">约 {readTime} 分钟</div>
-      <div className="st-item">{encoding}</div>
+      <div className="st-item">{encoding === 'UTF-8-BOM' ? 'UTF-8 (BOM)' : encoding}</div>
       <div className="st-item">Markdown</div>
     </div>
   )
