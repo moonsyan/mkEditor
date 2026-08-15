@@ -245,9 +245,13 @@ export function Sidebar({
   // - 有匹配记录 → 恢复记录原样
   // 注意：本 effect 不写回记录（折叠全部是幂等的，无需持久化）；
   // 用户第一次手动折叠/展开时，onCollapsedKeysChange 自然把记录更新为新工作区的键
+  // X-L2：只收集当前渲染树的键——演示树与工作区树互斥显示，混入 demo 键会
+  // 让"记录匹配"判定永远为 true（只要用户在演示树折叠/展开过任意文件夹，
+  // 记录就含 demo: 前缀键），打开新工作区时走"恢复记录原样"分支，
+  // 工作区目录全部平铺展开，与"新工作区默认折叠"的设计意图相悖
   const allFolderKeys = useMemo(
-    () => collectFolderKeys([...demoNodes, ...workspaceNodes]),
-    [demoNodes, workspaceNodes],
+    () => collectFolderKeys(workspace ? workspaceNodes : demoNodes),
+    [workspace, workspaceNodes, demoNodes],
   )
   // 折叠状态只在“记录形态”变化时重算：无记录→有记录（设置异步加载）、
   // 匹配状态翻转（换了工作区/树结构大变）。仅 allFolderKeys 重建（重命名/删除
