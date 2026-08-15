@@ -108,6 +108,14 @@ export function useImageInsertion({
         file.type.startsWith('image/'),
       )
       if (files.length === 0) return
+      // 与 PM 粘贴插件保持同一条大小门槛（<=20MB 时才消费粘贴）：
+      // 全部图片超限时不 preventDefault，放行 PM 默认粘贴插入正文，
+      // 否则文字会被 PM 与 React 各插一次（双插入）
+      const insertable = files.filter((file) => file.size <= MAX_IMAGE_SIZE)
+      if (insertable.length === 0) {
+        notify('图片超过 20MB，无法插入')
+        return
+      }
       event.preventDefault()
       // M4：PM 消费了图片粘贴后，网页复制的"图片+文字"里的正文会一起被吞掉。
       // 消费前先把 text/html 的纯文本提取出来插入；
@@ -128,7 +136,7 @@ export function useImageInsertion({
       }
       files.forEach(insertImageFile)
     },
-    [insertImageFile, insertMarkdown],
+    [insertImageFile, insertMarkdown, notify],
   )
 
   const handleDrop = useCallback(

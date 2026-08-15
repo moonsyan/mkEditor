@@ -58,11 +58,12 @@ export const parseOutline = (content: string): OutlineNode[] => {
       continue
     }
     if (inFence) continue
-    // setext 下划线：`=` 恒为 setext h1；`-` 需 1-2 个且上一行是段落才成立
-    //（3+ 的 `---` 是主题分隔线，优先级高于 setext——`前文\n---` 不是 h2）。
-    // Milkdown 渲染层把 setext 生成真实 h1/h2 DOM，parseOutline 不识别时
-    // outline 索引与 DOM 标题索引错位，点击大纲会滚动/高亮到错误的标题
-    const setextMatch = line.match(/^[ ]{0,3}(?:>\s*)*(=+|-{1,2})\s*$/)
+    // setext 下划线：`=` 恒为 setext h1；`-` 任意数量（CommonMark：跟在段落
+    // 后的 `---` 是 h2 下划线，不是主题分隔线——只有前面没有段落的 `---`
+    // 才是分隔线）。此前只认 1-2 个 `-`，`前文\n---` 被漏判，Milkdown 渲染
+    // 层却生成真实 h2 DOM，outline 索引与 DOM 标题索引错位，点击大纲会
+    // 滚动/高亮到错误的标题
+    const setextMatch = line.match(/^[ ]{0,3}(?:>\s*)*(=+|-+)\s*$/)
     if (prevWasParagraph && setextMatch) {
       const isH1 = setextMatch[1].includes('=')
       // 缩进/引用前缀剥掉后取上一行正文作为标题文本

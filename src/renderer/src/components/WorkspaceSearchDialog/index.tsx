@@ -133,10 +133,12 @@ export function WorkspaceSearchDialog({
       return
     }
     const seq = ++searchSeqRef.current
+    // 新搜索开始即清空旧结果：失败/提前返回/搜索中都不再显示上一次的结果
+    setMatches([])
+    setTruncated(false)
     setLoading(true)
     setSearched(true)
     setError('')
-    setTruncated(false)
     try {
       const res = await window.desktopAPI.workspace.search(
         workspacePath,

@@ -118,6 +118,9 @@ const INITIAL_SAVED: Record<string, boolean> = Object.fromEntries(
 
 const DEMO_FILE_IDS = new Set(Object.keys(DEMO_FILES))
 
+/** 演示树折叠记录的作用域键（未打开工作区时的侧栏树） */
+const DEMO_TREE_SCOPE = '__demo__'
+
 let untitledCounter = 1
 
 /** HTML 特殊字符转义（导出 HTML 的 title 来自文件名，可能含 & < >） */
@@ -495,8 +498,6 @@ export default function App(): JSX.Element {
         }
         // 拼写检查语言
         if (scl?.ok && typeof scl.data === 'string') setSpellcheckLang(scl.data)
-        // 侧边栏折叠状态恢复
-        if (sck?.ok && Array.isArray(sck.data)) setSidebarCollapsedKeys(sck.data as string[])
         // 侧边栏活动标签页恢复
         if (sat?.ok && (sat.data === 'files' || sat.data === 'outline'))
           setSidebarActiveTab(sat.data)
@@ -507,6 +508,29 @@ export default function App(): JSX.Element {
         const session = FRESH_MODE
           ? null
           : ((s?.ok ? s.data : null) as SessionData | null)
+        // 侧边栏折叠记录恢复：新版按树作用域存储（Record<path, string[]>）。
+        // 旧版平铺数组迁移到本次恢复的工作区名下（无工作区则归演示树），
+        // 历史折叠状态不丢；迁移后用户下一次折叠/展开会以新格式写回
+        if (sck?.ok && sck.data != null) {
+          const scope = session?.workspacePath ?? DEMO_TREE_SCOPE
+          let migrated: Record<string, string[]> = {}
+          if (Array.isArray(sck.data)) {
+            migrated[scope] = (sck.data as unknown[]).filter(
+              (k): k is string => typeof k === 'string',
+            )
+          } else if (typeof sck.data === 'object') {
+            for (const [k, v] of Object.entries(sck.data as Record<string, unknown>)) {
+              if (
+                typeof k === 'string' &&
+                Array.isArray(v) &&
+                v.every((x) => typeof x === 'string')
+              ) {
+                migrated[k] = v as string[]
+              }
+            }
+          }
+          setSidebarCollapsedKeys(Object.keys(migrated).length > 0 ? migrated : null)
+        }
         // fresh 窗口也不恢复全局草稿：草稿属于主窗口会话，灌入未打开文件的脏状态会让新窗口"天生未保存"且无法关闭
         const drafts = FRESH_MODE ? {} : (((dr?.ok ? dr.data : null) ?? {}) as DraftMap)
 
@@ -982,10 +1006,22 @@ export default function App(): JSX.Element {
   // 代码块行号开关持久化
   usePersistedSetting('codeLineNumbers', codeLineNumbers, settingsReady)
 
-  // 侧边栏折叠键持久化。null = 没有任何持久化记录（从未折叠/展开过），
-  // 此时新打开的工作区默认全部折叠；有记录时按记录恢复
-  const [sidebarCollapsedKeys, setSidebarCollapsedKeys] = useState<string[] | null>(null)
+  // 侧边栏折叠记录按"树作用域"存储（Record<工作区路径 | __demo__, string[]>），
+  // null = 从未折叠/展开过任何文件夹。作用域化修复：旧版平铺数组无法区分
+  // "用户上次把所有文件夹都展开了"（空数组）与"新工作区没有记录"——
+  // 空数组会被误当作匹配当前树，导致新打开的工作区全部平铺展开。
+  const [sidebarCollapsedKeys, setSidebarCollapsedKeys] = useState<Record<string, string[]> | null>(null)
   usePersistedSetting('sidebarCollapsedKeys', sidebarCollapsedKeys, settingsReady, 500)
+  /** 当前树作用域的折叠记录：null = 该工作区（或演示树）从未记录过折叠状态 → 全部折叠 */
+  const currentCollapsedKeys = useMemo(() => {
+    if (sidebarCollapsedKeys == null) return null
+    return sidebarCollapsedKeys[workspace?.path ?? DEMO_TREE_SCOPE] ?? null
+  }, [sidebarCollapsedKeys, workspace?.path])
+  /** 折叠记录按当前树作用域写入：不同工作区互不干扰，重新打开原工作区时恢复原状 */
+  const handleCollapsedKeysChange = useCallback((keys: string[]) => {
+    const scope = workspacePathRef.current ?? DEMO_TREE_SCOPE
+    setSidebarCollapsedKeys((prev) => ({ ...(prev ?? {}), [scope]: keys }))
+  }, [])
   // 侧边栏活动标签页持久化
   const [sidebarActiveTab, setSidebarActiveTab] = useState<'files' | 'outline'>('files')
   usePersistedSetting('sidebarActiveTab', sidebarActiveTab, settingsReady)
@@ -2334,6 +2370,72 @@ img{max-width:100%}
     [openFiles, savedMap, activeFileId, switchFile, clearDraft, flushEditorContent],
   )
 
+  /**
+   * 批量关闭标签页（右键菜单"关闭其他/关闭全部"共用）。
+   * 目标含活动文档时先落账（防抖窗口内的最后输入不丢，与单标签关闭一致）；
+   * 存在未保存标签时统一弹一次确认；批量关闭的两种场景都不需要切换邻居——
+   * 关闭其他保留活动标签，关闭全部后进入"开始"界面。
+   */
+  const closeTabsBatch = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return
+      const targets = new Set(ids)
+      const closingActive = targets.has(activeFileIdRef.current)
+      if (closingActive) flushEditorContent()
+      const dirtyNames = openFilesRef.current
+        .filter((f) => targets.has(f.id) && savedMapRef.current[f.id] === false)
+        .map((f) => f.name)
+      if (dirtyNames.length > 0) {
+        const listed = dirtyNames.slice(0, 3).join('、')
+        const more = dirtyNames.length > 3 ? ` 等 ${dirtyNames.length} 个文件` : ''
+        if (!window.confirm(`以下标签页有未保存的修改：\n${listed}${more}\n确定关闭并丢弃这些修改吗？`)) {
+          return
+        }
+      }
+      openFilesRef.current = openFilesRef.current.filter((f) => !targets.has(f.id))
+      setOpenFiles((prev) => prev.filter((f) => !targets.has(f.id)))
+      setContents((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
+      })
+      setSavedMap((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
+      })
+      setFileMtime((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
+      })
+      setEncodingMap((prev) => {
+        const next = { ...prev }
+        for (const id of ids) delete next[id]
+        return next
+      })
+      for (const id of ids) {
+        delete INITIAL_OR_SAVED.current[id]
+        // 防抖中的待写草稿一并作废（内容已确认丢弃），避免在 clearDraft 之后又写回
+        if (draftPendingRef.current?.id === id) draftPendingRef.current = null
+        void clearDraft(id)
+      }
+    },
+    [flushEditorContent, clearDraft],
+  )
+
+  /** 右键菜单"关闭其他标签页"：保留当前激活标签，其余全部关闭 */
+  const handleCloseOtherTabs = useCallback(() => {
+    closeTabsBatch(
+      openFilesRef.current.filter((f) => f.id !== activeFileIdRef.current).map((f) => f.id),
+    )
+  }, [closeTabsBatch])
+
+  /** 右键菜单"关闭全部标签页"：全部关闭，进入开始界面（不弹窗口关闭确认） */
+  const handleCloseAllTabs = useCallback(() => {
+    closeTabsBatch(openFilesRef.current.map((f) => f.id))
+  }, [closeTabsBatch])
+
   /** 拖拽重排标签页顺序 */
   const handleReorderTabs = useCallback((from: number, to: number) => {
     const nextOpenFiles = reorderTabs(openFilesRef.current, from, to)
@@ -2841,6 +2943,9 @@ img{max-width:100%}
         // 打开原生对话框：不在此同步分发，统一在 L20 异步块处理
         case 'images': setImagesOpen(true); break
         case 'save': void handleSave(); break
+        case 'closeTab': handleCloseTab(activeFileId); break
+        case 'closeOtherTabs': handleCloseOtherTabs(); break
+        case 'closeAllTabs': handleCloseAllTabs(); break
         case 'exportPdf': void handleExportPdf(); break
         // 编辑
         case 'undo': ed?.runCommand(undoCommand.key); break
@@ -2933,7 +3038,7 @@ img{max-width:100%}
         }
       }
     },
-    [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleExportHtml, handleExportPdf, handleExportMarkdown, handleExportPandoc, openOutlinePanel, centerCaret],
+    [handleNew, handleOpen, handleOpenFolder, handleSelectWorkspaceFile, handleSave, handleSaveAs, handleCloseTab, handleCloseOtherTabs, handleCloseAllTabs, handleExportHtml, handleExportPdf, handleExportMarkdown, handleExportPandoc, openOutlinePanel, centerCaret],
   )
 
   /* ==================== 全局快捷键（可自定义，查表分发） ==================== */
@@ -2959,6 +3064,8 @@ img{max-width:100%}
         case 'openFolder': void handleOpenFolder(); break
         case 'save': void handleSave(); break
         case 'saveAs': void handleSaveAs(); break
+        // 用 ref 实时读当前标签：handler 不随 activeFileId 重建（依赖数组固定）
+        case 'closeTab': handleCloseTab(activeFileIdRef.current); break
         case 'find': setSearchMode('find'); break
         case 'replace': setSearchMode('replace'); break
         case 'strike': editorRef.current?.runCommand(toggleStrikethroughCommand.key); break
@@ -2982,7 +3089,7 @@ img{max-width:100%}
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [handleSave, handleSaveAs, handleNew, handleOpen, handleOpenFolder, openOutlinePanel])
+  }, [handleSave, handleSaveAs, handleNew, handleOpen, handleOpenFolder, openOutlinePanel, handleCloseTab])
 
   /* ==================== 渲染 ==================== */
 
@@ -3073,8 +3180,8 @@ img{max-width:100%}
             onDeleteFile={(path) => void handleDeleteFile(path)}
             onMoveFile={(path, targetDir) => void handleMoveFile(path, targetDir)}
             onOpenInNewWindow={handleOpenInNewWindow}
-            initialCollapsedKeys={sidebarCollapsedKeys}
-            onCollapsedKeysChange={setSidebarCollapsedKeys}
+            initialCollapsedKeys={currentCollapsedKeys}
+            onCollapsedKeysChange={handleCollapsedKeysChange}
             activeTab={sidebarActiveTab}
             onActiveTabChange={setSidebarActiveTab}
           />
@@ -3116,6 +3223,8 @@ img{max-width:100%}
             savedMap={savedMap}
             onSwitch={switchFile}
             onClose={handleCloseTab}
+            onCloseOthers={handleCloseOtherTabs}
+            onCloseAll={handleCloseAllTabs}
             onReorder={handleReorderTabs}
           />
           <div className="editor-content">

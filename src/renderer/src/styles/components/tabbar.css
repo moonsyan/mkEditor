@@ -86,3 +86,38 @@
   outline: 1px solid var(--accent, #4a8af0);
   outline-offset: 1px;
 }
+
+/* ====== 标签页右键菜单（关闭 / 关闭其他 / 关闭全部） ====== */
+.tab-ctx-menu {
+  position: fixed;
+  z-index: 700;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bg-menu);
+  border: 1px solid var(--border-m);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-m);
+}
+.tab-ctx-item {
+  padding: 6px 12px;
+  font-size: .76rem;
+  color: var(--text-2);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 80ms;
+  white-space: nowrap;
+}
+.tab-ctx-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+.tab-ctx-item.disabled {
+  color: var(--text-3);
+  cursor: default;
+  pointer-events: none;
+}
+.tab-ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 6px;
+}

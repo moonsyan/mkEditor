@@ -44,9 +44,9 @@ describe('文档大纲', () => {
     ])
   })
 
-  it('围栏关闭行后的 === 不是 setext；主题分隔线 --- 不是 setext', () => {
+  it('围栏关闭行后的 === 不是 setext；独立 --- 才是分隔线，段落后的 --- 是 h2', () => {
     const outline = parseOutline('text\n```\ncode\n```\n===\n\n前文\n---')
-    expect(outline).toEqual([])
+    expect(outline).toEqual([{ idx: 0, level: 2, text: '前文', children: [] }])
   })
 
   it('列表项不算段落，其后不产生 setext', () => {

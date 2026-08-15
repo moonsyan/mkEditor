@@ -36,6 +36,8 @@ const SHORTCUT_GROUPS: { title: string; items: [string, string, string?][] }[] =
       ['Ctrl+Shift+O', '打开文件夹', 'openFolder'],
       ['Ctrl+S', '保存', 'save'],
       ['Ctrl+Shift+S', '另存为', 'saveAs'],
+      ['Ctrl+W', '关闭标签页', 'closeTab'],
+      ['右键标签页', '关闭其他 / 关闭全部'],
     ],
   },
   {

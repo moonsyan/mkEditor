@@ -239,43 +239,29 @@ export function Sidebar({
     return keys
   }
 
-  // 折叠状态初始化：
-  // - 无持久化记录（initialCollapsedKeys === null）→ 所有文件夹默认折叠（全新用户）
-  // - 有记录但与当前树完全不匹配 → 打开了新的工作区 → 全部折叠
-  // - 有匹配记录 → 恢复记录原样
-  // 注意：本 effect 不写回记录（折叠全部是幂等的，无需持久化）；
-  // 用户第一次手动折叠/展开时，onCollapsedKeysChange 自然把记录更新为新工作区的键
-  // X-L2：只收集当前渲染树的键——演示树与工作区树互斥显示，混入 demo 键会
-  // 让"记录匹配"判定永远为 true（只要用户在演示树折叠/展开过任意文件夹，
-  // 记录就含 demo: 前缀键），打开新工作区时走"恢复记录原样"分支，
-  // 工作区目录全部平铺展开，与"新工作区默认折叠"的设计意图相悖
+  /** 收集当前渲染树的全部文件夹 key（演示树或工作区树，含嵌套子文件夹） */
   const allFolderKeys = useMemo(
     () => collectFolderKeys(workspace ? workspaceNodes : demoNodes),
     [workspace, workspaceNodes, demoNodes],
   )
-  // 折叠状态只在“记录形态”变化时重算：无记录→有记录（设置异步加载）、
-  // 匹配状态翻转（换了工作区/树结构大变）。仅 allFolderKeys 重建（重命名/删除
-  // 后刷新工作区）或记录内容微调时不重置——否则会把用户刚手动折叠/展开的
-  // 状态回退到旧记录。内部状态与 App 记录本就在每次 toggleCollapse 时实时同步
-  const foldMatchRef = useRef<{ hasRecord: boolean; matched: boolean } | null>(null)
+  /** 折叠状态应用：记录由 App 按树作用域（工作区路径/演示树）解析后传入——
+   *  null = 当前树无记录（新打开的工作区/从未折叠过）→ 全部折叠；
+   *  有记录 → 原样恢复。作用域解析在 App 完成，这里不再做”记录匹配”判定
+   *  （旧逻辑把空数组记录误判为匹配当前树，新工作区被全部平铺展开）。
+   *  注意：本 effect 不写回记录（折叠全部是幂等的，无需持久化）；
+   *  用户手动折叠/展开时 onCollapsedKeysChange 实时写回当前作用域。 */
+  const appliedCollapseRef = useRef<{ keys: string[] | null | undefined; treeSig: string } | null>(null)
   useEffect(() => {
     if (allFolderKeys.length === 0) return
-    // 注意用 != null：同时排除 undefined（未传 prop）与 null（无记录）
-    const hasRecord = initialCollapsedKeys != null
-    const matched =
-      hasRecord &&
-      (initialCollapsedKeys!.length === 0 ||
-        initialCollapsedKeys!.some((k) => allFolderKeys.includes(k)))
-    const prev = foldMatchRef.current
-    if (prev && prev.hasRecord === hasRecord && prev.matched === matched) return
-    foldMatchRef.current = { hasRecord, matched }
-    if (initialCollapsedKeys == null) {
-      // 无记录：全部默认折叠
-      setCollapsedKeys(new Set(allFolderKeys))
-    } else {
-      // 空数组 = 用户曾展开全部文件夹，必须保持原样（不能当作"无匹配"处理）
-      setCollapsedKeys(matched ? new Set(initialCollapsedKeys) : new Set(allFolderKeys))
-    }
+    const treeSig = allFolderKeys.join('\u0000')
+    const prev = appliedCollapseRef.current
+    // 记录引用与树结构都未变时不重算（设置异步加载完成后记录到达、
+    // 更换工作区、用户手动折叠/展开时才会变化）
+    if (prev && prev.treeSig === treeSig && prev.keys === initialCollapsedKeys) return
+    appliedCollapseRef.current = { keys: initialCollapsedKeys, treeSig }
+    setCollapsedKeys(
+      initialCollapsedKeys == null ? new Set(allFolderKeys) : new Set(initialCollapsedKeys),
+    )
   }, [initialCollapsedKeys, allFolderKeys])
 
   const toggleCollapse = (key: string) => {
