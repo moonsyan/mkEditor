@@ -1,5 +1,5 @@
 import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
-import { chmod, readFile, writeFile, stat, lstat, readdir, mkdir, rename, unlink, realpath } from 'fs/promises'
+import { chmod, readFile, writeFile, stat, lstat, readdir, mkdir, rename, unlink, realpath, open } from 'fs/promises'
 import type { Dirent } from 'fs'
 import { join, dirname, basename, sep, extname } from 'path'
 import { execFile } from 'child_process'
@@ -46,6 +46,64 @@ const lastKnownFileState = new Map<string, { mtimeMs: number; size: number }>()
 const MAX_FILE_STATE_ENTRIES = 4096
 /** 同路径并发保存互斥（T-OCTOU）：按 path 串行化 FILE_SAVE 的完整写盘流程 */
 const saveLocks = new Map<string, Promise<unknown>>()
+
+// ---- Y-M3：跨进程保存锁 ----
+// 多窗口模式（multiWindowMode=true）下多个主进程并存，各自的 saveLocks
+// 互相不可见，同路径并发保存仍会互相覆盖。用独占创建 <path>.mkedit-save-lock
+// 文件实现跨进程互斥：创建成功者持锁（写入 pid + 时间戳），竞争者轮询等待；
+// 锁 mtime 超时且持有者进程不存活（崩溃残留）→ 删除抢锁；总等待超时放弃。
+const SAVE_LOCK_STALE_MS = 10_000
+const SAVE_LOCK_WAIT_MS = 30_000
+const SAVE_LOCK_POLL_MS = 60
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function acquireCrossProcessSaveLock(
+  filePath: string,
+): Promise<() => Promise<void>> {
+  const lockPath = `${filePath}.mkedit-save-lock`
+  const deadline = Date.now() + SAVE_LOCK_WAIT_MS
+  for (;;) {
+    try {
+      const fh = await open(lockPath, 'wx')
+      try {
+        await fh.writeFile(`${process.pid}\n${Date.now()}\n`)
+      } finally {
+        await fh.close()
+      }
+      return async () => {
+        await unlink(lockPath).catch(() => {})
+      }
+    } catch {
+      // 创建失败 = 锁已被占用；检查是否崩溃残留（持有者已退出）
+      try {
+        const lockStat = await stat(lockPath)
+        if (Date.now() - lockStat.mtimeMs > SAVE_LOCK_STALE_MS) {
+          const raw = await readFile(lockPath, 'utf-8').catch(() => '')
+          const holderPid = Number.parseInt(raw.split('\n')[0] ?? '', 10)
+          if (!isProcessAlive(holderPid)) {
+            await unlink(lockPath).catch(() => {})
+            continue // 已删除残留锁，重试竞争
+          }
+        }
+      } catch {
+        // 锁文件已被对方正常释放，继续竞争
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('SAVE_LOCK_TIMEOUT')
+      }
+      await new Promise((resolve) => setTimeout(resolve, SAVE_LOCK_POLL_MS))
+    }
+  }
+}
 const rememberFileState = (
   path: string,
   state: { mtimeMs: number; size: number },
@@ -562,8 +620,18 @@ export function registerIpcHandlers(): void {
     | { ok: false; error: { code: string; message?: string } }
 
   /** FILE_SAVE 的完整写盘流程（stat 校验 → 编码写回 → 更新基线）。
-   *  经 saveLocks 按 path 串行执行，防止同路径双窗口并发保存互相覆盖（T-OCTOU）。 */
+   *  经 saveLocks 按 path 串行执行，防止同路径双窗口并发保存互相覆盖（T-OCTOU）；
+   *  外层再加跨进程文件锁，覆盖多窗口模式（多个主进程并存）下的并发保存。 */
   const performFileSave = async (args: SaveArgs): Promise<SaveResult> => {
+    let releaseLock: (() => Promise<void>) | null = null
+    try {
+      releaseLock = await acquireCrossProcessSaveLock(args.path)
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'SAVE_LOCKED', message: '另一个窗口正在保存该文件，请稍后重试' },
+      }
+    }
     try {
       const pre = await stat(args.path).catch(() => null)
       if (!pre) {
@@ -619,6 +687,8 @@ export function registerIpcHandlers(): void {
       return { ok: true, data: { modifiedTime: fileStat.mtimeMs } }
     } catch (err) {
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+    } finally {
+      await releaseLock?.()
     }
   }
 

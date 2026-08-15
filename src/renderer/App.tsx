@@ -1675,7 +1675,9 @@ export default function App(): JSX.Element {
         setToast(
           result.error?.code === 'NOT_FOUND'
             ? '原文件已不存在，请使用另存为保存当前内容'
-            : '保存失败，请检查文件权限或磁盘空间',
+            : result.error?.code === 'SAVE_LOCKED'
+              ? '另一个窗口正在保存该文件，请稍后重试'
+              : '保存失败，请检查文件权限或磁盘空间',
         )
       }
       return
