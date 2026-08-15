@@ -976,7 +976,23 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
       const ed = getReadyEditor()
       if (!ed) return
       const view = ed.ctx.get(editorViewCtx)
-      const doc = ed.ctx.get(parserCtx)(markdown)
+      // G-L1：parser 同步执行 remark 管道，畸形输入可能抛错——不捕获时
+      // 异常从切换/更新调用链逃逸，编辑器停在旧文档、浮层残留旧 DOM 引用。
+      // 失败时走与成功一致的收尾（清浮层）并提示，内容本身不丢失
+      let doc: ProseNode | null
+      try {
+        doc = ed.ctx.get(parserCtx)(markdown)
+      } catch {
+        setCodePanel(null)
+        setTablePanel(null)
+        setFullscreenCode(null)
+        setWikiAcState(null)
+        lastPreRef.current = null
+        setLangInput('')
+        setCopied(false)
+        notifyRef.current?.('内容无法解析，已保留原文档')
+        return
+      }
       if (!doc) return
       if (flush) {
         const schema = ed.ctx.get(schemaCtx)
