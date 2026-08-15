@@ -1714,6 +1714,17 @@ export default function App(): JSX.Element {
           setFileMtime((prev) => ({ ...prev, [f.id]: res.data!.modifiedTime }))
           void clearDraft(f.id)
           ok = true
+        } else if (res.error?.code === 'CONFLICT') {
+          // L1 自冲突：磁盘内容与本次写入一致（上次保存后 mtime 未回填等），
+          // 静默视为保存成功——否则关窗确认框会弹"未被外部修改"的假警告
+          const selfMtime = await resolveSelfConflict(f.path, content)
+          if (selfMtime !== null) {
+            INITIAL_OR_SAVED.current[f.id] = content
+            setSavedMap((prev) => ({ ...prev, [f.id]: true }))
+            setFileMtime((prev) => ({ ...prev, [f.id]: selfMtime }))
+            void clearDraft(f.id)
+            ok = true
+          }
         }
       }
       if (!ok) {
@@ -1727,7 +1738,7 @@ export default function App(): JSX.Element {
       }
     }
     return failed
-  }, [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, clearDraft, saveDraft])
+  }, [openFiles, savedMap, contents, fileMtime, saveWithEncodingFallback, clearDraft, saveDraft, resolveSelfConflict])
 
   // 未保存状态同步到主进程（关闭时弹原生确认框，避免静默阻止关闭）
   const hasUnsaved = useMemo(() => Object.values(savedMap).some((s) => !s), [savedMap])

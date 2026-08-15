@@ -61,8 +61,11 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (err) {
+    // ESRCH = 进程不存在；EPERM/EACCES = 进程存在但无权限探查——
+    // 按存活处理，否则会把正在保存的持有者误判为崩溃残留，
+    // stale 检查 10s 后抢走它的锁造成并发写盘互相覆盖
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
 
@@ -80,22 +83,56 @@ async function acquireCrossProcessSaveLock(
         await fh.close()
       }
       return async () => {
-        await unlink(lockPath).catch(() => {})
-      }
-    } catch {
-      // 创建失败 = 锁已被占用；检查是否崩溃残留（持有者已退出）
-      try {
-        const lockStat = await stat(lockPath)
-        if (Date.now() - lockStat.mtimeMs > SAVE_LOCK_STALE_MS) {
-          const raw = await readFile(lockPath, 'utf-8').catch(() => '')
-          const holderPid = Number.parseInt(raw.split('\n')[0] ?? '', 10)
-          if (!isProcessAlive(holderPid)) {
-            await unlink(lockPath).catch(() => {})
-            continue // 已删除残留锁，重试竞争
+        // 释放前校验锁仍属自己：若锁已被移走/重建（他人并发），
+        // 不删别人的锁，只记录警告——释放 pid 校验消除误删活锁的可能
+        try {
+          const raw = await readFile(lockPath, 'utf-8')
+          if (raw.split('\n')[0] === String(process.pid)) {
+            await unlink(lockPath)
+          } else {
+            console.warn('[save-lock] 释放时锁已易主，存在并发保存风险')
           }
+        } catch {
+          // 锁文件不存在（被抢占者清理或本应不存在），无残留可删
         }
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      // EEXIST = 锁被占用，走 stale 检查；其他错误且锁文件不存在 =
+      // 目录不可写/只读盘等真 IO 错误——不能伪装成"锁被占用"轮询 30s
+      // 后报 SAVE_LOCKED（磁盘问题被误报为并发冲突）
+      if (code !== 'EEXIST') {
+        try {
+          await stat(lockPath)
+        } catch {
+          throw new Error('SAVE_ERROR')
+        }
+      }
+      // 锁被占用：用原子 rename 把锁移走再做 stale 判定。原实现
+      // stat→read→unlink 在"读完 pid"与"unlink"之间，持有者恰好释放、
+      // 他人立即抢到新锁时，会把新锁误删——两个进程同时持锁并发写盘。
+      // rename 原子成功者获得判定权，判完必须放回或清理，没有删除活锁的窗口
+      const probe = `${lockPath}.stale-${process.pid}`
+      try {
+        await rename(lockPath, probe)
       } catch {
-        // 锁文件已被对方正常释放，继续竞争
+        // 锁已被对方正常释放（路径不存在），继续竞争
+      }
+      try {
+        const probeStat = await stat(probe)
+        const raw = await readFile(probe, 'utf-8').catch(() => '')
+        const holderPid = Number.parseInt(raw.split('\n')[0] ?? '', 10)
+        const stale =
+          Date.now() - probeStat.mtimeMs > SAVE_LOCK_STALE_MS && !isProcessAlive(holderPid)
+        if (stale) {
+          // 崩溃残留确认：清理探针文件后重试竞争
+          await unlink(probe).catch(() => {})
+          continue
+        }
+        // 误移了活锁（或持有者刚释放后他人抢到的新锁）：原样放回
+        await rename(probe, lockPath).catch(() => {})
+      } catch {
+        // 探针文件不存在（对方已释放），无残留
       }
       if (Date.now() >= deadline) {
         throw new Error('SAVE_LOCK_TIMEOUT')
@@ -733,7 +770,15 @@ export function registerIpcHandlers(): void {
     let releaseLock: (() => Promise<void>) | null = null
     try {
       releaseLock = await acquireCrossProcessSaveLock(args.path)
-    } catch {
+    } catch (err) {
+      // SAVE_ERROR = 锁文件目录不可写（真 IO 错误），不能伪装成并发冲突；
+      // SAVE_LOCK_TIMEOUT 与其余情况 = 30s 内未能拿到跨进程锁
+      if (String((err as Error).message) === 'SAVE_ERROR') {
+        return {
+          ok: false,
+          error: { code: 'SAVE_ERROR', message: '无法写入文件：目录不可写或磁盘只读' },
+        }
+      }
       return {
         ok: false,
         error: { code: 'SAVE_LOCKED', message: '另一个窗口正在保存该文件，请稍后重试' },
