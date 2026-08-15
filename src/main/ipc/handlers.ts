@@ -15,7 +15,7 @@ import {
   upsertDraft,
 } from '../settings/settings-store'
 import { createWindow } from '../window/window-manager'
-import { allowImageDirectory, isImageDirAllowed } from '../image-protocol'
+import { allowImageDirectory, isImageDirAllowed, readImageAsDataUrl } from '../image-protocol'
 import { isFileTrustedForSave, isPathTrusted, trustDirectory, trustFileForSave } from '../trusted-paths'
 import { restoreTrustFromDisk, schedulePersistTrust } from '../session-trust'
 import { setWebContentsUnsaved } from '../unsaved'
@@ -530,6 +530,22 @@ export function registerIpcHandlers(): void {
         return { ok: false, error: { code: 'UNSUPPORTED_ENCODING', message: err.message } }
       }
       return { ok: false, error: { code: 'IO_ERROR', message: String(err) } }
+    }
+  })
+
+  // 导出 HTML/PDF 内联图片：把受信任 mdimg:// URL 读为 base64（只读）。
+  // 渲染层 fetch() 自定义 scheme 被 Blink 拒绝（TypeError），必须走主进程；
+  // 信任校验与 mdimg 协议完全一致（readImageAsDataUrl 内部 realpath 双重校验）
+  ipcMain.handle(CHANNELS.FILE_READ_IMAGE_INLINE, async (_event, src: string) => {
+    if (typeof src !== 'string' || !src.startsWith('mdimg://')) {
+      return { ok: false, error: { code: 'INVALID_PATH' } }
+    }
+    try {
+      const dataUrl = await readImageAsDataUrl(src)
+      if (!dataUrl) return { ok: false, error: { code: 'INVALID_PATH' } }
+      return { ok: true, data: { dataUrl } }
+    } catch {
+      return { ok: false, error: { code: 'IO_ERROR' } }
     }
   })
 

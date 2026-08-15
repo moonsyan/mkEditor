@@ -13,6 +13,8 @@ export interface DesktopAPI {
     open(): Promise<FileResult>
     openFolder(path?: string): Promise<FolderResult>
     read(path: string): Promise<FileResult>
+    /** 导出内联：把受信任 mdimg:// URL 读为 base64 data URL（渲染层 fetch 自定义 scheme 不受支持） */
+    readImageInline(src: string): Promise<{ ok: boolean; data?: { dataUrl: string }; error?: { code: string; message?: string } }>
     stat(path: string): Promise<{ ok: boolean; data?: { modifiedTime: number }; error?: { code: string; message?: string } }>
     save(path: string, content: string, expectedMtime?: number, encoding?: string): Promise<SaveResult>
     saveAs(

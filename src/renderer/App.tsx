@@ -1790,17 +1790,11 @@ img{max-width:100%}
     let result = html
     for (const src of srcs) {
       try {
-        const resp = await fetch(src)
-        if (!resp.ok) continue
-        const blob = await resp.blob()
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const fr = new FileReader()
-          fr.onload = () => resolve(fr.result as string)
-          // 读取失败需 reject：否则 Promise 永不 settle，导出流程永久挂起
-          fr.onerror = () => reject(new Error('read failed'))
-          fr.readAsDataURL(blob)
-        })
-        result = result.split(src).join(dataUrl)
+        // Y-M2：渲染层 fetch(mdimg://) 被 Blink 拒绝（自定义 scheme 不参与 fetch
+        // 规范，必然 TypeError），内联必须走主进程只读 IPC（同一信任校验）
+        const res = await window.desktopAPI?.document.readImageInline(src)
+        if (!res?.ok || !res.data?.dataUrl) continue
+        result = result.split(src).join(res.data.dataUrl)
       } catch {
         /* 失败保留原路径 */
       }

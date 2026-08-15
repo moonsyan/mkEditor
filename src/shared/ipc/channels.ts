@@ -3,6 +3,7 @@ export const CHANNELS = {
   FILE_OPEN: 'file:open',
   FILE_OPEN_FOLDER: 'file:open-folder',
   FILE_READ: 'file:read',
+  FILE_READ_IMAGE_INLINE: 'file:read-image-inline',
   FILE_SAVE: 'file:save',
   FILE_SAVE_AS: 'file:save-as',
   FILE_SAVE_IMAGE: 'file:save-image',

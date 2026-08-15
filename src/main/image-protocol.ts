@@ -1,5 +1,5 @@
 import { net } from 'electron'
-import { realpath } from 'fs/promises'
+import { readFile, realpath } from 'fs/promises'
 import { extname, isAbsolute, relative, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import { getTrustedRoots, isPathTrusted } from './trusted-paths'
@@ -60,22 +60,26 @@ function notFound(): Response {
   return new Response('Not Found', { status: 404 })
 }
 
-/** 为 mdimg 协议建立受限的本地图片读取，拒绝目录外及非图片资源。 */
-export async function fetchAllowedImage(requestUrl: string): Promise<Response> {
+/**
+ * 解析 mdimg:// URL 并执行完整信任校验（词汇级根目录/白名单 + realpath 防
+ * 符号链接逃逸）。任一环节失败返回 null。协议读取与导出内联 IPC 共用，
+ * 保证两条读取路径的权限边界完全一致。
+ */
+async function resolveAllowedImagePath(requestUrl: string): Promise<string | null> {
   try {
     const url = new URL(requestUrl)
-    if (url.host) return notFound()
+    if (url.host) return null
 
     let filePath = decodeURIComponent(url.pathname)
     if (process.platform === 'win32' && filePath.startsWith('/')) {
       filePath = filePath.slice(1)
     }
     const resolvedPath = resolve(filePath)
-    if (!IMAGE_EXTENSIONS.has(extname(resolvedPath).toLowerCase())) return notFound()
+    if (!IMAGE_EXTENSIONS.has(extname(resolvedPath).toLowerCase())) return null
     // L2：先做词汇级信任检查快速拒绝，再走 realpath 防符号链接逃逸。
     // 完整信任根 + 图片读取白名单两处均可放行读取
     if (!isPathTrusted(resolvedPath) && !isImageDirAllowed(resolvedPath)) {
-      return notFound()
+      return null
     }
 
     const realFilePath = await realpath(resolvedPath)
@@ -85,10 +89,38 @@ export async function fetchAllowedImage(requestUrl: string): Promise<Response> {
       ),
     )
     if (!roots.some((root) => root && isPathWithinRoot(realFilePath, root))) {
-      return notFound()
+      return null
     }
-    return net.fetch(pathToFileURL(realFilePath).toString())
+    return realFilePath
   } catch {
-    return notFound()
+    return null
+  }
+}
+
+/** 为 mdimg 协议建立受限的本地图片读取，拒绝目录外及非图片资源。 */
+export async function fetchAllowedImage(requestUrl: string): Promise<Response> {
+  const realFilePath = await resolveAllowedImagePath(requestUrl)
+  if (!realFilePath) return notFound()
+  return net.fetch(pathToFileURL(realFilePath).toString())
+}
+
+/** 导出内联单张图片大小上限：base64 经 IPC 一次性传输且写进导出文件，超限拒绝防 OOM */
+const MAX_INLINE_IMAGE_BYTES = 64 * 1024 * 1024
+
+/**
+ * 导出 HTML/PDF 内联用：把受信任的 mdimg:// URL 读为 base64 data URL。
+ * 渲染层 fetch() 自定义 scheme 被 Blink 拒绝（TypeError），图片内联必须
+ * 走主进程（只读 IPC 入口，信任校验与 mdimg 协议完全一致）。
+ */
+export async function readImageAsDataUrl(requestUrl: string): Promise<string | null> {
+  try {
+    const realFilePath = await resolveAllowedImagePath(requestUrl)
+    if (!realFilePath) return null
+    const data = await readFile(realFilePath)
+    if (data.length > MAX_INLINE_IMAGE_BYTES) return null
+    const ext = extname(realFilePath).slice(1).toLowerCase()
+    return `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${data.toString('base64')}`
+  } catch {
+    return null
   }
 }

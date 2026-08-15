@@ -36,6 +36,11 @@ const desktopAPI = {
     /** 按路径直接读取文件（会话恢复用，不弹对话框） */
     read: (path: string) => ipcRenderer.invoke(CHANNELS.FILE_READ, path),
 
+    /** 读取受信任 mdimg:// URL 指向的图片为 base64 data URL（导出内联用）。
+     *  渲染层 fetch() 自定义 scheme 被 Blink 拒绝，必须走主进程校验读取 */
+    readImageInline: (src: string) =>
+      ipcRenderer.invoke(CHANNELS.FILE_READ_IMAGE_INLINE, src),
+
     /** 仅读取文件 mtime（草稿恢复前校验基线新鲜度用） */
     stat: (path: string) => ipcRenderer.invoke(CHANNELS.FILE_STAT, path),
 
