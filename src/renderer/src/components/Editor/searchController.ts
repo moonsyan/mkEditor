@@ -113,14 +113,23 @@ export function createSearchController(getView: () => EditorView | null): Search
           class: index === searchState.current ? 'search-hit current' : 'search-hit',
         }),
       )
-      let tr = view.state.tr
       // M12：命中在折叠小节内时先展开该小节，否则光标跳进不可见内容、滚动无效
-      const folded = collapsedRangeAt(view.state, hit.from)
-      if (folded) tr = tr.setMeta(sectionFoldKey, { toggle: folded.heading })
+      // M14：嵌套折叠（折叠的 H1 内含折叠的 H2）只展开一个 ancestor 不够——
+      // 展开外层后命中点仍在内层隐藏区。循环展开所有包含命中的折叠：
+      // toggle meta 每次只处理一个折叠，逐个 dispatch，每次重查（折叠
+      // 状态经 dispatch 更新后 collapsedRangeAt 基于最新 state 判断）
+      const target = hit.from
+      let expanded = 0
+      let folded = collapsedRangeAt(view.state, target)
+      while (folded && expanded < 16) {
+        view.dispatch(view.state.tr.setMeta(sectionFoldKey, { toggle: folded.heading }))
+        expanded++
+        folded = collapsedRangeAt(view.state, target)
+      }
       view.dispatch(
-        tr
+        view.state.tr
           .setMeta(searchKey, DecorationSet.create(view.state.doc, decorations))
-          .setSelection(TextSelection.create(view.state.doc, hit.from))
+          .setSelection(TextSelection.create(view.state.doc, target))
           .scrollIntoView(),
       )
       return searchState.current

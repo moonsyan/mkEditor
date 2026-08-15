@@ -138,18 +138,30 @@ export function filterWikiSuggestions(
   const lower = query.toLowerCase()
   const results: WikiSuggestion[] = []
 
-  const walk = (nodes: Array<{ name: string; path: string; children?: unknown[] }>) => {
+  const walk = (nodes: Array<{ name: string; path: string; children?: unknown[] }>): boolean => {
+    // 返回"是否已收集满"：满则逐层向上短路，不再遍历兄弟分支——
+    // 原实现 return 只退出当前递归层，多分支树每层都能追加满 20 条，
+    // 总结果膨胀为 20×分支数
+    if (results.length >= maxResults) return true
     for (const node of nodes) {
-      if (node.children) {
-        walk(node.children as Array<{ name: string; path: string; children?: unknown[] }>)
+      // 目录以"存在 children 字段"为标志：空数组（空目录）也是目录，
+      // 不能走 else 把目录名当文件名匹配；文件则无 children 字段
+      if (node.children !== undefined) {
+        if (
+          node.children.length > 0 &&
+          walk(node.children as Array<{ name: string; path: string; children?: unknown[] }>)
+        ) {
+          return true
+        }
       } else {
         const name = node.name.replace(/\.md$/i, '')
         if (name.toLowerCase().includes(lower)) {
           results.push({ name, path: node.path })
-          if (results.length >= maxResults) return
+          if (results.length >= maxResults) return true
         }
       }
     }
+    return false
   }
   walk(tree)
   return results

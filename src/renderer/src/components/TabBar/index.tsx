@@ -18,9 +18,10 @@ interface TabBarProps {
  */
 export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, onReorder }: TabBarProps) {
   // D8：拖拽记录被拖标签的 id 而非下标——openFiles 可能在拖拽中变化
-  //（预览标签替换、其它标签关闭等），落点时按 id 反查最新下标
+  //（预览标签替换、其它标签关闭等），落点与高亮也按 id 追踪：
+  // 闭包里的渲染下标 i 在 openFiles 变化后过期，落点会插到错误位置
   const [dragId, setDragId] = useState<string | null>(null)
-  const [overIndex, setOverIndex] = useState<number | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
   const tabRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   const handleTabKeyDown = (event: React.KeyboardEvent<HTMLDivElement>, fileId: string) => {
@@ -59,7 +60,7 @@ export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, o
             aria-selected={active}
             aria-label={`${file.name}${dirty ? '，未保存' : ''}${preview ? '，预览标签' : ''}`}
             tabIndex={active ? 0 : -1}
-            className={`tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${overIndex === i && dragId !== null && dragId !== file.id ? 'drag-over' : ''}`}
+            className={`tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${overId === file.id && dragId !== null && dragId !== file.id ? 'drag-over' : ''}`}
             draggable
             onDragStart={(e) => {
               setDragId(file.id)
@@ -67,24 +68,25 @@ export function TabBar({ openFiles, activeFileId, savedMap, onSwitch, onClose, o
             }}
             onDragOver={(e) => {
               e.preventDefault()
-              if (dragId !== null && dragId !== file.id) setOverIndex(i)
+              if (dragId !== null && dragId !== file.id) setOverId(file.id)
             }}
             onDragLeave={() => {
-              if (overIndex === i) setOverIndex(null)
+              if (overId === file.id) setOverId(null)
             }}
             onDrop={(e) => {
               e.preventDefault()
               if (dragId !== null && dragId !== file.id) {
-                // D8：落点按 id 反查当前下标（拖拽期间 openFiles 可能已变化）
+                // D8：起点与落点都按 id 反查当前下标（拖拽期间 openFiles 可能已变化）
                 const from = openFiles.findIndex((f) => f.id === dragId)
-                if (from !== -1) onReorder(from, i)
+                const to = openFiles.findIndex((f) => f.id === file.id)
+                if (from !== -1 && to !== -1) onReorder(from, to)
               }
               setDragId(null)
-              setOverIndex(null)
+              setOverId(null)
             }}
             onDragEnd={() => {
               setDragId(null)
-              setOverIndex(null)
+              setOverId(null)
             }}
             onClick={() => onSwitch(file.id)}
             onKeyDown={(event) => handleTabKeyDown(event, file.id)}
