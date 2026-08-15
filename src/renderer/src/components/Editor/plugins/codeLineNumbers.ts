@@ -67,6 +67,12 @@ function mapCodeBlockLines(blocks: CodeBlockLineInfo[], tr: Transaction): CodeBl
   return blocks.flatMap((block) => {
     const mapped = tr.mapping.mapResult(block.pos, -1)
     if (mapped.deleted) return []
+    // G-L2：删除起点恰为代码块起点时（Ctrl+A 后输入、选中块起点删除）
+    // mapResult 不置 deleted，映射后的位置可能已不是 code_block——
+    // 幽灵块残留会让后续触碰代码块的事务按旧 blocks 重建。
+    // 与 mermaid/sectionFold 同款校验：节点类型不符即剔除，走重建
+    const node = tr.doc.nodeAt(mapped.pos)
+    if (!node || node.type.name !== 'code_block') return []
     return [{ ...block, pos: mapped.pos }]
   })
 }
