@@ -76,14 +76,36 @@ async function persistTrustSnapshot(): Promise<void> {
   try {
     // 应用自有图片目录每次启动都会重新授信，无需持久化
     const appImagesDir = join(app.getPath('userData'), 'images')
-    const workspaces = getEssentialRoots().filter((root) => root !== appImagesDir)
-    const snapshot: TrustSnapshot = {
-      workspaces: workspaces.slice(-MAX_PERSISTED_WORKSPACES),
-      files: getTrustedFiles(),
-      imageDirs: getImageReadDirs(),
-    }
+    const mineWorkspaces = getEssentialRoots().filter((root) => root !== appImagesDir)
+    const mineFiles = getTrustedFiles()
+    const mineImageDirs = getImageReadDirs()
     const file = trustFile()
     await mkdir(app.getPath('userData'), { recursive: true })
+    // F-L1：多窗口模式存在多个独立主进程，各自整体覆写会互相覆盖，
+    // 其他窗口登记过的信任在重启后丢失。写前合并磁盘上既有快照
+    let existing: Partial<TrustSnapshot> | null = null
+    try {
+      existing = JSON.parse(await readFile(file, 'utf-8')) as Partial<TrustSnapshot>
+      if (!existing || typeof existing !== 'object') existing = null
+    } catch {
+      existing = null
+    }
+    const union = (mine: string[], theirs: string[] | undefined): string[] => {
+      const seen = new Set<string>()
+      const out: string[] = []
+      for (const item of [...(theirs ?? []), ...mine]) {
+        if (typeof item === 'string' && item && !seen.has(item)) {
+          seen.add(item)
+          out.push(item)
+        }
+      }
+      return out
+    }
+    const snapshot: TrustSnapshot = {
+      workspaces: union(mineWorkspaces, existing?.workspaces).slice(-MAX_PERSISTED_WORKSPACES),
+      files: union(mineFiles, existing?.files),
+      imageDirs: union(mineImageDirs, existing?.imageDirs),
+    }
     const tmp = `${file}.${process.pid}-${Date.now()}.tmp`
     await writeFile(tmp, JSON.stringify(snapshot), 'utf-8')
     await rename(tmp, file)
