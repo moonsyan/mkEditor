@@ -722,7 +722,9 @@ export function registerIpcHandlers(): void {
     ) => {
       try {
         // L8：文档/工作区路径必须已授信；未提供（未保存文档）时回退用户数据目录
-        if (args.docPath && !ensureTrusted(args.docPath)) {
+        // F-M：FILE_READ 为分散文件（拖入/会话恢复的 .md）授予 trustFileForSave，
+        // 这里只认完整信任根会让分散文件粘贴图片被 INVALID_PATH 拒绝——与 FILE_SAVE 一致
+        if (args.docPath && !ensureTrusted(args.docPath) && !isFileTrustedForSave(args.docPath)) {
           return { ok: false, error: { code: 'INVALID_PATH' } }
         }
         if (args.workspacePath && !ensureTrusted(args.workspacePath)) {
