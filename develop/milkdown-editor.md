@@ -1,6 +1,6 @@
 # Milkdown 编辑器扩展指南
 
-> 更新基线：2026-08-11。插件以 `src/renderer/src/components/Editor/index.tsx` 的实际注册和 `plugins/` 目录实现为准。
+> 更新基线：2026-08-15。插件以 `src/renderer/src/components/Editor/index.tsx` 的实际注册和 `plugins/` 目录实现为准。
 
 > 理解编辑器内核，学会添加新功能和修复编辑相关 Bug。
 
@@ -193,7 +193,7 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 ## 九、常见问题
 
 ### Q: 为什么导出时 Mermaid 图表不显示？
-A: 懒加载有时序问题。修复方式：导出前调用 `ensureRichContent()` 等待插件就绪。
+A: 懒加载有时序问题。修复方式：导出前调用 `ensureRichContent()` 等待插件就绪（最多等待 4 秒）。若渲染失败（语法错误）或等待超时未完成，导出会保留源码文本，图表源码不会从导出中丢失。
 
 ### Q: 搜索为什么能跳过代码块？
 A: `collectHits` 遍历时检查节点类型，跳过 `code_block`。

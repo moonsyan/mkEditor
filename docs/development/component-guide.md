@@ -1,6 +1,6 @@
 # 组件指南
 
-> 2026-08-12 更新：`App.tsx` 的视图偏好、会话写入与草稿防抖已分别交给 Hook；`Editor/index.tsx` 只保留 Milkdown 生命周期、DOM 事件委托和命令编排。编辑器扩展与数据安全约束见 [编辑器扩展指南](./editor-extensions.md)，已修复问题见 [排障与缺陷记录](./troubleshooting.md)。
+> 2026-08-15 更新：`App.tsx` 的视图偏好、会话写入与草稿防抖已分别交给 Hook；`Editor/index.tsx` 只保留 Milkdown 生命周期、DOM 事件委托和命令编排。编辑器扩展与数据安全约束见 [编辑器扩展指南](./editor-extensions.md)，已修复问题见 [排障与缺陷记录](./troubleshooting.md)。
 
 ## 本轮拆分
 
@@ -13,7 +13,7 @@
 
 代码块采用紧凑排版：正文行高为 `1.55`，无语言标识时不预留标题区；启用语言标识或行号后，标题区、行号和代码正文使用同一垂直基线。
 
-> 更新基线：2026-08-12。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
+> 更新基线：2026-08-15。顶层编排以 `src/renderer/App.tsx` 为准；当前实现未使用 Zustand。
 
 > `App.tsx` 仍包含文档工作流与应用壳装配。继续重构时应先抽取工作区文件操作和动作分发 Hook，不应为了缩短文件而拆散保存、草稿、mtime 冲突与预览标签的同一业务链路。
 
@@ -126,8 +126,10 @@ interface EditorHandle {
 
 **设计要点**：
 - `useEditor` 只在挂载时执行一次，`onChange` 通过 ref 透传，避免重建编辑器丢光标
-- KaTeX 在实例创建前注册；Mermaid 使用 `mermaidCodeBlock` 节点视图保持标准代码围栏，可按需加载 SVG 渲染器、切换源码，并在导出前等待渲染结束
+- KaTeX 在实例创建前注册；Mermaid 使用 `mermaidCodeBlock` 节点视图保持标准代码围栏，可按需加载 SVG 渲染器、切换源码，并在导出前等待渲染结束（最多 4 秒）；渲染失败或超时未完成时块内无 SVG，导出以源码文本兜底，内容不丢
 - 切换文档复用同一编辑器实例，但调用 `replaceAll(markdown, true)` 重建 `EditorState`，清空跨文档撤销历史；切换后重新转换 Wiki 文本并清空章节折叠状态
+- 程序性更新（属性面板等）走单条全文替换事务并保留撤销历史，选区经事务 `tr.mapping` 精确恢复，frontmatter 长度变化不再漂移；内容解析失败时提示"内容无法解析，已保留原文档"，浮层一并清理
+- 章节折叠仅以 `display:none` 隐藏，`sectionFold` 的 `handleKeyDown` 提供三层选区守卫（Ctrl+A 先展开全部再全选、隐藏区内按键 clamp 回标题末尾、方向键跨界跳转）；标题级别变更（setNodeMarkup）时跳过快速路径立即重建折叠装饰
 - 调用 action 前检查 `EditorStatus.Created`，防止初始化未完成时抛异常
 - 编辑器插件统一放在 `plugins/` 子目录，每个插件是一个独立的 `.ts` 文件
 

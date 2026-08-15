@@ -1,6 +1,6 @@
 # 架构说明
 
-> 更新基线：2026-08-12。当前应用未使用 Zustand；会话状态由 `App.tsx`、React state 与 `useRef` 镜像管理。
+> 更新基线：2026-08-15。当前应用未使用 Zustand；会话状态由 `App.tsx`、React state 与 `useRef` 镜像管理。
 
 ## 进程边界
 
@@ -22,7 +22,7 @@ Main (Electron/Node.js/文件系统/窗口)
 1. 编辑器将 Markdown 变更回调给 `App.tsx`，更新 `contents` 与 `savedMap`。
 2. 保存时渲染层携带已知 mtime 调用 `desktopAPI.document.save`。
 3. 主进程检测外部修改、编码损失和 I/O 错误，再将结构化结果返回。
-4. 成功保存后更新 mtime、已保存基线与草稿；冲突不会静默覆盖磁盘内容。
+4. 成功保存后更新 mtime、已保存基线与草稿。保存报 CONFLICT 时渲染层先重读磁盘消解自冲突：磁盘内容与本次写入一致（上次保存后 mtime 未回填、内容未变又保存）则静默视为保存成功并回填 mtime；仅当磁盘内容确实不同才提示外部修改（自动保存跳过并提示，手动保存弹确认框）。外部修改的磁盘内容不会被静默覆盖。
 
 ## 安全与可靠性
 
@@ -31,6 +31,7 @@ Main (Electron/Node.js/文件系统/窗口)
 - 文件操作、图片、CSS、搜索和导出都在主进程实施格式或体积边界。
 - 新窗口和普通链接不会在应用内加载外部页面；安全的 HTTP(S) 与 `mailto:` 链接由系统浏览器处理。
 - 应用设置、会话和草稿保存在 Electron `userData` 目录，与用户 Markdown 正文分离。
+- 会话信任清单（`userData/trusted-roots.json`）由主进程独占维护，渲染层没有 IPC 能写入；多窗口模式下存在多个独立主进程，写盘前会合并磁盘既有快照（workspaces / files / imageDirs 取并集）再截断上限，避免各进程整体覆写导致其他窗口的信任丢失。
 
 ## 状态边界
 

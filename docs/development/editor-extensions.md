@@ -1,6 +1,6 @@
 # 编辑器扩展指南
 
-> 更新基线：2026-08-14。本文记录 Wiki 链接、YAML frontmatter 属性面板以及文档切换时的编辑器状态约束。
+> 更新基线：2026-08-15。本文记录 Wiki 链接、YAML frontmatter 属性面板、章节折叠以及文档切换时的编辑器状态约束。
 
 ## 编辑器实例与文档切换
 
@@ -9,6 +9,18 @@
 `replaceContent()` 使用 `replaceAll(markdown, true)`。第二个参数 `true` 会重新创建 `EditorState`，清空上一个文件的撤销和重做历史，同时保留编辑器实例。连续撤销因此最多回到当前文件本次打开时的内容，不能进入空文档或其他文件。
 
 切换完成后还要重新执行 Wiki 文本转换，并重置章节折叠状态。新增程序性全文替换时，应复用 `App.tsx` 的 `replaceEditorContent()`，保证编辑器内容、`contents`、保存基线和脏状态使用同一更新路径。
+
+程序性更新（`updateContentPreservingHistory`，属性面板等使用）与切换不同：它是一条全文替换事务，保留撤销历史（Ctrl+Z 可回退本次修改），并通过事务 `tr.mapping` 精确恢复旧选区坐标——frontmatter 等开头内容长度变化时正文坐标整体偏移，直接用旧坐标会漂移到错误行；滚动位置在渲染后手动恢复。全文替换前 `parserCtx` 同步解析 markdown，畸形输入抛错时必须走与成功一致的收尾（清代码/表格/全屏/补全浮层）并提示"内容无法解析，已保留原文档"，不能让异常从调用链逃逸。
+
+## 章节折叠
+
+标题左侧 ▾ 折叠/展开章节，折叠状态跨切换文件不泄漏（切换时重置）。折叠仅用 `display:none` 隐藏，ProseMirror 不知道折叠区不可见，因此 `sectionFold` 插件在 `handleKeyDown` 中提供三层选区守卫，改动折叠逻辑时必须保留：
+
+- Ctrl/Cmd+A 先展开全部折叠再全选，全选语义完整，隐藏内容可一并操作；
+- 选区已在隐藏区内时任何按键 clamp 回所属标题文本末尾，防止盲打；
+- ↓/→（含 PageDown）从折叠标题移动时跳到隐藏区后的可见位置，↑/←（含 PageUp）从隐藏区末尾向回移动时 clamp 回标题文本末尾。
+
+折叠范围 `[nodeEnd, end)` 依赖标题级别。setNodeMarkup（如 `#` 降级为 `##`）事务无 slice，快速路径会复用旧装饰；检测到 setNodeMarkup 且目标是 heading 时必须跳过快速路径、按新 doc 重建装饰，否则隐藏范围与真实折叠范围不一致。
 
 ## Wiki 链接
 
@@ -43,7 +55,7 @@ Wiki 跳转只解析现有工作区文件。目标不存在时给出提示，不
 
 属性修改采用最小行级写回：更新或删除一个简单属性时，保留其他 YAML 行、注释、复杂结构以及原文的 LF/CRLF 换行。已有单双引号标量继续沿用原引号类型，防止字符串被改写成布尔值、数字或日期。复杂属性不能通过新增表单被同名覆盖；删除最后一个简单属性且只剩空行或注释时，移除整个 frontmatter 围栏。
 
-属性面板的新增、修改和删除统一调用 `replaceEditorContent(..., 'update')`，由同一入口同步 React 会话快照和 Milkdown 内容。不得只调用编辑器的 `replaceContent()`，否则界面状态可能在下一次异步回调前短暂分叉。
+属性面板的新增、修改和删除统一调用 `replaceEditorContent(..., 'update')`，由同一入口同步 React 会话快照和 Milkdown 内容。该路径经事务 mapping 恢复光标，frontmatter 长度变化不会导致正文光标漂移；解析失败时提示并保留原文档。不得只调用编辑器的 `replaceContent()`，否则界面状态可能在下一次异步回调前短暂分叉。
 
 属性面板的展开状态只控制表格内容，标题栏必须始终保留，确保收起后仍能再次展开。新增属性名只允许字母、数字、下划线和连字符；需要编辑复杂 YAML 时直接在正文 frontmatter 节点中完成。
 
@@ -76,4 +88,4 @@ Milkdown 的 `markdownUpdated` 回调带有约 200ms 防抖。切换文件后，
 - `src/renderer/src/lib/editor-sync.test.ts`
 - `src/renderer/src/lib/document-tabs.test.ts`
 
-编辑器交互仍需手工覆盖：快速连续打开多个文件、固定预览标签后编辑、跨文件切换、连续撤销和重做、Wiki 输入与保存往返、LF/CRLF frontmatter 属性编辑。
+编辑器交互仍需手工覆盖：快速连续打开多个文件、固定预览标签后编辑、跨文件切换、连续撤销和重做、Wiki 输入与保存往返、LF/CRLF frontmatter 属性编辑；另需覆盖：保存 CONFLICT 自冲突静默成功与真外部修改确认、折叠标题上 Ctrl+A 先展开再全选、方向键不进入折叠隐藏区、mermaid 错误语法导出仍含源码文本、分散文件（未加入工作区）中粘贴图片。
