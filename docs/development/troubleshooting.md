@@ -70,7 +70,105 @@
 
 ### 解决思路与结果
 
-`persistTrustSnapshot` 写盘前合并磁盘上既有快照（workspaces / files / imageDirs 取并集），再截断到持久化上限（工作区上限 8 个）。
+`persistTrustSnapshot` 写盘前合并磁盘上既有快照（workspaces / files / imageDirs 取并集），再截断到持久化上限（工作区 8 / 文件 256 / 图片目录 64 个，超出淘汰最早登记的），各进程互不覆盖。
+
+## trusted-roots 清单无界增长
+
+### 问题现象
+
+`files` / `imageDirs` 清单长期使用后无上限累积，重启恢复变慢、文件持续膨胀。
+
+### 排查过程与根因
+
+持久化清单原无容量上限（仅 workspaces 有上限 8）。
+
+### 解决思路与结果
+
+新增 `MAX_PERSISTED_FILES=256`、`MAX_PERSISTED_IMAGE_DIRS=64`（与运行时图片读取白名单上限一致），超出淘汰最早登记的；workspaces 保持原 `MAX_PERSISTED_WORKSPACES=8`。
+
+## mdimg 图片被 CSP 拒绝不显示
+
+### 问题现象
+
+文档中的本地图片完全不显示（`naturalWidth=0`），控制台报 CSP 拒绝 `mdimg:` 资源。
+
+### 排查过程与根因
+
+页面 CSP 为 `default-src 'self'`，`mdimg` 为自定义 scheme 与文档不同源；`registerSchemesAsPrivileged` 未声明 `bypassCSP` 时 `<img src="mdimg:///...">` 被 CSP 直接拒绝（真实 Electron 对照实验验证）。
+
+### 解决思路与结果
+
+`registerSchemesAsPrivileged` 为 `mdimg` 增加 `bypassCSP: true`。信任边界不变：`fetchAllowedImage` 仍做工作区根目录 + realpath 双重校验，放行 CSP 不会放开读取。
+
+## 导出 HTML/PDF 图片全部破图
+
+### 问题现象
+
+导出 HTML/PDF 后本地图片全部不显示。
+
+### 排查过程与根因
+
+原 `inlineImagesInHtml` 用渲染层 `fetch(mdimg://)` 内联图片；Blink 对自定义 scheme 的 fetch 必然抛 `TypeError`，导出文件里的图片全部破图。
+
+### 解决思路与结果
+
+新增 IPC 通道 `FILE_READ_IMAGE_INLINE`（`file:read-image-inline`），preload 暴露 `document.readImageInline(src)`；主进程 `readImageAsDataUrl` 与 mdimg 协议共用 `resolveAllowedImagePath` 校验（词汇级信任根/白名单 + realpath 防符号链接逃逸），读为 base64 data URL，单图 64MB 上限防 OOM。内联失败保留原路径。
+
+## 带 BOM 的 UTF-8 保存后 BOM 丢失
+
+### 问题现象
+
+带 BOM 的 UTF-8 文件保存后被字节级改写为无 BOM，依赖 BOM 判断编码的工具链会误判。
+
+### 排查过程与根因
+
+原实现剥掉 BOM 解码后按 `'UTF-8'` 保存，BOM 被静默丢弃。
+
+### 解决思路与结果
+
+读取时对带 BOM 的 UTF-8 记独立编码 `'UTF-8-BOM'`，保存时写回 BOM；状态栏显示 `UTF-8 (BOM)`。
+
+## 无 BOM 的 UTF-16 文件乱码且保存后不可逆损坏
+
+### 问题现象
+
+无 BOM 的 UTF-16 文件（如 Windows 记事本「UTF-16 LE」另存）打开显示乱码，保存写回 GBK 把原文件不可逆改写。
+
+### 排查过程与根因
+
+原实现缺少无 BOM 的 UTF-16 探测，此类文件落入 GBK 宽松解码，保存按 GBK 写回即损坏原文件。
+
+### 解决思路与结果
+
+新增 `detectUtf16NoBom`：抽样前 8KB 统计零字节两侧占比，一侧 ≥30% 且另一侧 ≤5% 判定为 UTF-16LE/BE。纯中文 UTF-16 零字节占比低（仅换行符）探测不出，追加兜底：GBK 解码结果含 NUL 控制字符（UTF-16 特征，正常 GBK 文件不含）时再走 UTF-16 判定。探测成功后按 UTF-16 原编码保存。
+
+## 多窗口模式同路径并发保存互相覆盖
+
+### 问题现象
+
+多窗口模式下两个窗口保存同一路径的文件时互相覆盖对方的写入。
+
+### 排查过程与根因
+
+多窗口模式存在多个独立主进程，进程内 `saveLocks` Map 互相不可见，同路径并发保存的冲突检测 stat 都落在对方写入之前。
+
+### 解决思路与结果
+
+新增 `acquireCrossProcessSaveLock`：独占创建 `<path>.mkedit-save-lock`（写入 pid + 时间戳），创建成功者持锁，竞争者轮询等待；锁 mtime 超过 10 秒且持有者进程不存活（崩溃残留）→ 删除残留锁重试竞争；总等待超过 30 秒返回错误码 `SAVE_LOCKED`（手动保存 toast 提示稍后重试，自动保存静默跳过、下轮自动重试）。锁覆盖 stat 校验 + 冲突检测 + 写盘全流程。
+
+## 打开第 65 个目录后已打开文档图片破图
+
+### 问题现象
+
+连续打开大量目录后，仍在打开的文档里的 mdimg 图片读取失效（破图）。
+
+### 排查过程与根因
+
+`FILE_OPEN` 授予的目录信任根为非保底（64 上限，最早淘汰）；打开第 65 个目录后最早的根被淘汰，已打开文档的图片读取随之失效。
+
+### 解决思路与结果
+
+`FILE_OPEN` 补 `allowImageDirectory(dirname(filePath))`：图片读取白名单独立于 `trustedRoots` 且只读（不授予写/删/搜权限），即使目录信任被淘汰，文档里的图片仍可显示。
 
 ## PDF 导出临时文件写入失败无响应
 
@@ -320,6 +418,6 @@ Wiki 文本转换插件的 `view()` 只在编辑器创建时执行，复用编�
 - 与 `WebContents` 关联的状态使用 `WeakMap` 等外部结构，不向 Electron 对象临时挂载私有字段。
 - 第三方类型不完整时，`@ts-expect-error` 必须说明具体兼容原因；不得使用无说明的宽泛断言掩盖错误。
 - 搜索、代码行号等模块级控制器依赖当前单编辑器实例。若改为多编辑器并存，必须先改为按 EditorView 隔离状态。
-- 章节折叠的键盘守卫、行号与折叠装饰的节点类型校验、mermaid 导出的源码兜底、保存冲突的自冲突消解属于数据安全边界，改动时必须保留对应的手工回归验证。
+- 章节折叠的键盘守卫、行号与折叠装饰的节点类型校验、mermaid 导出的源码兜底、保存冲突的自冲突消解、跨进程保存锁、编码原样写回（BOM / UTF-16 / GBK）与图片信任双重校验属于数据安全边界，改动时必须保留对应的手工回归验证。
 - 预览 `innerHTML` 当前只接收 ProseMirror 生成的可信 DOM 快照；未来若允许原始 HTML 透传，必须先增加清理和白名单。
 - 自动保存、手动保存、图片上传和搜索 Worker 必须保留冲突检测、超时、体积上限、正则执行超时及失败状态清理。

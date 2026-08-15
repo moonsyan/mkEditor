@@ -176,7 +176,7 @@ interface StatusBarProps {
 }
 ```
 
-> 状态栏显示检测到的文件编码与 Markdown 格式；GBK 文件可按原编码保存，遇到无法表示的字符时会提示转为 UTF-8。
+> 状态栏显示检测到的文件编码与 Markdown 格式；GBK 文件可按原编码保存，遇到无法表示的字符时会提示转为 UTF-8。带 BOM 的 UTF-8 显示为 `UTF-8 (BOM)` 并原样写回 BOM；无 BOM 的 UTF-16 按零字节占比自动探测并按原编码保存；UTF-32 明确拒绝打开。
 
 ---
 

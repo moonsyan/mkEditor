@@ -31,7 +31,12 @@ Main (Electron/Node.js/文件系统/窗口)
 - 文件操作、图片、CSS、搜索和导出都在主进程实施格式或体积边界。
 - 新窗口和普通链接不会在应用内加载外部页面；安全的 HTTP(S) 与 `mailto:` 链接由系统浏览器处理。
 - 应用设置、会话和草稿保存在 Electron `userData` 目录，与用户 Markdown 正文分离。
-- 会话信任清单（`userData/trusted-roots.json`）由主进程独占维护，渲染层没有 IPC 能写入；多窗口模式下存在多个独立主进程，写盘前会合并磁盘既有快照（workspaces / files / imageDirs 取并集）再截断上限，避免各进程整体覆写导致其他窗口的信任丢失。
+- 会话信任清单（`userData/trusted-roots.json`）由主进程独占维护，渲染层没有 IPC 能写入；多窗口模式下存在多个独立主进程，写盘前会合并磁盘既有快照（workspaces / files / imageDirs 取并集）再截断上限（工作区 8 / 文件 256 / 图片目录 64，超出淘汰最早登记的），避免各进程整体覆写导致其他窗口的信任丢失、也防止清单无界增长。
+- `mdimg://` 图片协议：`registerSchemesAsPrivileged` 为该 scheme 声明 `bypassCSP: true`——页面 CSP 为 `default-src 'self'`，自定义 scheme 与文档不同源，不放行则 `<img src="mdimg:///...">` 被 CSP 拒绝（真实实验验证）。信任边界不变：`fetchAllowedImage` 仍做完整信任根/图片白名单 + realpath 双重校验，放行 CSP 不放开读取。
+- 导出内联图片走主进程只读 IPC（`file:read-image-inline` → `readImageAsDataUrl`）：渲染层对自定义 scheme 的 `fetch()` 被 Blink 拒绝（必然 TypeError），内联必须由主进程读为 base64 data URL；信任校验与 mdimg 协议共用 `resolveAllowedImagePath`，单图 64MB 上限防 OOM。
+- 图片读取白名单独立于目录信任根：`FILE_OPEN` 在授予目录信任根之外另登记 `allowImageDirectory(dirname(filePath))`（只读，不授予写/删/搜权限），目录信任根被 64 上限淘汰后已打开文档的图片仍可显示。
+- 跨进程保存锁：多窗口模式下各主进程的进程内 `saveLocks` 互相不可见，`performFileSave` 写盘前先独占创建 `<path>.mkedit-save-lock`（写入 pid + 时间戳）；锁 mtime 超过 10 秒且持有者进程不存活（崩溃残留）时删除抢锁，总等待超过 30 秒返回 `SAVE_LOCKED`（手动保存 toast 提示稍后重试，自动保存静默下轮重试）。锁覆盖 stat 校验 + 冲突检测 + 写盘全流程。
+- 编码处理：读取时自动探测——BOM 优先（UTF-8 / UTF-16LE / UTF-16BE），带 BOM 的 UTF-8 记独立编码 `UTF-8-BOM`，保存时写回 BOM；无 BOM 的 UTF-16 按抽样前 8KB 零字节占比判定（一侧 ≥30% 且另一侧 ≤5%），纯中文 UTF-16（零字节占比低）由「GBK 解码结果含 NUL」兜底检测补上；UTF-32 明确拒绝打开；保存按原编码写回（GBK 先做往返校验，无法映射的字符拒绝写入）。
 
 ## 状态边界
 

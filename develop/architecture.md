@@ -119,7 +119,7 @@ export const CHANNELS = {
 ### 4.1 入口 `src/main/index.ts`
 
 启动流程：
-1. 注册 `mdimg://` 自定义协议（让编辑器能加载本地图片）
+1. 注册 `mdimg://` 自定义协议（让编辑器能加载本地图片；`registerSchemesAsPrivileged` 含 `bypassCSP: true`——页面 CSP 为 `default-src 'self'`，自定义 scheme 需放行 CSP 才能显示图片；读取仍经 `fetchAllowedImage` 的根目录 + realpath 双重信任校验）
 2. 读取设置，决定是否允许多窗口
 3. 设置单实例锁（防止重复启动，多窗口模式下跳过）
 4. 创建第一个窗口
@@ -228,7 +228,7 @@ App
 ```
 存储时：![图](./images/pic.png)          ← 普通 Markdown 路径
 渲染时：![图](mdimg:///C:/docs/images/pic.png)  ← 编辑器能加载
-导出时：内联为 base64，生成自包含 HTML
+导出时：经主进程只读 IPC（`file:read-image-inline`）内联为 base64（渲染层 fetch 自定义 scheme 被 Blink 拒绝，必须走主进程校验读取），生成自包含 HTML
 ```
 
 转换函数：

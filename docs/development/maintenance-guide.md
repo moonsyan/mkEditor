@@ -36,6 +36,12 @@
 > 图片插入维护：粘贴/拖入图片保存失败必须按错误码提示（`TOO_LARGE` 超限、其他失败提示权限或磁盘空间），不能静默返回。
 > 图片信任维护：分散文件（拖入/会话恢复打开）由 `FILE_READ` 授予 `trustFileForSave`，`FILE_SAVE_IMAGE` 必须与 `FILE_SAVE` 一致采用 `ensureTrusted || isFileTrustedForSave` 双重判定。
 > 多窗口信任维护：trusted-roots 写盘前必须合并磁盘既有快照（workspaces / files / imageDirs 取并集）再截断上限，多个独立主进程整体覆写会互相丢信任。
+> 信任持久化上限维护：workspaces 上限 8、files 上限 256、imageDirs 上限 64（与运行时 imageReadDirs 上限一致），超出淘汰最早登记的；新增持久化清单时必须同步设上限。
+> 图片白名单维护：`FILE_OPEN`/`FILE_READ` 授予目录信任（信任根/文件级白名单）时必须同步 `allowImageDirectory` 登记图片读取白名单（只读，不授予写/删/搜权限），保证目录信任根被容量淘汰后已打开文档的图片仍可显示。
+> mdimg 协议维护：`registerSchemesAsPrivileged` 的 `bypassCSP: true` 不得移除——页面 CSP 为 `default-src 'self'`，无放行时 `<img src="mdimg:///...">` 不显示；信任边界仍由 `fetchAllowedImage` 的根目录 + realpath 双重校验把关，放行 CSP 不放开读取。
+> 导出内联维护：HTML/PDF 导出的图片内联必须走主进程只读 IPC（`document.readImageInline` → `file:read-image-inline`），渲染层 `fetch(mdimg://)` 被 Blink 拒绝必然 TypeError；单图 64MB 上限，超限保留原路径。
+> 跨进程保存锁维护：`performFileSave` 写盘前必须先获取跨进程锁（`acquireCrossProcessSaveLock`，独占创建 `<path>.mkedit-save-lock`）；锁 mtime 超 10 秒且持有者进程不存活（崩溃残留）才可删锁抢锁，总等待超 30 秒返回 `SAVE_LOCKED`（手动保存 toast 提示稍后重试，自动保存静默下轮重试）。新增保存路径必须覆盖此锁，不能只依赖进程内 `saveLocks`。
+> 编码写回维护：读取探测出的 `encoding`（含 `UTF-8-BOM`）必须在保存时原样写回——带 BOM 的 UTF-8 不得剥 BOM 按 UTF-8 存（BOM 被静默丢弃）；无 BOM UTF-16 探测的两路检测（零字节占比 + GBK 解码含 NUL 兜底）不可只保留其一，否则纯中文 UTF-16 会落入 GBK 并把原文件不可逆改写。
 > PDF 导出维护：临时 HTML 写入必须在保护内并返回 `IO_ERROR` 结构化错误，不得让写入异常直接抛出 IPC。
 > 设置存储维护：updater 返回 `undefined`（如删除 key）时序列化值为 `undefined`，必须显式抛 `INVALID_VALUE`，避免 `Buffer.byteLength` 抛 TypeError。
 > 程序性更新维护：全文替换恢复光标必须经事务 `tr.mapping` 映射旧坐标，frontmatter 等开头内容长度变化时直接用旧坐标会整体漂移；解析失败必须走与成功一致的收尾并提示”内容无法解析，已保留原文档”。
@@ -74,7 +80,7 @@ PowerShell 环境若因执行策略拒绝 `npm.ps1`，使用 `npm.cmd run build`
 ## 修改前后检查
 
 1. 新增 IPC 时同步 `CHANNELS`、handler、preload 与类型声明。
-2. 文件保存必须保持 mtime 冲突检测和编码错误处理；保存报 CONFLICT 时先重读磁盘消解自冲突，确为外部修改才提示。
+2. 文件保存必须保持 mtime 冲突检测和编码错误处理；保存报 CONFLICT 时先重读磁盘消解自冲突，确为外部修改才提示。跨进程保存锁与编码原样写回（BOM / UTF-16 / GBK）属于数据安全边界，不得移除。
 3. 图片导入单张上限为 20MB；工作区搜索关键词上限为 256 个字符。
 4. 主题修改至少检查 default、dark、ocean、rose 四套主题。
 5. 修改标签、保存状态或快捷键时，先运行 `npm run typecheck` 和 `npm run test`；再运行 `npm run build`。

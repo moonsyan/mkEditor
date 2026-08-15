@@ -178,7 +178,8 @@ win.on('close', (e) => {
 ```typescript
 // main/index.ts
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'mdimg', privileges: { secure: true, stream: true } }
+  // 页面 CSP 为 default-src 'self'，自定义 scheme 必须声明 bypassCSP 才能显示图片
+  { scheme: 'mdimg', privileges: { secure: true, stream: true, bypassCSP: true } }
 ])
 
 protocol.handle('mdimg', (request) => {
