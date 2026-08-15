@@ -284,12 +284,56 @@ function detectUtf16NoBom(buf: Buffer): 'UTF-16LE' | 'UTF-16BE' | null {
 }
 
 /**
+ * 零字节字节序判定（Y-L2 兜底）：正常文本编码（UTF-8/GBK）不含 0x00，
+ * 字节中出现 0x00 说明原始数据是 UTF-16（ASCII/标点/emoji 的高字节）。
+ * UTF-16LE 的零字节都在奇数索引，BE 在偶数索引。
+ * 与 detectUtf16NoBom 的区别：它按 30%/5% 占比判定，对中文为主、零字节
+ * 稀疏的 UTF-16 文件漏检；本函数只要零字节 ≥2 且集中在单侧（>3:1）即判定，
+ * 由调用方的 NUL 信号（GBK 解码含 NUL / UTF-8 解码含 NUL）触发。
+ */
+function tryUtf16ByZeroBytes(buf: Buffer): { content: string; encoding: string } | null {
+  if (buf.length < 4 || buf.length % 2 !== 0) return null
+  let oddZeros = 0
+  let evenZeros = 0
+  // surrogate 信号：UTF-16 代理对高字节 D8-DF。LE 中必在奇数索引，
+  // BE 在偶数索引。emoji 的零字节在 LE 中落在偶数索引（3D D8 00 DE），
+  // 与 ASCII/中文的零字节（奇数索引）混合时零字节判据失效，
+  // 但 surrogate 位置不受内容混合影响
+  let oddSurrogates = 0
+  let evenSurrogates = 0
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i]
+    if (b === 0) {
+      if (i % 2 === 0) evenZeros++
+      else oddZeros++
+    } else if (b >= 0xd8 && b <= 0xdf) {
+      if (i % 2 === 0) evenSurrogates++
+      else oddSurrogates++
+    }
+  }
+  if (oddSurrogates > evenSurrogates * 2 && oddSurrogates >= 2) {
+    return { content: buf.toString('utf16le'), encoding: 'UTF-16LE' }
+  }
+  if (evenSurrogates > oddSurrogates * 2 && evenSurrogates >= 2) {
+    return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
+  }
+  if (oddZeros > evenZeros * 3 && oddZeros >= 2) {
+    return { content: buf.toString('utf16le'), encoding: 'UTF-16LE' }
+  }
+  if (evenZeros > oddZeros * 3 && evenZeros >= 2) {
+    return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
+  }
+  return null
+}
+
+/**
  * 自动探测编码读取文本：优先按 BOM 判定（UTF-8 / UTF-16LE / UTF-16BE / UTF-32），
  * 无 BOM 时先按严格 UTF-8 解码，失败则按 GBK 宽松解码（带替换符）。
  * UTF-16 正确解码并标记编码，保存时写回原编码（BOM 保留）；UTF-32 无法用
  * 原生/iconv 往返，明确拒绝打开——否则乱码解码后一次保存就把原文件
  * 不可逆地改写为乱码内容。
  */
+
 async function readTextAutoEncoding(
   filePath: string,
 ): Promise<{ content: string; encoding: string }> {
@@ -321,20 +365,28 @@ async function readTextAutoEncoding(
     return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
   }
   try {
-    return { content: new TextDecoder('utf-8', { fatal: true }).decode(buf), encoding: 'UTF-8' }
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(buf)
+    // Y-L2 兜底：strict UTF-8 成功却含 NUL——纯中文 UTF-16LE/BE 的字节恰好
+    // 都落在 ASCII 合法范围（如「中」= 2D 4E），strict 解码"成功"但内容是
+    // 乱码，detectUtf16NoBom 的 30% 占比阈值也漏检。正常 UTF-8 文本不含
+    // 0x00，NUL 即 UTF-16 特征，用零字节位置判定字节序
+    if (text.includes('\u0000')) {
+      const zero = tryUtf16ByZeroBytes(buf)
+      if (zero) return zero
+    }
+    return { content: text, encoding: 'UTF-8' }
   } catch {
     const decoded = new TextDecoder('gbk').decode(buf)
     // Y-L2 兜底：GBK 解码出 NUL 控制字符 = 原始字节含大量 0x00（UTF-16 特征）。
     // 纯中文无 BOM UTF-16 零字节占比低（仅换行符 0A 00），直接探测漏检，
     // 但 GBK 解码必产生 NUL；正常 GBK 文件不含 NUL
     if (decoded.includes('\u0000')) {
-      const fallback = detectUtf16NoBom(buf)
-      if (fallback === 'UTF-16LE') {
-        return { content: buf.toString('utf16le'), encoding: 'UTF-16LE' }
-      }
-      if (fallback === 'UTF-16BE') {
-        return { content: iconv.decode(buf, 'utf-16be'), encoding: 'UTF-16BE' }
-      }
+      // 中文为主 + ASCII/emoji 的 UTF-16 零字节分散两侧，detectUtf16NoBom
+      // 的比例判据漏检；正常 GBK 文件不含 0x00。原实现此处重复调用
+      // detectUtf16NoBom（与入口调用输入相同，必然返回 null，纯死代码），
+      // 这类文件因此按 GBK 乱码解码并在保存时被不可逆改写
+      const zero = tryUtf16ByZeroBytes(buf)
+      if (zero) return zero
     }
     // 非严格 UTF-8：按 GBK 宽松解码（无 BOM 时的旧行为；GBK 解码永不抛错，
     // 此分支即为最终兜底，不再需要"宽松 UTF-8"第三分支）
