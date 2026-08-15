@@ -2180,6 +2180,10 @@ img{max-width:100%}
   /** 关闭标签页：从打开列表移除（不删磁盘文件）；有未保存内容时先确认 */
   const handleCloseTab = useCallback(
     (id: string) => {
+      // X-L1：关闭活动标签前先落账——防抖窗口内（200ms）的最后输入
+      // 否则会被静默丢弃：savedMap 尚未标脏（不弹确认框）、文件移除后
+      // 迟到的 markdownUpdated 被 openFilesRef 守卫丢弃、草稿也被清掉
+      if (id === activeFileIdRef.current) flushEditorContent()
       const list = openFiles
       const idx = list.findIndex((f) => f.id === id)
       if (idx === -1) return
@@ -2209,7 +2213,7 @@ img{max-width:100%}
         if (neighborId) switchFile(neighborId)
       }
     },
-    [openFiles, savedMap, activeFileId, switchFile, clearDraft],
+    [openFiles, savedMap, activeFileId, switchFile, clearDraft, flushEditorContent],
   )
 
   /** 拖拽重排标签页顺序 */
