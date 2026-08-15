@@ -61,6 +61,11 @@ export function useDraftPersistence({
 
   useEffect(() => {
     if (!ready) return
+    // X-M1：已显式清除（关闭标签）的文件在内容变空时不得复活草稿——
+    // 原实现每次 content 变化都删除清除标记，关闭最后一个标签后
+    // content 变 ''、activeFileId 不变，标记被删、定时器 1 秒后把空草稿
+    // 写回已关闭的文件；重启后以空白+脏恢复，Ctrl+S 会用空内容覆盖磁盘原文
+    if (content === '' && clearedDraftsRef.current.has(activeFileId)) return
     // 重新打开/切换回某文件后，该文件不再处于"已清除"状态
     clearedDraftsRef.current.delete(activeFileId)
     draftPendingRef.current = { id: activeFileId, content }
