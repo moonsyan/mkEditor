@@ -515,6 +515,11 @@ export function registerIpcHandlers(): void {
       // H1 修复：对话框选择 = 用户明确授权，授完整信任根；
       // 该文件本身另加入文件级保存白名单
       trustDirectory(dirname(filePath))
+      // Y-L4：目录信任根非保底（64 上限，最早淘汰）——打开第 65 个目录后
+      // 最早的根被淘汰，已打开文件的 mdimg 图片读取随之失效（图片破图）。
+      // 图片读取白名单独立于 trustedRoots 再登记一份（只读权限，不扩大攻击面），
+      // 即使目录信任被淘汰，文档里的图片仍可显示
+      allowImageDirectory(dirname(filePath))
       trustFileForSave(filePath)
       schedulePersistTrust()
       rememberFileState(filePath, { mtimeMs: fileStat.mtimeMs, size: fileStat.size })
