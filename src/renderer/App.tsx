@@ -2392,16 +2392,21 @@ img{max-width:100%}
         next[`file-${newPath}`] = res.data!.modifiedTime || next[`file-${newPath}`] || 0
         return next
       })
-      // M2：移动 await 期间用户可能已切到其它标签。用 ref 实时判定：
-      // 激活文件已不在被移动范围内时不动编辑器，避免拽回活动标签、覆盖当前编辑
-      if (activeIsMoved) {
-        const nid = `file-${mapPath(currentActive.slice(5))}`
+      // M2：移动 await 期间用户可能已切到其它标签。用 ref 实时判定当前
+      // 活动文件——不能用起始快照：
+      // - 起始活动被移动但期间切走的：切回会拽回用户正在编辑的标签；
+      // - 起始活动未移动但期间切到被移动文件的：必须迁移其 id，
+      //   否则 activeFileIdRef 仍指向已从 openFiles 消失的旧 id，
+      //   后续输入被 handleEditorChange 守卫丢弃（新 id 已在列表，旧 id 不在）
+      const currentId = activeFileIdRef.current
+      if (currentId.startsWith('file-') && isUnder(currentId.slice(5))) {
+        const nid = `file-${mapPath(currentId.slice(5))}`
         // F1：必须先取实时内容再改写 activeFileIdRef——liveContentOf 的快路径
         // 要求 id === activeFileIdRef.current，而上方 contentsRef 已迁移
         // （旧 id 键被删除、内容搬至 nid 键）；先改写 ref 会让兜底读到空串，
         // 编辑器被清空、状态栏显示未保存，下次自动保存把空内容写回磁盘覆盖原文。
         // 取到的是实时值（上方已 flush 落账，防抖窗口内也不滞后）
-        const live = liveContentOf(currentActive)
+        const live = liveContentOf(currentId)
         activeFileIdRef.current = nid
         setActiveFileId(nid)
         // M7：移动改变了文档目录，编辑器内 mdimg 仍按旧目录解析；
