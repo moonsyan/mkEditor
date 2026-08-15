@@ -13,8 +13,13 @@ const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bm
  */
 const imageReadDirs = new Map<string, true>()
 
-/** 图片读取白名单数量上限：超出时淘汰最早加入的 */
-const MAX_IMAGE_READ_DIRS = 64
+/**
+ * 图片读取白名单数量上限：超出时淘汰最早加入的。
+ * 128 与持久化清单上限（session-trust.ts MAX_PERSISTED_IMAGE_DIRS）一致——
+ * 恢复时逐条 apply 的顺序靠前项不会因运行时满员被立即驱逐；
+ * 常用文档目录较多时 64 个会频繁淘汰，图片加载静默失败
+ */
+const MAX_IMAGE_READ_DIRS = 128
 
 /** FILE_READ 读取 .md 后调用：仅允许该目录下的图片经 mdimg 协议读取 */
 export function allowImageDirectory(directory: string): void {

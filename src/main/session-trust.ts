@@ -21,10 +21,15 @@ import { allowImageDirectory, getImageReadDirs } from './image-protocol'
 const TRUST_FILE_NAME = 'trusted-roots.json'
 /** 持久化工作区上限：保留最近打开的若干个，防止长期使用后清单无界增长 */
 const MAX_PERSISTED_WORKSPACES = 8
-/** Y-L3：持久化文件级保存白名单上限（拖入/会话恢复的 .md），超出淘汰最早登记的 */
-const MAX_PERSISTED_FILES = 256
-/** Y-L3：持久化图片读取白名单目录上限，与运行时 imageReadDirs 上限一致 */
-const MAX_PERSISTED_IMAGE_DIRS = 64
+/**
+ * 持久化上限必须 ≤ 运行时上限（trusted-paths.ts MAX_TRUSTED_FILES=128、
+ * image-protocol.ts MAX_IMAGE_READ_DIRS=128）：恢复时超出的部分会被运行时
+ * 淘汰逻辑立即驱逐——曾出现持久化 256 > 运行时 128，恢复顺序靠前的文件
+ * 全部失效，且运行时满员后每开一个新文件就再淘汰一个，用户已授权的
+ * 信任在重启后悄悄丢失
+ */
+const MAX_PERSISTED_FILES = 128
+const MAX_PERSISTED_IMAGE_DIRS = 128
 
 interface TrustSnapshot {
   workspaces: string[]
