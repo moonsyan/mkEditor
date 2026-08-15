@@ -9,10 +9,19 @@ import { fetchAllowedImage } from './image-protocol'
 
 // 本地图片协议：mdimg:///<绝对路径> → 渲染进程可直接展示本地图片
 // （必须在 app ready 之前注册特权）
+// Y-M1：页面 CSP 为 default-src 'self'，mdimg 为自定义 scheme 与文档不同源，
+// 无 bypassCSP 时 <img src="mdimg:///..."> 被 CSP 直接拒绝（真实 Electron
+// 对照实验验证：不加时 naturalWidth=0，加后正常加载）。信任边界仍由
+// fetchAllowedImage 的根目录 + realpath 双重校验把关，放行 CSP 不会放开读取
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'mdimg',
-    privileges: { secure: true, stream: true, supportFetchAPI: true },
+    privileges: {
+      secure: true,
+      stream: true,
+      supportFetchAPI: true,
+      bypassCSP: true,
+    },
   },
 ])
 
