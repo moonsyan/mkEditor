@@ -20,4 +20,20 @@ describe('图片路径回写', () => {
     expect(editorMarkdown).toContain('%3F')
     expect(toStoredImages(editorMarkdown, 'E:/notes')).toBe(markdown)
   })
+
+  it('文件名含括号（Windows 重复下载命名）时往返不截断', () => {
+    const markdown = '![截图](attachments/screenshot(1).png)'
+    const editorMarkdown = toEditorImages(markdown, 'E:/notes')
+    // encodeURIComponent 不编码括号，括号原样出现在 mdimg URL 中；
+    // 关键是 src 必须完整（不被第一个 `)` 截断）且可 round-trip 还原
+    expect(editorMarkdown).toContain('attachments/screenshot(1).png)')
+    expect(toStoredImages(editorMarkdown, 'E:/notes')).toBe(markdown)
+  })
+
+  it('文件名含嵌套括号时保留原样不截断（正则保守回退）', () => {
+    const markdown = '![a](assets/x(a(b)).png)'
+    const editorMarkdown = toEditorImages(markdown, 'E:/notes')
+    // 嵌套括号无法被配对正则匹配 → src 保持相对路径原文，绝不被截断
+    expect(editorMarkdown).toBe(markdown)
+  })
 })
