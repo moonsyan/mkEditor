@@ -1,7 +1,6 @@
 import { BrowserWindow, dialog } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
-import { getWebContentsUnsaved } from '../unsaved'
 
 /**
  * 创建窗口
@@ -101,19 +100,33 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
       e.preventDefault()
       return
     }
-    const wc = mainWindow.webContents
-    const unsaved = getWebContentsUnsaved(wc)
-    if (!unsaved) return // 无未保存，直接放行
     e.preventDefault()
-    const choice = dialog.showMessageBoxSync(mainWindow, {
-      type: 'question',
-      buttons: ['保存并关闭', '不保存', '取消'],
-      defaultId: 0,
-      cancelId: 2,
-      message: '有未保存的更改',
-      detail: '关闭前要保存这些更改吗？',
-    })
-    if (choice === 0) {
+    closeSaveInProgress = true
+    const wc = mainWindow.webContents
+    // H-F1：未保存状态用实时查询（渲染层同步读编辑器 + state）——
+    // getWebContentsUnsaved 是渲染层防抖后的 state 快照：编辑器 200ms
+    // 防抖窗口内的输入尚未落到 state，快照为 false 时直接放行关闭，
+    // 用户刚打的内容静默丢失。实时查询失败（渲染层卡死）按有未保存处理
+    const checkUnsaved = wc
+      .executeJavaScript(
+        'window.__markdownsoft_hasUnsaved ? window.__markdownsoft_hasUnsaved() : Promise.resolve(true)',
+      )
+      .catch(() => true)
+    checkUnsaved.then((unsaved) => {
+      if (!unsaved) {
+        // 无未保存（含防抖窗口内输入对比）：直接关闭
+        mainWindow.destroy()
+        return
+      }
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'question',
+        buttons: ['保存并关闭', '不保存', '取消'],
+        defaultId: 0,
+        cancelId: 2,
+        message: '有未保存的更改',
+        detail: '关闭前要保存这些更改吗？',
+      })
+      if (choice === 0) {
       closeSaveInProgress = true
       // 保存全部后关闭（destroy 绕过 beforeunload）；saveAll 返回保存失败的文件名清单。
       // 失败文件（外部冲突等）的未保存内容已由渲染端写入草稿兜底，
@@ -174,8 +187,13 @@ export function createWindow(fresh = false, openFile?: string): BrowserWindow {
         })
     } else if (choice === 1) {
       mainWindow.destroy()
-    }
-    // choice === 2：取消，保持窗口打开
+      return
+      } else {
+        // choice === 2：取消，保持窗口打开，恢复关闭拦截；
+        // choice === 0 的保存流程由 then/catch 管理该标志，不在此重置
+        closeSaveInProgress = false
+      }
+    })
   })
 
   // 开发模式：保留 Ctrl+Shift+I 打开 DevTools（原生菜单已移除）

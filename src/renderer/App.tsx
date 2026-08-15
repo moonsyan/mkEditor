@@ -129,6 +129,15 @@ export default function App(): JSX.Element {
   const editorAreaRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLDivElement>(null)
 
+  /** 编辑器未就绪时挂起的程序性内容替换（启动早期打开/切换文件） */
+  const pendingReplaceRef = useRef<{
+    fileId: string
+    content: string
+    mode: 'ignore' | 'initialize' | 'update'
+    tries: number
+  } | null>(null)
+  const pendingReplaceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [openFiles, setOpenFiles] = useState<OpenFile[]>(INITIAL_FILES)
   const [contents, setContents] = useState<Record<string, string>>(INITIAL_CONTENTS)
   const [savedMap, setSavedMap] = useState<Record<string, boolean>>(INITIAL_SAVED)
@@ -320,6 +329,12 @@ export default function App(): JSX.Element {
   const openingWorkspaceFilesRef = useRef(new Map<string, Promise<boolean>>())
   /** 最后一次文件选择意图；较早的慢读取完成后不得反向抢占当前文件。 */
   const latestWorkspaceSelectionRef = useRef('')
+  /** win32 文件系统不区分大小写：同一文件的两种大小写路径是同一文件——
+   * 不用它判重会打开两个指向同一磁盘文件的标签（内容互相覆盖、保存打架） */
+  const sameFilePath = (a: string | undefined, b: string | undefined): boolean => {
+    if (!a || !b) return a === b
+    return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+  }
   const workspacePathRef = useRef<string | undefined>(undefined)
   workspacePathRef.current = workspace?.path
 
@@ -546,12 +561,13 @@ export default function App(): JSX.Element {
           const fl = restoredFiles.find((x) => x.id === id)
           if (fl?.path) {
             const st = await window.desktopAPI.document.stat(fl.path)
-            if (
-              st.ok &&
-              st.data &&
-              Math.abs(st.data.modifiedTime - (restoredMtimes[id] ?? 0)) > 3000
-            ) {
-              continue
+            if (st.ok && st.data) {
+              // 磁盘 mtime 比草稿保存时刻还新 = 草稿保存后文件被外部修改：
+              // 草稿是旧内容，恢复会覆盖外部新修改——丢弃草稿以磁盘为准
+              //（保存成功后草稿会被清除，正常残留草稿的 savedAt 必然晚于
+              //  最后保存 mtime；只有崩溃残留或外部修改才会触发此分支）
+              if (typeof d.savedAt === 'number' && st.data.modifiedTime > d.savedAt) continue
+              if (Math.abs(st.data.modifiedTime - (restoredMtimes[id] ?? 0)) > 3000) continue
             }
           }
           baselineById[id] = baseline
@@ -858,6 +874,9 @@ export default function App(): JSX.Element {
     ready: settingsReady,
     // E4：切换标签冲刷草稿时读编辑器实时内容，避免 200ms 防抖窗口内内容滞后
     getLiveContent: liveContentOf,
+    // fresh 窗口禁用草稿：草稿经 settings-store 与主窗口共享，
+    // fresh 窗口写/删会覆盖或误删主窗口同一文件的未保存内容
+    enabled: !FRESH_MODE,
   })
 
   // 用 ref 镜像最新状态，供定时器读取（避免闭包捕获旧值）
@@ -1119,7 +1138,17 @@ export default function App(): JSX.Element {
       content: string,
       mode: 'ignore' | 'initialize' | 'update' = 'ignore',
     ) => {
-      if (!editorRef.current?.isReady()) return
+      if (!editorRef.current?.isReady()) {
+        // 编辑器尚未初始化（启动早期打开文件/切标签）：排队等待 ready 后
+        // 应用。直接 return 会让 activeFileIdRef 指向新文件而编辑器仍是
+        // 欢迎文档，用户输入被记到新文件 id 下，Ctrl+S 把错误内容覆盖
+        // 写进真实文件。重试 5 秒（50 × 100ms），与会话恢复的 tryApply 一致
+        pendingReplaceRef.current = { fileId, content, mode, tries: 0 }
+        if (!pendingReplaceTimerRef.current) {
+          pendingReplaceTimerRef.current = setTimeout(tickPendingReplace, 100)
+        }
+        return
+      }
       if (mode === 'update') {
         const stored = toStoredImages(content, dirOfFile(fileId))
         contentsRef.current = { ...contentsRef.current, [fileId]: stored }
@@ -1141,6 +1170,25 @@ export default function App(): JSX.Element {
     },
     [dirOfFile, pinPreviewTab],
   )
+
+  /** pending 替换的轮询 tick（编辑器 ready 后应用；5 秒超时给出可操作提示） */
+  const tickPendingReplace = () => {
+    pendingReplaceTimerRef.current = null
+    const pending = pendingReplaceRef.current
+    if (!pending) return
+    if (editorRef.current?.isReady()) {
+      pendingReplaceRef.current = null
+      replaceEditorContent(pending.fileId, pending.content, pending.mode)
+      return
+    }
+    if (pending.tries < 50) {
+      pending.tries++
+      pendingReplaceTimerRef.current = setTimeout(tickPendingReplace, 100)
+    } else {
+      pendingReplaceRef.current = null
+      setToast('编辑器未就绪，最近打开的文件内容可能未加载，请刷新窗口')
+    }
+  }
 
   /** 把编辑器实时内容同步落账（不等 200ms 防抖回调）。
    *  listener 的 markdownUpdated 带 200ms 防抖：此窗口内切换/新建/打开文件，
@@ -1346,8 +1394,8 @@ export default function App(): JSX.Element {
     if (result.data.encoding) {
       setEncodingMap((prev) => ({ ...prev, [`file-${path}`]: result.data!.encoding! }))
     }
-    // 已打开则直接切换
-    const existed = openFiles.find((f) => f.path === path)
+    // 已打开则直接切换（win32 大小写不同的路径是同一文件，复用已有标签）
+    const existed = openFiles.find((f) => sameFilePath(f.path, path))
     if (existed) {
       if (existed.preview) {
         pinPreviewTab(existed.id)
@@ -1397,12 +1445,14 @@ export default function App(): JSX.Element {
     async (path: string, pinned = true): Promise<boolean> => {
       latestWorkspaceSelectionRef.current = path
       const id = `file-${path}`
-      const existed = openFilesRef.current.find((file) => file.id === id)
+      // win32 大小写不同的路径是同一文件：复用已有标签（id 以其记录为准），
+      // 否则 d:\A.md 与 D:\a.md 打开成两个标签，保存时互相覆盖
+      const existed = openFilesRef.current.find((file) => sameFilePath(file.path, path))
       if (existed) {
         if (pinned && existed.preview) {
-          pinPreviewTab(id)
+          pinPreviewTab(existed.id)
         }
-        switchFile(id)
+        switchFile(existed.id)
         return true
       }
       if (!window.desktopAPI) return false
@@ -1429,16 +1479,23 @@ export default function App(): JSX.Element {
           }
           return false
         }
-        if (latestWorkspaceSelectionRef.current !== path) return false
-        // 异步读取期间，其他入口可能已先打开同一文件；此时复用已有标签。
-        const openedMeanwhile = openFilesRef.current.find((file) => file.id === id)
+        // 异步读取期间用户可能已切换/选择其它文件：迟到时仍打开为标签，
+        // 但不激活（不抢当前文档焦点、不顶掉编辑器内容）——慢速盘（网络
+        // 盘）上"点过的文件读完后悄悄消失"体验极差；改为标签可见，
+        // 用户点一下即可查看已缓存内容
+        const isLatest = latestWorkspaceSelectionRef.current === path
+        // 异步读取期间，其他入口可能已先打开同一文件；此时复用已有标签
+        //（大小写不同的路径同样视为同一文件）。
+        const openedMeanwhile = openFilesRef.current.find((file) => sameFilePath(file.path, path))
         if (openedMeanwhile) {
-          if (pinned && openedMeanwhile.preview) pinPreviewTab(id)
-          return true
+          if (pinned && openedMeanwhile.preview) pinPreviewTab(openedMeanwhile.id)
+          return isLatest
         }
-        // 打开新文件前先落账当前文档（防抖窗口内的最近输入不能丢）
-        flushEditorContent()
-        titleRef.current?.blur()
+        // 激活切换才需要先落账当前文档并收焦点；迟到打开不动当前文档
+        if (isLatest) {
+          flushEditorContent()
+          titleRef.current?.blur()
+        }
         const { name, content } = result.data
         if (result.data.encoding) {
           setEncodingMap((prev) => ({ ...prev, [id]: result.data!.encoding! }))
@@ -1446,18 +1503,20 @@ export default function App(): JSX.Element {
         if (!pinned) discardPreviewTab(id)
         const file = { id, name, path, preview: !pinned }
         openFilesRef.current = [...openFilesRef.current, file]
-        activeFileIdRef.current = id
         setOpenFiles((prev) => [...prev, file])
         setContents((prev) => ({ ...prev, [id]: content }))
         setSavedMap((prev) => ({ ...prev, [id]: true }))
         INITIAL_OR_SAVED.current[id] = content
         setFileMtime((prev) => ({ ...prev, [id]: result.data!.modifiedTime }))
-        setActiveFileId(id)
-        setDocTitle(name)
         recordRecent(path, name)
-        replaceEditorContent(id, content, 'initialize')
-        focusEditorSoon()
-        return true
+        if (isLatest) {
+          activeFileIdRef.current = id
+          setActiveFileId(id)
+          setDocTitle(name)
+          replaceEditorContent(id, content, 'initialize')
+          focusEditorSoon()
+        }
+        return isLatest
       })()
       openingWorkspaceFilesRef.current.set(path, openRequest)
       try {
@@ -1746,6 +1805,33 @@ export default function App(): JSX.Element {
     window.desktopAPI?.window.setUnsaved(hasUnsaved)
   }, [hasUnsaved])
 
+  // H-F1：主进程关窗流程的实时未保存查询（executeJavaScript 同步路径）。
+  // hasUnsaved 基于防抖后的 state 快照：编辑器 200ms 防抖窗口内的输入
+  // 尚未落到 savedMap，关窗时会漏报"已保存"直接关闭丢失输入。
+  // 这里同步读编辑器实时内容与基线对比，快照为干净时兜底复查
+  const savedMapRef = useRef(savedMap)
+  savedMapRef.current = savedMap
+  useEffect(() => {
+    const queryUnsaved = () => {
+      let dirty = Object.values(savedMapRef.current).some((s) => !s)
+      if (!dirty) {
+        const id = activeFileIdRef.current
+        if (id && editorRef.current?.isReady()) {
+          const md = editorRef.current.getMarkdown()
+          if (md !== null) {
+            const stored = toStoredImages(md, dirOfFile(id))
+            dirty = stored !== (INITIAL_OR_SAVED.current[id] ?? '')
+          }
+        }
+      }
+      return dirty
+    }
+    ;(window as unknown as Record<string, unknown>).__markdownsoft_hasUnsaved = queryUnsaved
+    return () => {
+      delete (window as unknown as Record<string, unknown>).__markdownsoft_hasUnsaved
+    }
+  }, [dirOfFile])
+
   // 暴露 saveAll 供主进程关闭流程调用（返回保存失败的文件名清单）
   useEffect(() => {
     const w = window as unknown as { __markdownsoft_saveAll?: () => Promise<string[]> }
@@ -1792,28 +1878,37 @@ img{max-width:100%}
     [docTitle],
   )
 
-  /** 导出预处理：把 mdimg 本地图片内联为 base64，导出的 HTML/PDF 自包含可移植 */
-  const inlineImagesInHtml = useCallback(async (html: string): Promise<string> => {
-    const imgRe = /<img\s+[^>]*src="([^"]+)"[^>]*>/g
-    const srcs: string[] = []
-    let m: RegExpExecArray | null
-    while ((m = imgRe.exec(html)) !== null) {
-      if (m[1].startsWith('mdimg://')) srcs.push(m[1])
-    }
-    let result = html
-    for (const src of srcs) {
-      try {
-        // Y-M2：渲染层 fetch(mdimg://) 被 Blink 拒绝（自定义 scheme 不参与 fetch
-        // 规范，必然 TypeError），内联必须走主进程只读 IPC（同一信任校验）
-        const res = await window.desktopAPI?.document.readImageInline(src)
-        if (!res?.ok || !res.data?.dataUrl) continue
-        result = result.split(src).join(res.data.dataUrl)
-      } catch {
-        /* 失败保留原路径 */
+  /** 导出预处理：把 mdimg 本地图片内联为 base64，导出的 HTML/PDF 自包含可移植。
+   *  返回失败张数（文件被删/目录外等无法读取的图片保留原路径，
+   *  不静默丢失——调用方在成功 toast 中提示） */
+  const inlineImagesInHtml = useCallback(
+    async (html: string): Promise<{ html: string; failed: number }> => {
+      const imgRe = /<img\s+[^>]*src="([^"]+)"[^>]*>/g
+      const srcs: string[] = []
+      let m: RegExpExecArray | null
+      while ((m = imgRe.exec(html)) !== null) {
+        if (m[1].startsWith('mdimg://')) srcs.push(m[1])
       }
-    }
-    return result
-  }, [])
+      let result = html
+      let failed = 0
+      for (const src of srcs) {
+        try {
+          // Y-M2：渲染层 fetch(mdimg://) 被 Blink 拒绝（自定义 scheme 不参与 fetch
+          // 规范，必然 TypeError），内联必须走主进程只读 IPC（同一信任校验）
+          const res = await window.desktopAPI?.document.readImageInline(src)
+          if (!res?.ok || !res.data?.dataUrl) {
+            failed++
+            continue
+          }
+          result = result.split(src).join(res.data.dataUrl)
+        } catch {
+          failed++
+        }
+      }
+      return { html: result, failed }
+    },
+    [],
+  )
 
   const handleExportHtml = useCallback(async () => {
     if (!window.desktopAPI) return
@@ -1821,13 +1916,22 @@ img{max-width:100%}
       const title = docTitle.replace(/\.md$/, '')
       // B1：导出前强制等待 KaTeX/Mermaid 懒加载插件就绪，确保快照含渲染结果
       setToast('导出中：等待公式/图表渲染…')
+      // E-X：等待期间用户可能切换标签——buildDocHtml 用编辑器实时 DOM 快照
+      // + 闭包 docTitle，切换后导出的是新文档内容配旧文档标题。捕获起始
+      // 活动文件，等待结束仍不一致时中止并提示
+      const exportFileId = activeFileIdRef.current
       await editorRef.current?.ensureRichContent()
-      const html = await inlineImagesInHtml(buildDocHtml())
+      if (activeFileIdRef.current !== exportFileId) {
+        setToast('导出期间切换了文档，已取消，请重新导出')
+        return
+      }
+      const { html, failed } = await inlineImagesInHtml(buildDocHtml())
       const res = await window.desktopAPI.document.saveAs(html, {
         filters: [{ name: 'HTML', extensions: ['html'] }],
         defaultPath: `${title}.html`,
       })
-      if (res.ok) setToast('HTML 已导出')
+      if (res.ok)
+        setToast(failed > 0 ? `HTML 已导出（${failed} 张图片未能内联，其它设备可能无法显示）` : 'HTML 已导出')
       else if (res.error?.code !== 'CANCELLED') setToast('HTML 导出失败，请检查文件权限或磁盘空间')
     } catch {
       setToast('HTML 导出失败，请稍后重试')
@@ -1848,14 +1952,21 @@ img{max-width:100%}
         const title = docTitle.replace(/\.md$/, '')
         // B1：先等富内容渲染完成
         setToast('导出中：等待公式/图表渲染…')
+        // E-X：等待期间用户可能切换标签，导出内容与标题错配（同 handleExportHtml）
+        const exportFileId = activeFileIdRef.current
         await editorRef.current?.ensureRichContent()
-        const html = await inlineImagesInHtml(buildDocHtml(options.toc === true))
+        if (activeFileIdRef.current !== exportFileId) {
+          setToast('导出期间切换了文档，已取消，请重新导出')
+          return
+        }
+        const { html, failed } = await inlineImagesInHtml(buildDocHtml(options.toc === true))
         const res = await window.desktopAPI.document.exportPdf(
           html,
           `${title}.pdf`,
           options,
         )
-        if (res.ok) setToast('PDF 导出成功')
+        if (res.ok)
+          setToast(failed > 0 ? `PDF 导出成功（${failed} 张图片未能内联，其它设备可能无法显示）` : 'PDF 导出成功')
         else if (res.error?.code !== 'CANCELLED') setToast('PDF 导出失败，请检查文件权限或磁盘空间')
       } catch {
         setToast('PDF 导出失败，请稍后重试')

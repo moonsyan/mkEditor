@@ -13,6 +13,13 @@ interface UseDraftPersistenceOptions {
   ready: boolean
   /** E4：切换标签冲刷草稿时读取编辑器实时内容，避免 200ms 防抖窗口内内容滞后 */
   getLiveContent?: (id: string) => string
+  /**
+   * 禁用草稿持久化（fresh 窗口）：草稿经 settings-store 共享，fresh 窗口
+   * 写入/删除草稿会覆盖或误删主窗口同一文件的未保存内容（两个窗口对同一
+   * 文件有不同编辑状态）。fresh 窗口不写不删草稿，未保存内容仅在窗口
+   * 生命周期内有效
+   */
+  enabled?: boolean
 }
 
 /**
@@ -23,6 +30,7 @@ export function useDraftPersistence({
   content,
   ready,
   getLiveContent,
+  enabled = true,
 }: UseDraftPersistenceOptions): {
   clearDraft: (id: string) => Promise<void>
   draftPendingRef: MutableRefObject<PendingDraft | null>
@@ -36,19 +44,22 @@ export function useDraftPersistence({
   const clearedDraftsRef = useRef<Set<string>>(new Set())
 
   const clearDraft = useCallback(async (id: string) => {
+    if (!enabled) return
     clearedDraftsRef.current.add(id)
     try {
       await deleteDraft(id)
     } catch {
       // 草稿清理失败不影响主保存流程。
     }
-  }, [])
+  }, [enabled])
 
   const saveDraft = useCallback(async (id: string, draftContent: string) => {
+    if (!enabled) return
     await persistDraft(id, draftContent)
-  }, [])
+  }, [enabled])
 
   const flushPendingDraft = useCallback(() => {
+    if (!enabled) return
     const pending = draftPendingRef.current
     if (!pending) return
     draftPendingRef.current = null
@@ -57,10 +68,10 @@ export function useDraftPersistence({
     // 冲刷时优先用编辑器实时内容兜底
     const fresh = getLiveContent?.(pending.id)
     void saveDraft(pending.id, fresh ?? pending.content).catch(() => {})
-  }, [getLiveContent, saveDraft])
+  }, [enabled, getLiveContent, saveDraft])
 
   useEffect(() => {
-    if (!ready) return
+    if (!ready || !enabled) return
     // X-M1：已显式清除（关闭标签）的文件在内容变空时不得复活草稿——
     // 原实现每次 content 变化都删除清除标记，关闭最后一个标签后
     // content 变 ''、activeFileId 不变，标记被删、定时器 1 秒后把空草稿
@@ -83,7 +94,7 @@ export function useDraftPersistence({
       clearTimeout(timer)
       if (!didWrite && activeFileIdRef.current !== activeFileId) flushPendingDraft()
     }
-  }, [activeFileId, content, flushPendingDraft, getLiveContent, ready, saveDraft])
+  }, [activeFileId, content, flushPendingDraft, getLiveContent, ready, saveDraft, enabled])
 
   return { clearDraft, draftPendingRef, saveDraft }
 }
