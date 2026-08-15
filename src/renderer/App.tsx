@@ -1170,6 +1170,21 @@ export default function App(): JSX.Element {
   const discardPreviewTab = useCallback((nextFileId: string) => {
     const previous = findDiscardablePreview(openFilesRef.current, nextFileId)
     if (!previous) return
+    // H-L2：被丢弃的预览若是活动文档，且防抖窗口内刚有输入（编辑器实时
+    // 内容未落账），直接丢弃会丢末次输入——先落账并自动固定，与编辑自动
+    // pin 机制（markdownUpdated 里脏内容 → pinPreviewTab）行为一致。
+    // 此时外层调用还会继续打开下一个文件，两个标签并存，内容不丢。
+    if (previous.id === activeFileIdRef.current && editorRef.current?.isReady()) {
+      const md = editorRef.current.getMarkdown()
+      if (md !== null) {
+        const stored = toStoredImages(md, dirOfFile(previous.id))
+        if (stored !== (contentsRef.current[previous.id] ?? '')) {
+          flushEditorContent()
+          pinPreviewTab(previous.id)
+          return
+        }
+      }
+    }
     openFilesRef.current = openFilesRef.current.filter((file) => file.id !== previous.id)
     setOpenFiles((prev) => prev.filter((file) => file.id !== previous.id))
     setContents((prev) => {
@@ -1193,7 +1208,7 @@ export default function App(): JSX.Element {
       return next
     })
     delete INITIAL_OR_SAVED.current[previous.id]
-  }, [])
+  }, [dirOfFile, flushEditorContent, pinPreviewTab])
 
   /* ==================== 文件操作 ==================== */
 
