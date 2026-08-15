@@ -256,6 +256,11 @@ async function writeSettingUpdate(key: string, update: SettingUpdater): Promise<
   } catch {
     throw new SettingsStoreError('INVALID_VALUE')
   }
+  // F-L4：updater 返回 undefined（如删除 key）时 JSON.stringify 返回 undefined，
+  // 后续 Buffer.byteLength 会抛 TypeError——转为明确的 INVALID_VALUE 错误
+  if (serializedValue === undefined) {
+    throw new SettingsStoreError('INVALID_VALUE')
+  }
   if (Buffer.byteLength(serializedValue, 'utf-8') > MAX_VALUE_SIZE) {
     throw new SettingsStoreError('VALUE_TOO_LARGE')
   }
