@@ -180,7 +180,21 @@ export const sectionFoldPlugin = new Plugin({
       // M13：段落/标题内打字不改变折叠结构，映射复用旧装饰，
       // 避免每次按键全文档扫描重建（新增/删除标题时切片含 heading，才需重建）
       const info = analyzeDecorationChange(tr)
-      if (!info.sliceBlocks.has('heading')) {
+      // G-L3：setNodeMarkup（如标题级别 # → ##）无 slice，切片不含 heading 会走
+      // 快速路径复用旧装饰，但折叠范围 [nodeEnd, end) 依赖标题级别——级别变化后
+      // 隐藏范围与真实折叠范围不一致（可能隐藏了不该隐藏的块）。检测到即重建
+      let markupHeading = false
+      for (const step of tr.steps) {
+        const s = step as { pos?: number; markup?: unknown }
+        if (typeof s.pos === 'number' && s.markup !== undefined) {
+          const node = tr.doc.nodeAt(tr.mapping.map(s.pos))
+          if (node && node.type.name === 'heading') {
+            markupHeading = true
+            break
+          }
+        }
+      }
+      if (!markupHeading && !info.sliceBlocks.has('heading')) {
         // M2 补丁：删除起点恰为标题起点的纯删除/替换事务（选中标题起点向后
         // 删除、Ctrl+A 后输入等）不会让 StepMap 把该标题的折叠箭头标记为删除
         // （mapResult(pos, -1) 对 pos == 删除起点不置 deleted），映射后箭头
