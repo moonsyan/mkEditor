@@ -8,15 +8,20 @@ import {
   editorViewOptionsCtx,
   schemaCtx,
   remarkPluginsCtx,
+  parserCtx,
+  editorStateOptionsCtx,
+  prosePluginsCtx,
 } from '@milkdown/kit/core'
 import type { CmdKey } from '@milkdown/kit/core'
 import {
+  EditorState,
   Selection,
   TextSelection,
   Plugin,
   PluginKey,
   type Transaction,
 } from '@milkdown/kit/prose/state'
+import { Slice } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
@@ -33,7 +38,6 @@ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { prism } from '@milkdown/plugin-prism'
 import { math } from '@milkdown/plugin-math'
 import {
-  replaceAll,
   insert,
   getHTML,
   getMarkdown,
@@ -957,15 +961,45 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
 
     /**
      * 重建编辑器状态（flush=true 清空 undo/redo 历史，用于切换文档；
-     * flush=false 保留历史，用于程序性更新）。
+     * flush=false 保留历史，用于程序性更新；restore 传旧选区坐标时经
+     * 事务 mapping 精确恢复，frontmatter 长度变化不再漂移）。
      * C-9：替换后清空代码块/表格/全屏/自动补全浮层——它们持有的 DOM 引用
      * 属于旧文档，不清会悬浮在新文档上指向过期节点。
+     * 与 milkdown replaceAll(markdown, flush) 行为一致：flush=true 重建
+     * 编辑器状态；flush=false 单条全文替换事务（可 Ctrl+Z 回退）
      */
-    const applyReplaceContent = (markdown: string, flush: boolean): void => {
+    const applyReplaceContent = (
+      markdown: string,
+      flush: boolean,
+      restore?: number,
+    ): void => {
       const ed = getReadyEditor()
       if (!ed) return
-      ed.action(replaceAll(markdown, flush))
       const view = ed.ctx.get(editorViewCtx)
+      const doc = ed.ctx.get(parserCtx)(markdown)
+      if (!doc) return
+      if (flush) {
+        const schema = ed.ctx.get(schemaCtx)
+        const newOptions = ed.ctx.get(editorStateOptionsCtx)({
+          schema,
+          doc,
+          plugins: ed.ctx.get(prosePluginsCtx),
+        })
+        view.updateState(EditorState.create(newOptions))
+      } else {
+        const tr = view.state.tr.replace(
+          0,
+          view.state.doc.content.size,
+          new Slice(doc.content, 0, 0),
+        )
+        if (restore !== undefined) {
+          // G-M3：旧坐标经 mapping 映射到新 doc（frontmatter 等开头内容
+          // 长度变化时正文坐标整体偏移，直接用旧坐标会漂移到错误行）
+          const from = Math.min(tr.mapping.map(restore, 1), tr.doc.content.size)
+          tr.setSelection(TextSelection.near(tr.doc.resolve(from)))
+        }
+        view.dispatch(tr)
+      }
       // 重新转换新文档中的 [[...]] 文本为 wiki 链接
       // （wikiTextConvertPlugin 只在编辑器创建时运行一次，切换文档不会触发）
       convertWikiTextInDoc(view)
@@ -1013,12 +1047,9 @@ const MilkdownInner = forwardRef<EditorHandle, EditorProps>(
             const prevFrom = view.state.selection.from
             const scrollParent = containerRef.current?.querySelector<HTMLElement>('.editor-scroll')
             const prevScroll = scrollParent?.scrollTop ?? 0
-            // flush=false：dispatch 单条全文替换事务，undo/redo 历史保留（Ctrl+Z 可回退本次修改）
-            applyReplaceContent(markdown, false)
-            // 恢复选区与滚动位置，避免光标跳回文档开头
-            const { state, dispatch } = view
-            const pos = Math.min(prevFrom, state.doc.content.size)
-            dispatch(state.tr.setSelection(TextSelection.near(state.doc.resolve(pos))))
+            // flush=false：单条全文替换事务，undo/redo 历史保留（Ctrl+Z 可回退本次修改）；
+            // 选区经事务 mapping 精确恢复（G-M3），滚动位置在渲染后手动恢复
+            applyReplaceContent(markdown, false, prevFrom)
             requestAnimationFrame(() => {
               if (scrollParent) scrollParent.scrollTop = prevScroll
             })
