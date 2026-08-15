@@ -21,6 +21,10 @@ import { allowImageDirectory, getImageReadDirs } from './image-protocol'
 const TRUST_FILE_NAME = 'trusted-roots.json'
 /** 持久化工作区上限：保留最近打开的若干个，防止长期使用后清单无界增长 */
 const MAX_PERSISTED_WORKSPACES = 8
+/** Y-L3：持久化文件级保存白名单上限（拖入/会话恢复的 .md），超出淘汰最早登记的 */
+const MAX_PERSISTED_FILES = 256
+/** Y-L3：持久化图片读取白名单目录上限，与运行时 imageReadDirs 上限一致 */
+const MAX_PERSISTED_IMAGE_DIRS = 64
 
 interface TrustSnapshot {
   workspaces: string[]
@@ -103,8 +107,8 @@ async function persistTrustSnapshot(): Promise<void> {
     }
     const snapshot: TrustSnapshot = {
       workspaces: union(mineWorkspaces, existing?.workspaces).slice(-MAX_PERSISTED_WORKSPACES),
-      files: union(mineFiles, existing?.files),
-      imageDirs: union(mineImageDirs, existing?.imageDirs),
+      files: union(mineFiles, existing?.files).slice(-MAX_PERSISTED_FILES),
+      imageDirs: union(mineImageDirs, existing?.imageDirs).slice(-MAX_PERSISTED_IMAGE_DIRS),
     }
     const tmp = `${file}.${process.pid}-${Date.now()}.tmp`
     await writeFile(tmp, JSON.stringify(snapshot), 'utf-8')
