@@ -3,6 +3,7 @@ import type { EditorState } from '@milkdown/kit/prose/state'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { selectAll } from '@milkdown/kit/prose/commands'
 import { analyzeDecorationChange } from './decoOptimize'
 
 /* ==================== 标题段落折叠（点击标题左侧折叠/展开，对标 Typora） ==================== */
@@ -162,6 +163,10 @@ export const sectionFoldPlugin = new Plugin({
         else collapsed.add(meta.toggle)
         return { collapsed, decos: buildFoldDecos(newState, collapsed) }
       }
+      if (meta && meta.expandAll) {
+        // G-M2：Ctrl+A 前展开全部折叠，全选语义完整、隐藏内容可一并操作
+        return { collapsed: new Set<number>(), decos: buildFoldDecos(newState, new Set()) }
+      }
       if (!tr.docChanged) return previous
       // 文档变化后重新映射折叠位置，跳过已不存在的标题
       const collapsed = new Set<number>()
@@ -213,6 +218,65 @@ export const sectionFoldPlugin = new Plugin({
   props: {
     decorations(state) {
       return sectionFoldKey.getState(state).decos as DecorationSet
+    },
+    // G-M2：折叠仅用 display:none 隐藏，光标可经方向键/全选进入隐藏区，
+    // 输入落到不可见内容、Ctrl+A 后输入静默删除折叠内容。这里做三层守卫：
+    // ① Ctrl/Cmd+A 先展开全部折叠再全选（全选语义完整）；
+    // ② 选区已在隐藏区内的任何按键 → clamp 回所属标题文本末尾（防盲打）；
+    // ③ ↓/→ 从折叠标题向隐藏区移动 → 跳到隐藏区后的可见位置；
+    //    ↑/← 从隐藏区末尾向回移 → clamp 回标题文本末尾
+    handleKeyDown(view, event) {
+      const pluginState = sectionFoldKey.getState(view.state) as
+        | { collapsed: Set<number> }
+        | undefined
+      if (!pluginState || pluginState.collapsed.size === 0) return false
+      const selFrom = view.state.selection.from
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'a' || event.key === 'A')) {
+        event.preventDefault()
+        view.dispatch(view.state.tr.setMeta(sectionFoldKey, { expandAll: true }))
+        selectAll(view.state, (tr) => view.dispatch(tr))
+        return true
+      }
+      const ranges = computeFoldRanges(view.state.doc)
+      const hit = collapsedRangeAt(view.state, selFrom)
+      if (hit) {
+        // 光标已在隐藏区（方向键误入后输入/删除）→ 拦回标题文本末尾
+        event.preventDefault()
+        const r = ranges.find((x) => x.start === hit.heading)
+        const clampTo = (r ? r.nodeEnd : hit.heading) - 1
+        if (selFrom !== clampTo) {
+          view.dispatch(
+            view.state.tr.setSelection(TextSelection.create(view.state.doc, clampTo)),
+          )
+        }
+        return true
+      }
+      const isDown = event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'ArrowRight'
+      const isUp = event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'ArrowLeft'
+      if (isDown || isUp) {
+        for (const r of ranges) {
+          if (!pluginState.collapsed.has(r.start) || r.end <= r.nodeEnd) continue
+          if (isDown && selFrom >= r.start && selFrom < r.nodeEnd) {
+            // ↓/→：从折叠标题文本向隐藏区移动 → 跳到隐藏区后的可见位置
+            event.preventDefault()
+            view.dispatch(
+              view.state.tr
+                .setSelection(TextSelection.create(view.state.doc, r.end))
+                .scrollIntoView(),
+            )
+            return true
+          }
+          if (isUp && (selFrom === r.end || selFrom === r.end - 1)) {
+            // ↑/←：光标紧贴隐藏区末尾向回移 → clamp 回标题文本末尾
+            event.preventDefault()
+            view.dispatch(
+              view.state.tr.setSelection(TextSelection.create(view.state.doc, r.nodeEnd - 1)),
+            )
+            return true
+          }
+        }
+      }
+      return false
     },
   },
 })
