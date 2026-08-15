@@ -816,6 +816,28 @@ export default function App(): JSX.Element {
     [],
   )
 
+  /**
+   * 自冲突消解：保存报 CONFLICT 时，若磁盘当前内容与本次写入内容一致，
+   * 说明"冲突"其实是自己上次保存后的正常状态（如上一次保存成功后 mtime
+   * 未及时回填、或编辑器内容未变又被重新保存），此时视为保存成功，
+   * 不打扰用户。仅当磁盘内容确实不同才返回 null（真·外部修改）。
+   */
+  const resolveSelfConflict = useCallback(
+    async (path: string, content: string): Promise<number | null> => {
+      if (!window.desktopAPI) return null
+      try {
+        const reread = await window.desktopAPI.document.read(path)
+        if (reread.ok && reread.data && reread.data.content === content) {
+          return reread.data.modifiedTime
+        }
+      } catch {
+        // 读取失败无法确认，按外部修改处理
+      }
+      return null
+    },
+    [],
+  )
+
   /** 读指定文档的内容：活动文件直接读编辑器实时内容（防抖窗口内 state 滞后），
    *  非活动文件读 ref 镜像（切换时已 flush，不会滞后）。
    *  定义在 useDraftPersistence 之前（E4：冲刷草稿时需读取实时内容）。 */
@@ -887,6 +909,18 @@ export default function App(): JSX.Element {
             continue
           }
           if (result.error?.code === 'CONFLICT') {
+            // L1：磁盘内容与本次写入一致时是自冲突（上次保存后 mtime 未回填等），
+            // 静默标记已保存；不一致才提示外部修改
+            const selfMtime = await resolveSelfConflict(f.path, content)
+            if (selfMtime !== null) {
+              if (!openFilesRef.current.some((file) => file.id === f.id)) continue
+              INITIAL_OR_SAVED.current[f.id] = content
+              const isCurrentContent = contentsRef.current[f.id] === content
+              setSavedMap((prev) => ({ ...prev, [f.id]: isCurrentContent }))
+              setFileMtime((prev) => ({ ...prev, [f.id]: selfMtime }))
+              if (isCurrentContent) void clearDraft(f.id)
+              continue
+            }
             setToast(`自动保存已跳过：${f.name} 已被外部修改`)
           }
         }
@@ -900,7 +934,7 @@ export default function App(): JSX.Element {
       void runAutoSave()
     }, 30000)
     return () => clearInterval(timer)
-  }, [clearDraft, saveWithEncodingFallback])
+  }, [clearDraft, saveWithEncodingFallback, resolveSelfConflict])
 
   /* ==================== 会话与草稿持久化 ==================== */
 
@@ -1602,11 +1636,18 @@ export default function App(): JSX.Element {
         )
       let result = await doSave(true)
       if (!result.ok && result.error?.code === 'CONFLICT') {
-        const overwrite = window.confirm(
-          '该文件已被其他程序修改，仍然要覆盖保存吗？\n\n选择"取消"可保留当前编辑内容，稍后另存为。',
-        )
-        if (!overwrite) return
-        result = await doSave(false)
+        // L1：磁盘内容与本次写入一致时是自冲突（上次保存后 mtime 未回填等），
+        // 静默视为保存成功；确实被外部修改才弹确认
+        const selfMtime = await resolveSelfConflict(file.path, content)
+        if (selfMtime !== null) {
+          result = { ok: true, data: { modifiedTime: selfMtime } }
+        } else {
+          const overwrite = window.confirm(
+            '该文件已被其他程序修改，仍然要覆盖保存吗？\n\n选择"取消"可保留当前编辑内容，稍后另存为。',
+          )
+          if (!overwrite) return
+          result = await doSave(false)
+        }
       }
       if (result.ok && result.data) {
         if (!openFilesRef.current.some((openFile) => openFile.id === activeFileId)) return
@@ -1626,7 +1667,7 @@ export default function App(): JSX.Element {
     }
     // 无路径：另存为
     await handleSaveAs()
-  }, [openFiles, activeFileId, contents, fileMtime, saveWithEncodingFallback, handleSaveAs, clearDraft])
+  }, [openFiles, activeFileId, contents, fileMtime, saveWithEncodingFallback, handleSaveAs, clearDraft, resolveSelfConflict])
 
   /**
    * 保存全部未保存文件（窗口关闭"保存并关闭"用），返回保存失败的文件名清单。
